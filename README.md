@@ -1,3 +1,5 @@
+![clawie](./clawie.png)
+
 # Clawie by ShrimpAI
 
 Clawie by ShrimpAI is a combined repository that packages the two parts of the Clawie project in one place.
