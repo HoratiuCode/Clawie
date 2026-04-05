@@ -1,4 +1,4 @@
-<img src="./clawie.png" alt="clawie" width="220" />
+<img src="./clawiev2.png" alt="clawiev2" width="220" />
 
 # Clawie by ShrimpAI
 
