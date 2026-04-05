@@ -1,4 +1,4 @@
-![clawie](./clawie.png)
+<img src="./clawie.png" alt="clawie" width="220" />
 
 # Clawie by ShrimpAI
 
