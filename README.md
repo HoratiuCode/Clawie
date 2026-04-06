@@ -65,6 +65,8 @@ That makes the structure easier to understand:
 
 This is useful because the original working copies came from different locations on the local machine. In `Clawie-full`, they are organized into one clean package.
 
+<img src="./ShrimpAIR.png" alt="ShrimpAI mascot" width="260" />
+
 ## How To Use This Repository
 
 After cloning or downloading the repository:
