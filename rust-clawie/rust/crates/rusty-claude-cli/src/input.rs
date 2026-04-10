@@ -27,6 +27,12 @@ pub enum ReadOutcome {
     Exit,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SlashMenuItem {
+    label: String,
+    value: String,
+}
+
 static SLASH_MENU_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 struct SlashCommandHelper {
@@ -245,6 +251,37 @@ impl LineEditor {
             return Ok(ReadOutcome::Cancel);
         }
 
+        if prefix.starts_with("/model") {
+            return self.open_model_picker(&prefix);
+        }
+
+        let items = commands
+            .into_iter()
+            .map(|command| SlashMenuItem {
+                label: command.clone(),
+                value: command,
+            })
+            .collect::<Vec<_>>();
+        let Some(selection) = self.pick_slash_menu(items)? else {
+            return Ok(ReadOutcome::Cancel);
+        };
+
+        if selection == "/model" {
+            return self.open_model_picker("/model");
+        }
+
+        Ok(ReadOutcome::Submit(selection))
+    }
+
+    fn open_model_picker(&self, prefix: &str) -> io::Result<ReadOutcome> {
+        let Some(selection) = self.pick_slash_menu(self.model_menu_items(prefix))? else {
+            return Ok(ReadOutcome::Cancel);
+        };
+
+        Ok(ReadOutcome::Submit(selection))
+    }
+
+    fn pick_slash_menu(&self, items: Vec<SlashMenuItem>) -> io::Result<Option<String>> {
         let mut stdout = io::stdout();
         writeln!(stdout)?;
         enable_raw_mode()?;
@@ -255,8 +292,8 @@ impl LineEditor {
             let window_size = 8usize;
             let mut previous_lines = 0usize;
             loop {
-                let visible_end = commands.len().min(offset + window_size);
-                let visible = &commands[offset..visible_end];
+                let visible_end = items.len().min(offset + window_size);
+                let visible = &items[offset..visible_end];
 
                 if previous_lines > 0 {
                     execute!(stdout, MoveUp(previous_lines as u16))?;
@@ -267,7 +304,7 @@ impl LineEditor {
                     Clear(ClearType::FromCursorDown)
                 )?;
 
-                for (index, command) in visible.iter().enumerate() {
+                for (index, item) in visible.iter().enumerate() {
                     let actual_index = offset + index;
                     let is_selected = actual_index == selected;
                     execute!(stdout, Print("  ["))?;
@@ -276,7 +313,7 @@ impl LineEditor {
                     } else {
                         execute!(stdout, Print(" "))?;
                     }
-                    execute!(stdout, Print("] "), Print(command), Print("\r\n"))?;
+                    execute!(stdout, Print("] "), Print(&item.label), Print("\r\n"))?;
                 }
                 previous_lines = visible.len();
                 stdout.flush()?;
@@ -291,7 +328,7 @@ impl LineEditor {
                             }
                         }
                         CrosstermKeyCode::Down => {
-                            if selected + 1 < commands.len() {
+                            if selected + 1 < items.len() {
                                 selected += 1;
                                 if selected >= offset + window_size {
                                     offset = selected + 1 - window_size;
@@ -303,7 +340,7 @@ impl LineEditor {
                                 execute!(stdout, MoveUp(previous_lines as u16))?;
                             }
                             execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
-                            return Ok(ReadOutcome::Submit(commands[selected].clone()));
+                            return Ok(ReadOutcome::Submit(items[selected].value.clone()));
                         }
                         CrosstermKeyCode::Esc => {
                             if previous_lines > 0 {
@@ -331,7 +368,10 @@ impl LineEditor {
         })();
 
         disable_raw_mode()?;
-        picker
+        match picker? {
+            ReadOutcome::Submit(value) => Ok(Some(value)),
+            ReadOutcome::Cancel | ReadOutcome::Exit => Ok(None),
+        }
     }
 
     fn slash_menu_commands(&self, prefix: &str) -> Vec<String> {
@@ -347,6 +387,39 @@ impl LineEditor {
             .filter(|candidate| prefix == "/" || candidate.starts_with(prefix))
             .filter(|candidate| unique.insert((*candidate).to_string()))
             .map(ToString::to_string)
+            .collect()
+    }
+
+    fn model_menu_items(&self, prefix: &str) -> Vec<SlashMenuItem> {
+        let Some(helper) = self.editor.helper() else {
+            return Vec::new();
+        };
+
+        let normalized_prefix = if prefix.trim() == "/model" {
+            "/model "
+        } else {
+            prefix
+        };
+
+        let mut seen = BTreeSet::new();
+        helper
+            .completions
+            .iter()
+            .filter(|candidate| candidate.starts_with("/model "))
+            .filter(|candidate| {
+                normalized_prefix == "/model " || candidate.starts_with(normalized_prefix)
+            })
+            .filter_map(|candidate| {
+                let model = candidate.trim_start_matches("/model ").trim();
+                if model.is_empty() || !seen.insert(model.to_string()) {
+                    return None;
+                }
+
+                Some(SlashMenuItem {
+                    label: format_model_picker_label(model),
+                    value: candidate.clone(),
+                })
+            })
             .collect()
     }
 }
@@ -373,9 +446,26 @@ fn normalize_completions(completions: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn format_model_picker_label(model: &str) -> String {
+    let provider = if model.starts_with("claude") || matches!(model, "opus" | "sonnet" | "haiku") {
+        "Anthropic"
+    } else if model.starts_with("gpt") || model.starts_with("openai/") {
+        "OpenAI"
+    } else if model.starts_with("grok") {
+        "xAI"
+    } else {
+        "Custom"
+    };
+
+    format!("{provider:<10} {model}")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{slash_command_prefix, LineEditor, SlashCommandHelper};
+    use super::{
+        format_model_picker_label, slash_command_prefix, LineEditor, SlashCommandHelper,
+        SlashMenuItem,
+    };
     use rustyline::completion::Completer;
     use rustyline::highlight::Highlighter;
     use rustyline::history::{DefaultHistory, History};
@@ -491,5 +581,47 @@ mod tests {
                 "/status".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn model_menu_uses_full_model_candidates() {
+        let editor = LineEditor::new(
+            "> ",
+            vec![
+                "/model".to_string(),
+                "/model claude-sonnet-4-6".to_string(),
+                "/model gpt-4.1".to_string(),
+                "/model grok-3".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            editor.model_menu_items("/model"),
+            vec![
+                SlashMenuItem {
+                    label: "Anthropic  claude-sonnet-4-6".to_string(),
+                    value: "/model claude-sonnet-4-6".to_string(),
+                },
+                SlashMenuItem {
+                    label: "OpenAI     gpt-4.1".to_string(),
+                    value: "/model gpt-4.1".to_string(),
+                },
+                SlashMenuItem {
+                    label: "xAI        grok-3".to_string(),
+                    value: "/model grok-3".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn model_picker_label_infers_provider_family() {
+        assert_eq!(
+            format_model_picker_label("claude-opus-4-6"),
+            "Anthropic  claude-opus-4-6"
+        );
+        assert_eq!(format_model_picker_label("gpt-4.1"), "OpenAI     gpt-4.1");
+        assert_eq!(format_model_picker_label("grok-3"), "xAI        grok-3");
+        assert_eq!(format_model_picker_label("custom-model"), "Custom     custom-model");
     }
 }

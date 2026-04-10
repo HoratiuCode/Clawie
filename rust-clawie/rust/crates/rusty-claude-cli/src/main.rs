@@ -4777,6 +4777,15 @@ fn slash_command_completion_candidates_with_sessions(
         "/model opus",
         "/model sonnet",
         "/model haiku",
+        "/model claude-opus-4-6",
+        "/model claude-sonnet-4-6",
+        "/model claude-haiku-4-5-20251213",
+        "/model gpt-4.1",
+        "/model gpt-4.1-mini",
+        "/model gpt-5",
+        "/model gpt-5-mini",
+        "/model grok-3",
+        "/model grok-3-mini",
         "/permissions ",
         "/permissions read-only",
         "/permissions workspace-write",
@@ -6362,6 +6371,8 @@ mod tests {
         );
 
         assert!(completions.contains(&"/model claude-sonnet-4-6".to_string()));
+        assert!(completions.contains(&"/model gpt-4.1".to_string()));
+        assert!(completions.contains(&"/model grok-3".to_string()));
         assert!(completions.contains(&"/permissions workspace-write".to_string()));
         assert!(completions.contains(&"/session list".to_string()));
         assert!(completions.contains(&"/session switch session-current".to_string()));
