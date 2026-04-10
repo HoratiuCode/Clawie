@@ -24,10 +24,10 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    resolve_startup_auth_source, AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache,
-    ProviderClient,
-    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    metadata_for_model, resolve_startup_auth_source, AnthropicClient, AuthSource,
+    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
+    OutputContentBlock, PromptCache, ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent,
+    ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -1092,6 +1092,100 @@ fn format_model_switch_report(previous: &str, next: &str, message_count: usize) 
   Current          {next}
   Preserved msgs   {message_count}"
     )
+}
+
+fn provider_label(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Anthropic => "Anthropic",
+        ProviderKind::OpenAi => "OpenAI",
+        ProviderKind::Xai => "xAI",
+    }
+}
+
+fn provider_env_file_path() -> PathBuf {
+    env::var_os("CLAW_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".claw")))
+        .unwrap_or_else(|| PathBuf::from(".claw"))
+        .join("launcher-provider.env")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn upsert_export_line(contents: &str, key: &str, value: &str) -> String {
+    let export_line = format!("export {key}={}", shell_quote(value));
+    let mut replaced = false;
+    let mut lines = contents
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with(&format!("export {key}=")) {
+                replaced = true;
+                export_line.clone()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if !replaced {
+        lines.push(export_line);
+    }
+
+    let mut output = lines.join("\n");
+    output.push('\n');
+    output
+}
+
+fn persist_provider_api_key(env_name: &str, api_key: &str) -> io::Result<PathBuf> {
+    let path = provider_env_file_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+    let updated = upsert_export_line(&existing, env_name, api_key);
+    fs::write(&path, updated)?;
+    Ok(path)
+}
+
+fn prompt_for_api_key(provider: &str, env_name: &str) -> io::Result<Option<String>> {
+    print!("{provider} API key required for this model. Paste {env_name}: ");
+    io::stdout().flush()?;
+
+    let mut value = String::new();
+    if io::stdin().read_line(&mut value)? == 0 {
+        return Ok(None);
+    }
+
+    let trimmed = value.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(trimmed))
+}
+
+fn ensure_provider_credentials_for_model(model: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    if ProviderClient::from_model(model).is_ok() {
+        return Ok(true);
+    }
+
+    let Some(metadata) = metadata_for_model(model) else {
+        return Ok(true);
+    };
+
+    let provider = provider_label(metadata.provider);
+    let Some(api_key) = prompt_for_api_key(provider, metadata.auth_env)? else {
+        println!("Model switch cancelled. No API key was provided.");
+        return Ok(false);
+    };
+
+    env::set_var(metadata.auth_env, &api_key);
+    let saved_path = persist_provider_api_key(metadata.auth_env, &api_key)?;
+    println!("Saved {provider} credentials to {}", saved_path.display());
+    Ok(true)
 }
 
 fn format_permissions_report(mode: &str) -> String {
@@ -2516,6 +2610,9 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
         let previous = self.model.clone();
         let session = self.runtime.session().clone();
         let message_count = session.messages.len();
+        if !ensure_provider_credentials_for_model(&model)? {
+            return Ok(false);
+        }
         let runtime = build_runtime(
             session,
             &self.session.id,
@@ -5670,11 +5767,11 @@ mod tests {
         permission_policy, print_help_to, push_output_block, render_config_report,
         render_diff_report, render_diff_report_for, render_memory_report, render_repl_help,
         render_resume_usage, resolve_model_alias, resolve_session_reference, response_to_events,
-        resume_supported_slash_commands, run_resume_command,
+        resume_supported_slash_commands, run_resume_command, persist_provider_api_key,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
-        StatusUsage, DEFAULT_MODEL,
+        upsert_export_line, write_mcp_server_fixture, CliAction, CliOutputFormat,
+        CliToolExecutor, GitWorkspaceSummary, InternalPromptProgressEvent,
+        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, DEFAULT_MODEL,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -6513,6 +6610,32 @@ mod tests {
         assert!(report.contains("Previous         claude-sonnet"));
         assert!(report.contains("Current          claude-opus"));
         assert!(report.contains("Preserved msgs   9"));
+    }
+
+    #[test]
+    fn upsert_export_line_replaces_existing_key_without_dropping_others() {
+        let contents = "export OPENAI_API_KEY='old'\nexport XAI_API_KEY='keep'\n";
+        let updated = upsert_export_line(contents, "OPENAI_API_KEY", "new");
+        assert!(updated.contains("export OPENAI_API_KEY='new'"));
+        assert!(updated.contains("export XAI_API_KEY='keep'"));
+        assert!(!updated.contains("export OPENAI_API_KEY='old'"));
+    }
+
+    #[test]
+    fn persist_provider_api_key_writes_launcher_provider_env() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let config_home = root.join("config-home");
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+
+        let path = persist_provider_api_key("OPENAI_API_KEY", "sk-test")
+            .expect("provider env should persist");
+        let contents = std::fs::read_to_string(&path).expect("provider env should be readable");
+
+        assert_eq!(path, config_home.join("launcher-provider.env"));
+        assert!(contents.contains("export OPENAI_API_KEY='sk-test'"));
+
+        std::env::remove_var("CLAW_CONFIG_HOME");
     }
 
     #[test]
