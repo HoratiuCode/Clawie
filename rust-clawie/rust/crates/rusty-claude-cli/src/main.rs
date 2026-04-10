@@ -2225,6 +2225,7 @@ impl LiveCli {
             |path| path.display().to_string(),
         );
         let rows = vec![
+            "~, clawie".to_string(),
             format!("Model            {}", self.model),
             format!("Permissions      {}", self.permission_mode.as_str()),
             format!("Branch           {}", git_branch),
@@ -6497,6 +6498,7 @@ mod tests {
             .startup_banner()
         });
 
+        assert!(banner.contains("~, clawie"));
         assert!(banner.contains("Tab"));
         assert!(banner.contains("workflow completions"));
 
