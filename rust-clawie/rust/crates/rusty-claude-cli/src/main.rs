@@ -360,7 +360,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "mcp" => Ok(CliAction::Mcp {
             args: join_optional_args(&rest[1..]),
         }),
-        "skills" => Ok(CliAction::Skills {
+        "skills" | "skill" => Ok(CliAction::Skills {
             args: join_optional_args(&rest[1..]),
         }),
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
@@ -6209,6 +6209,10 @@ mod tests {
             CliAction::Skills { args: None }
         );
         assert_eq!(
+            parse_args(&["skill".to_string()]).expect("skill should parse"),
+            CliAction::Skills { args: None }
+        );
+        assert_eq!(
             parse_args(&["agents".to_string(), "--help".to_string()])
                 .expect("agents help should parse"),
             CliAction::Agents {
@@ -6282,6 +6286,13 @@ mod tests {
         assert_eq!(
             parse_args(&["/skills".to_string()]).expect("/skills should parse"),
             CliAction::Skills { args: None }
+        );
+        assert_eq!(
+            parse_args(&["/skill".to_string(), "add".to_string(), "creative".to_string(), "::".to_string(), "Use".to_string(), "stronger".to_string(), "visuals".to_string()])
+                .expect("/skill add should parse"),
+            CliAction::Skills {
+                args: Some("add creative :: Use stronger visuals".to_string())
+            }
         );
         assert_eq!(
             parse_args(&["/skills".to_string(), "help".to_string()])
