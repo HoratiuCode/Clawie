@@ -1064,6 +1064,7 @@ pub enum SlashCommand {
         target: Option<String>,
     },
     DebugToolCall,
+    Providers,
     Model {
         model: Option<String>,
     },
@@ -1262,6 +1263,10 @@ pub fn validate_slash_command_input(
         "debug-tool-call" => {
             validate_no_args(command, &args)?;
             SlashCommand::DebugToolCall
+        }
+        "providers" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Providers
         }
         "model" => SlashCommand::Model {
             model: optional_single_arg(command, &args, "[model]")?,
@@ -1785,8 +1790,9 @@ pub fn resume_supported_slash_commands() -> Vec<&'static SlashCommandSpec> {
 
 fn slash_command_category(name: &str) -> &'static str {
     match name {
-        "help" | "status" | "sandbox" | "model" | "permissions" | "cost" | "resume" | "session"
-        | "version" | "login" | "logout" | "usage" | "stats" | "rename" | "privacy-settings" => {
+        "help" | "status" | "sandbox" | "providers" | "model" | "permissions" | "cost"
+        | "resume" | "session" | "version" | "login" | "logout" | "usage" | "stats"
+        | "rename" | "privacy-settings" => {
             "Session & visibility"
         }
         "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
@@ -3197,6 +3203,7 @@ pub fn handle_slash_command(
         | SlashCommand::Ultraplan { .. }
         | SlashCommand::Teleport { .. }
         | SlashCommand::DebugToolCall
+        | SlashCommand::Providers
         | SlashCommand::Sandbox
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
@@ -3429,6 +3436,10 @@ mod tests {
         assert_eq!(
             SlashCommand::parse("/debug-tool-call"),
             Ok(Some(SlashCommand::DebugToolCall))
+        );
+        assert_eq!(
+            SlashCommand::parse("/providers"),
+            Ok(Some(SlashCommand::Providers))
         );
         assert_eq!(
             SlashCommand::parse("/model claude-opus"),
@@ -3665,6 +3676,7 @@ mod tests {
         assert!(help.contains("/ultraplan [task]"));
         assert!(help.contains("/teleport <symbol-or-path>"));
         assert!(help.contains("/debug-tool-call"));
+        assert!(help.contains("/providers"));
         assert!(help.contains("/model [model]"));
         assert!(help.contains("/permissions [read-only|workspace-write|danger-full-access]"));
         assert!(help.contains("/clear [--confirm]"));

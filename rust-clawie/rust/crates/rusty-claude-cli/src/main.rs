@@ -124,6 +124,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permission_mode,
         } => print_status_snapshot(&model, permission_mode)?,
         CliAction::Sandbox => print_sandbox_status_snapshot()?,
+        CliAction::Providers => print_providers_report(),
         CliAction::Prompt {
             prompt,
             model,
@@ -172,6 +173,7 @@ enum CliAction {
         permission_mode: PermissionMode,
     },
     Sandbox,
+    Providers,
     Prompt {
         prompt: String,
         model: String,
@@ -362,6 +364,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             args: join_optional_args(&rest[1..]),
         }),
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
+        "providers" => Ok(CliAction::Providers),
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
@@ -406,6 +409,7 @@ fn parse_single_word_command_alias(
             permission_mode: permission_mode_override.unwrap_or_else(default_permission_mode),
         })),
         "sandbox" => Some(Ok(CliAction::Sandbox)),
+        "providers" => Some(Ok(CliAction::Providers)),
         other => bare_slash_command_guidance(other).map(Err),
     }
 }
@@ -1094,6 +1098,44 @@ fn format_model_switch_report(previous: &str, next: &str, message_count: usize) 
     )
 }
 
+fn format_providers_report() -> String {
+    let providers = [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251213",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-5",
+        "gpt-5-mini",
+        "grok-3",
+        "grok-3-mini",
+    ];
+    let mut lines = vec![
+        "Providers".to_string(),
+        "  Switch models with /model <name> or --model <name>".to_string(),
+        "  Missing API keys are prompted on first use and saved to ~/.claw/launcher-provider.env"
+            .to_string(),
+    ];
+
+    for model in providers {
+        if let Some(metadata) = metadata_for_model(model) {
+            lines.push(format!(
+                "  {:<10} model={model:<28} key={} base={} default={}",
+                provider_label(metadata.provider),
+                metadata.auth_env,
+                metadata.base_url_env,
+                metadata.default_base_url
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn print_providers_report() {
+    println!("{}", format_providers_report());
+}
+
 fn provider_label(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Anthropic => "Anthropic",
@@ -1502,6 +1544,10 @@ fn run_resume_command(
                 message: Some(format_cost_report(usage)),
             })
         }
+        SlashCommand::Providers => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(format_providers_report()),
+        }),
         SlashCommand::Config { section } => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(render_config_report(section.as_deref())?),
@@ -2436,6 +2482,10 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
             }
             SlashCommand::Compact => {
                 self.compact()?;
+                false
+            }
+            SlashCommand::Providers => {
+                print_providers_report();
                 false
             }
             SlashCommand::Model { model } => self.set_model(model)?,
@@ -5666,6 +5716,8 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(out, "  claw sandbox")?;
     writeln!(out, "      Show the current sandbox isolation snapshot")?;
+    writeln!(out, "  claw providers")?;
+    writeln!(out, "      List supported model providers and required env vars")?;
     writeln!(out, "  claw dump-manifests")?;
     writeln!(out, "  claw bootstrap-plan")?;
     writeln!(out, "  claw agents")?;
@@ -5740,6 +5792,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "  claw --resume {LATEST_SESSION_REFERENCE} /status /diff /export notes.txt"
     )?;
+    writeln!(out, "  claw providers")?;
     writeln!(out, "  claw agents")?;
     writeln!(out, "  claw mcp show my-server")?;
     writeln!(out, "  claw /skills")?;
@@ -5760,6 +5813,7 @@ mod tests {
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
         format_issue_report, format_model_report, format_model_switch_report,
+        format_providers_report,
         format_permissions_report, format_permissions_switch_report, format_pr_report,
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
@@ -6436,6 +6490,7 @@ mod tests {
         assert!(help.contains("Complete commands, modes, and recent sessions"));
         assert!(help.contains("/status"));
         assert!(help.contains("/sandbox"));
+        assert!(help.contains("/providers"));
         assert!(help.contains("/model [model]"));
         assert!(help.contains("/permissions [read-only|workspace-write|danger-full-access]"));
         assert!(help.contains("/clear [--confirm]"));
@@ -6471,6 +6526,7 @@ mod tests {
         assert!(completions.contains(&"/model claude-sonnet-4-6".to_string()));
         assert!(completions.contains(&"/model gpt-4.1".to_string()));
         assert!(completions.contains(&"/model grok-3".to_string()));
+        assert!(completions.contains(&"/providers".to_string()));
         assert!(completions.contains(&"/permissions workspace-write".to_string()));
         assert!(completions.contains(&"/session list".to_string()));
         assert!(completions.contains(&"/session switch session-current".to_string()));
@@ -6612,6 +6668,16 @@ mod tests {
         assert!(report.contains("Previous         claude-sonnet"));
         assert!(report.contains("Current          claude-opus"));
         assert!(report.contains("Preserved msgs   9"));
+    }
+
+    #[test]
+    fn providers_report_lists_openai_and_anthropic_setup() {
+        let report = format_providers_report();
+        assert!(report.contains("Anthropic"));
+        assert!(report.contains("OpenAI"));
+        assert!(report.contains("ANTHROPIC_API_KEY"));
+        assert!(report.contains("OPENAI_API_KEY"));
+        assert!(report.contains("/model <name>"));
     }
 
     #[test]
