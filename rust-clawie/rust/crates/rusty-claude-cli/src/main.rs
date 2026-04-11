@@ -2207,7 +2207,13 @@ fn mcp_runtime_tool_definition(tool: &runtime::ManagedMcpTool) -> RuntimeToolDef
             .tool
             .input_schema
             .clone()
-            .unwrap_or_else(|| json!({ "type": "object", "additionalProperties": true })),
+            .unwrap_or_else(|| {
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true
+                })
+            }),
         required_permission: permission_mode_for_mcp_tool(&tool.tool),
     }
 }
