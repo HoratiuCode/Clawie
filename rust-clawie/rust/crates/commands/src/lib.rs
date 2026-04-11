@@ -93,6 +93,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: false,
     },
     SlashCommandSpec {
+        name: "experimental",
+        aliases: &["experiment"],
+        summary: "Manage experimental uninterrupted agent mode",
+        argument_hint: Some("[status|on|off]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
         name: "clear",
         aliases: &[],
         summary: "Start a fresh local session",
@@ -1071,6 +1078,9 @@ pub enum SlashCommand {
     Permissions {
         mode: Option<String>,
     },
+    Experimental {
+        mode: Option<String>,
+    },
     Clear {
         confirm: bool,
     },
@@ -1274,6 +1284,9 @@ pub fn validate_slash_command_input(
         "permissions" => SlashCommand::Permissions {
             mode: parse_permissions_mode(&args)?,
         },
+        "experimental" | "experiment" => SlashCommand::Experimental {
+            mode: parse_experimental_mode(&args)?,
+        },
         "clear" => SlashCommand::Clear {
             confirm: parse_clear_args(&args)?,
         },
@@ -1476,6 +1489,23 @@ fn parse_permissions_mode(args: &[&str]) -> Result<Option<String>, SlashCommandP
         ));
     }
 
+    Ok(None)
+}
+
+fn parse_experimental_mode(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
+    let mode = optional_single_arg("experimental", args, "[status|on|off]")?;
+    if let Some(mode) = mode {
+        if matches!(mode.as_str(), "status" | "on" | "off") {
+            return Ok(Some(mode));
+        }
+        return Err(command_error(
+            &format!(
+                "Unsupported /experimental mode '{mode}'. Use status, on, or off."
+            ),
+            "experimental",
+            "/experimental [status|on|off]",
+        ));
+    }
     Ok(None)
 }
 
@@ -1804,7 +1834,7 @@ pub fn resume_supported_slash_commands() -> Vec<&'static SlashCommandSpec> {
 
 fn slash_command_category(name: &str) -> &'static str {
     match name {
-        "help" | "status" | "sandbox" | "providers" | "model" | "permissions" | "cost"
+        "help" | "status" | "sandbox" | "providers" | "model" | "permissions" | "experimental" | "cost"
         | "resume" | "session" | "version" | "login" | "logout" | "usage" | "stats"
         | "rename" | "privacy-settings" => {
             "Session & visibility"
@@ -3382,6 +3412,7 @@ pub fn handle_slash_command(
         | SlashCommand::Sandbox
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
+        | SlashCommand::Experimental { .. }
         | SlashCommand::Clear { .. }
         | SlashCommand::Cost
         | SlashCommand::Resume { .. }
@@ -3633,6 +3664,12 @@ mod tests {
             }))
         );
         assert_eq!(
+            SlashCommand::parse("/experimental on"),
+            Ok(Some(SlashCommand::Experimental {
+                mode: Some("on".to_string()),
+            }))
+        );
+        assert_eq!(
             SlashCommand::parse("/clear"),
             Ok(Some(SlashCommand::Clear { confirm: false }))
         );
@@ -3775,6 +3812,15 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_experimental_argument_values() {
+        let error = parse_error_message("/experimental maybe");
+        assert!(error.contains(
+            "Unsupported /experimental mode 'maybe'. Use status, on, or off."
+        ));
+        assert!(error.contains("  Usage            /experimental [status|on|off]"));
+    }
+
+    #[test]
     fn rejects_missing_required_arguments() {
         // given
         let input = "/teleport";
@@ -3860,6 +3906,7 @@ mod tests {
         assert!(help.contains("/providers"));
         assert!(help.contains("/model [model]"));
         assert!(help.contains("/permissions [read-only|workspace-write|danger-full-access]"));
+        assert!(help.contains("/experimental [status|on|off]"));
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));

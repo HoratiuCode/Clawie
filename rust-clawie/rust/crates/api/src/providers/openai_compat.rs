@@ -742,9 +742,35 @@ fn openai_tool_definition(tool: &ToolDefinition) -> Value {
         "function": {
             "name": tool.name,
             "description": tool.description,
-            "parameters": tool.input_schema,
+            "parameters": normalize_openai_schema(tool.input_schema.clone()),
         }
     })
+}
+
+fn normalize_openai_schema(schema: Value) -> Value {
+    match schema {
+        Value::Object(mut map) => {
+            if map.get("type").and_then(Value::as_str) == Some("object")
+                && !map.contains_key("properties")
+            {
+                map.insert("properties".to_string(), json!({}));
+            }
+
+            for value in map.values_mut() {
+                let normalized = normalize_openai_schema(value.clone());
+                *value = normalized;
+            }
+
+            Value::Object(map)
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(normalize_openai_schema)
+                .collect::<Vec<_>>(),
+        ),
+        other => other,
+    }
 }
 
 fn openai_tool_choice(tool_choice: &ToolChoice) -> Value {
@@ -999,7 +1025,42 @@ mod tests {
         assert_eq!(payload["messages"][1]["role"], json!("user"));
         assert_eq!(payload["messages"][2]["role"], json!("tool"));
         assert_eq!(payload["tools"][0]["type"], json!("function"));
+        assert_eq!(payload["tools"][0]["function"]["parameters"]["properties"], json!({}));
         assert_eq!(payload["tool_choice"], json!("auto"));
+    }
+
+    #[test]
+    fn object_tool_schema_without_properties_is_normalized_for_openai() {
+        let payload = build_chat_completion_request(
+            &MessageRequest {
+                model: "gpt-5".to_string(),
+                max_tokens: 64,
+                messages: vec![InputMessage::user_text("hello")],
+                system: None,
+                tools: Some(vec![ToolDefinition {
+                    name: "StructuredOutput".to_string(),
+                    description: Some("Return structured output".to_string()),
+                    input_schema: json!({
+                        "type": "object",
+                        "additionalProperties": true
+                    }),
+                }]),
+                tool_choice: Some(ToolChoice::Tool {
+                    name: "StructuredOutput".to_string(),
+                }),
+                stream: false,
+            },
+            OpenAiCompatConfig::openai(),
+        );
+
+        assert_eq!(
+            payload["tools"][0]["function"]["parameters"],
+            json!({
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {}
+            })
+        );
     }
 
     #[test]

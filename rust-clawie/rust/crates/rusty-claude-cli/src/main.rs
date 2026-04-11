@@ -125,6 +125,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => print_status_snapshot(&model, permission_mode)?,
         CliAction::Sandbox => print_sandbox_status_snapshot()?,
         CliAction::Providers => print_providers_report(),
+        CliAction::Experimental { mode } => print_experimental_report(mode.as_deref())?,
         CliAction::Prompt {
             prompt,
             model,
@@ -174,6 +175,9 @@ enum CliAction {
     },
     Sandbox,
     Providers,
+    Experimental {
+        mode: Option<String>,
+    },
     Prompt {
         prompt: String,
         model: String,
@@ -365,6 +369,9 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         }),
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
         "providers" => Ok(CliAction::Providers),
+        "experimental" => Ok(CliAction::Experimental {
+            mode: join_optional_args(&rest[1..]),
+        }),
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
@@ -410,6 +417,7 @@ fn parse_single_word_command_alias(
         })),
         "sandbox" => Some(Ok(CliAction::Sandbox)),
         "providers" => Some(Ok(CliAction::Providers)),
+        "experimental" => Some(Ok(CliAction::Experimental { mode: None })),
         other => bare_slash_command_guidance(other).map(Err),
     }
 }
@@ -1152,6 +1160,35 @@ fn provider_env_file_path() -> PathBuf {
         .join("launcher-provider.env")
 }
 
+fn experimental_env_file_path() -> PathBuf {
+    env::var_os("CLAW_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".claw")))
+        .unwrap_or_else(|| PathBuf::from(".claw"))
+        .join("experimental.env")
+}
+
+fn experimental_uninterrupted_enabled() -> bool {
+    let path = experimental_env_file_path();
+    fs::read_to_string(path)
+        .ok()
+        .is_some_and(|contents| contents.contains("CLAWIE_EXPERIMENTAL_UNINTERRUPTED=1"))
+}
+
+fn persist_experimental_uninterrupted(enabled: bool) -> io::Result<PathBuf> {
+    let path = experimental_env_file_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let contents = if enabled {
+        "export CLAWIE_EXPERIMENTAL_UNINTERRUPTED=1\n".to_string()
+    } else {
+        "export CLAWIE_EXPERIMENTAL_UNINTERRUPTED=0\n".to_string()
+    };
+    fs::write(&path, contents)?;
+    Ok(path)
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -1282,6 +1319,68 @@ fn format_permissions_switch_report(previous: &str, next: &str) -> String {
   Applies to       subsequent tool calls
   Usage            /permissions to inspect current mode"
     )
+}
+
+fn format_experimental_report(enabled: bool, mode: &str) -> String {
+    let state = if enabled { "enabled" } else { "disabled" };
+    let behavior = if enabled {
+        "launches Clawie with --dangerously-skip-permissions and keeps the live session in danger-full-access"
+    } else {
+        "keeps standard approval behavior"
+    };
+    format!(
+        "Experimental
+  Uninterrupted    {state}
+  Session mode     {mode}
+  Behavior         {behavior}
+
+Usage
+  Inspect status with /experimental
+  Enable with /experimental on
+  Disable with /experimental off"
+    )
+}
+
+fn format_experimental_switch_report(enabled: bool, path: &Path, mode: &str) -> String {
+    let state = if enabled { "enabled" } else { "disabled" };
+    format!(
+        "Experimental updated
+  Uninterrupted    {state}
+  Session mode     {mode}
+  Persisted file   {}
+  Warning          experimental uninterrupted mode can modify files and run tools without further approval",
+        path.display()
+    )
+}
+
+fn normalize_experimental_mode(mode: Option<&str>) -> Result<Option<&str>, String> {
+    match mode.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(None),
+        Some("status" | "on" | "off") => Ok(mode),
+        Some(other) => Err(format!(
+            "unsupported experimental mode '{other}'. Use status, on, or off."
+        )),
+    }
+}
+
+fn print_experimental_report(mode: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let mode = normalize_experimental_mode(mode).map_err(std::io::Error::other)?;
+    let enabled = match mode {
+        Some("on") => {
+            persist_experimental_uninterrupted(true)?;
+            true
+        }
+        Some("off") => {
+            persist_experimental_uninterrupted(false)?;
+            false
+        }
+        _ => experimental_uninterrupted_enabled(),
+    };
+    println!(
+        "{}",
+        format_experimental_report(enabled, if enabled { "danger-full-access" } else { "workspace-write" })
+    );
+    Ok(())
 }
 
 fn format_cost_report(usage: TokenUsage) -> String {
@@ -1548,6 +1647,27 @@ fn run_resume_command(
             session: session.clone(),
             message: Some(format_providers_report()),
         }),
+        SlashCommand::Experimental { mode } => {
+            let mode = normalize_experimental_mode(mode.as_deref()).map_err(std::io::Error::other)?;
+            let enabled = match mode {
+                Some("on") => {
+                    persist_experimental_uninterrupted(true)?;
+                    true
+                }
+                Some("off") => {
+                    persist_experimental_uninterrupted(false)?;
+                    false
+                }
+                _ => experimental_uninterrupted_enabled(),
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(format_experimental_report(
+                    enabled,
+                    if enabled { "danger-full-access" } else { "workspace-write" },
+                )),
+            })
+        }
         SlashCommand::Config { section } => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(render_config_report(section.as_deref())?),
@@ -2490,6 +2610,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
             }
             SlashCommand::Model { model } => self.set_model(model)?,
             SlashCommand::Permissions { mode } => self.set_permissions(mode)?,
+            SlashCommand::Experimental { mode } => self.set_experimental(mode)?,
             SlashCommand::Clear { confirm } => self.clear_session(confirm)?,
             SlashCommand::Cost => {
                 self.print_cost();
@@ -2727,6 +2848,78 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
             format_permissions_switch_report(&previous, normalized)
         );
         Ok(true)
+    }
+
+    fn set_experimental(
+        &mut self,
+        mode: Option<String>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let mode = normalize_experimental_mode(mode.as_deref()).map_err(std::io::Error::other)?;
+        let enabled = experimental_uninterrupted_enabled();
+
+        match mode {
+            None | Some("status") => {
+                println!(
+                    "{}",
+                    format_experimental_report(enabled, self.permission_mode.as_str())
+                );
+                Ok(false)
+            }
+            Some("on") if enabled && self.permission_mode == PermissionMode::DangerFullAccess => {
+                println!(
+                    "{}",
+                    format_experimental_report(true, self.permission_mode.as_str())
+                );
+                Ok(false)
+            }
+            Some("on") => {
+                let path = persist_experimental_uninterrupted(true)?;
+                let session = self.runtime.session().clone();
+                self.permission_mode = PermissionMode::DangerFullAccess;
+                let runtime = build_runtime(
+                    session,
+                    &self.session.id,
+                    self.model.clone(),
+                    self.system_prompt.clone(),
+                    true,
+                    true,
+                    self.allowed_tools.clone(),
+                    self.permission_mode,
+                    None,
+                )?;
+                self.replace_runtime(runtime)?;
+                println!(
+                    "{}",
+                    format_experimental_switch_report(true, &path, self.permission_mode.as_str())
+                );
+                Ok(true)
+            }
+            Some("off") => {
+                let path = persist_experimental_uninterrupted(false)?;
+                if self.permission_mode == PermissionMode::DangerFullAccess {
+                    let session = self.runtime.session().clone();
+                    self.permission_mode = PermissionMode::WorkspaceWrite;
+                    let runtime = build_runtime(
+                        session,
+                        &self.session.id,
+                        self.model.clone(),
+                        self.system_prompt.clone(),
+                        true,
+                        true,
+                        self.allowed_tools.clone(),
+                        self.permission_mode,
+                        None,
+                    )?;
+                    self.replace_runtime(runtime)?;
+                }
+                println!(
+                    "{}",
+                    format_experimental_switch_report(false, &path, self.permission_mode.as_str())
+                );
+                Ok(true)
+            }
+            Some(_) => Ok(false),
+        }
     }
 
     fn clear_session(&mut self, confirm: bool) -> Result<bool, Box<dyn std::error::Error>> {
@@ -4938,6 +5131,10 @@ fn slash_command_completion_candidates_with_sessions(
         "/permissions read-only",
         "/permissions workspace-write",
         "/permissions danger-full-access",
+        "/experimental ",
+        "/experimental status",
+        "/experimental on",
+        "/experimental off",
         "/plugin list",
         "/plugin install ",
         "/plugin enable ",
@@ -5718,6 +5915,8 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "      Show the current sandbox isolation snapshot")?;
     writeln!(out, "  claw providers")?;
     writeln!(out, "      List supported model providers and required env vars")?;
+    writeln!(out, "  claw experimental [status|on|off]")?;
+    writeln!(out, "      Toggle experimental uninterrupted agent mode")?;
     writeln!(out, "  claw dump-manifests")?;
     writeln!(out, "  claw bootstrap-plan")?;
     writeln!(out, "  claw agents")?;
@@ -5793,6 +5992,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         "  claw --resume {LATEST_SESSION_REFERENCE} /status /diff /export notes.txt"
     )?;
     writeln!(out, "  claw providers")?;
+    writeln!(out, "  claw experimental on")?;
     writeln!(out, "  claw agents")?;
     writeln!(out, "  claw mcp show my-server")?;
     writeln!(out, "  claw /skills")?;
@@ -5812,6 +6012,7 @@ mod tests {
         create_managed_session_handle, describe_tool_progress, filter_tool_specs,
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
+        format_experimental_report,
         format_issue_report, format_model_report, format_model_switch_report,
         format_providers_report,
         format_permissions_report, format_permissions_switch_report, format_pr_report,
@@ -6213,6 +6414,13 @@ mod tests {
             CliAction::Skills { args: None }
         );
         assert_eq!(
+            parse_args(&["experimental".to_string(), "on".to_string()])
+                .expect("experimental should parse"),
+            CliAction::Experimental {
+                mode: Some("on".to_string())
+            }
+        );
+        assert_eq!(
             parse_args(&["agents".to_string(), "--help".to_string()])
                 .expect("agents help should parse"),
             CliAction::Agents {
@@ -6243,6 +6451,10 @@ mod tests {
         assert_eq!(
             parse_args(&["sandbox".to_string()]).expect("sandbox should parse"),
             CliAction::Sandbox
+        );
+        assert_eq!(
+            parse_args(&["experimental".to_string()]).expect("experimental should parse"),
+            CliAction::Experimental { mode: None }
         );
     }
 
@@ -6504,6 +6716,7 @@ mod tests {
         assert!(help.contains("/providers"));
         assert!(help.contains("/model [model]"));
         assert!(help.contains("/permissions [read-only|workspace-write|danger-full-access]"));
+        assert!(help.contains("/experimental [status|on|off]"));
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
@@ -6539,6 +6752,7 @@ mod tests {
         assert!(completions.contains(&"/model grok-3".to_string()));
         assert!(completions.contains(&"/providers".to_string()));
         assert!(completions.contains(&"/permissions workspace-write".to_string()));
+        assert!(completions.contains(&"/experimental on".to_string()));
         assert!(completions.contains(&"/session list".to_string()));
         assert!(completions.contains(&"/session switch session-current".to_string()));
         assert!(completions.contains(&"/resume session-old".to_string()));
@@ -6656,6 +6870,7 @@ mod tests {
         assert!(help.contains("claw version"));
         assert!(help.contains("claw status"));
         assert!(help.contains("claw sandbox"));
+        assert!(help.contains("claw experimental [status|on|off]"));
         assert!(help.contains("claw init"));
         assert!(help.contains("claw agents"));
         assert!(help.contains("claw mcp"));
@@ -6689,6 +6904,14 @@ mod tests {
         assert!(report.contains("ANTHROPIC_API_KEY"));
         assert!(report.contains("OPENAI_API_KEY"));
         assert!(report.contains("/model <name>"));
+    }
+
+    #[test]
+    fn experimental_report_mentions_uninterrupted_mode() {
+        let report = format_experimental_report(true, "danger-full-access");
+        assert!(report.contains("Uninterrupted    enabled"));
+        assert!(report.contains("danger-full-access"));
+        assert!(report.contains("/experimental on"));
     }
 
     #[test]
