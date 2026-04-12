@@ -13,7 +13,7 @@ mod render;
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::net::TcpListener;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -2371,6 +2371,44 @@ struct HookAbortMonitor {
 impl HookAbortMonitor {
     fn spawn(abort_signal: runtime::HookAbortSignal) -> Self {
         Self::spawn_with_waiter(abort_signal, move |stop_rx, abort_signal| {
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
+                use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+                if enable_raw_mode().is_ok() {
+                    loop {
+                        if stop_rx.try_recv().is_ok() {
+                            let _ = disable_raw_mode();
+                            return;
+                        }
+                        match poll(Duration::from_millis(100)) {
+                            Ok(true) => match read() {
+                                Ok(Event::Key(key))
+                                    if key.kind == KeyEventKind::Press
+                                        && (matches!(key.code, KeyCode::Esc)
+                                            || (matches!(key.code, KeyCode::Char('c'))
+                                                && key.modifiers.contains(KeyModifiers::CONTROL))) =>
+                                {
+                                    abort_signal.abort();
+                                    let _ = disable_raw_mode();
+                                    return;
+                                }
+                                Ok(_) => {}
+                                Err(_) => {
+                                    let _ = disable_raw_mode();
+                                    return;
+                                }
+                            },
+                            Ok(false) => {}
+                            Err(_) => {
+                                let _ = disable_raw_mode();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -2550,7 +2588,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
             let mut spinner = Spinner::new();
             let mut stdout = io::stdout();
             while !thinking_done_for_thread.load(Ordering::Relaxed) {
-                spinner.tick("Thinking...", &spinner_theme, &mut stdout)?;
+                spinner.tick("Thinking... · Esc to interrupt", &spinner_theme, &mut stdout)?;
                 thread::sleep(Duration::from_millis(250));
             }
             Ok(())
