@@ -5672,29 +5672,50 @@ fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
         .get("content")
         .and_then(|value| value.as_str())
         .map_or(0, |content| content.lines().count());
-    format!(
+    let preview = format_structured_patch_preview(parsed);
+    let summary = format!(
         "{icon} \x1b[1;32m✏️ {} {path}\x1b[0m \x1b[2m({line_count} lines)\x1b[0m",
         if kind == "create" { "Wrote" } else { "Updated" },
-    )
+    );
+    match preview {
+        Some(preview) => format!("{summary}\n{preview}"),
+        None => summary,
+    }
 }
 
 fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String> {
     let hunks = parsed.get("structuredPatch")?.as_array()?;
     let mut preview = Vec::new();
-    for hunk in hunks.iter().take(2) {
+    let mut truncated = false;
+    for hunk in hunks.iter().take(3) {
         let lines = hunk.get("lines")?.as_array()?;
-        for line in lines.iter().filter_map(|value| value.as_str()).take(6) {
-            match line.chars().next() {
-                Some('+') => preview.push(format!("\x1b[38;5;70m{line}\x1b[0m")),
-                Some('-') => preview.push(format!("\x1b[38;5;203m{line}\x1b[0m")),
-                _ => preview.push(line.to_string()),
+        for (index, line) in lines.iter().filter_map(|value| value.as_str()).enumerate() {
+            if index >= 8 {
+                truncated = true;
+                break;
             }
+            preview.push(colorize_patch_line(line));
         }
+    }
+    if hunks.len() > 3 {
+        truncated = true;
     }
     if preview.is_empty() {
         None
     } else {
+        if truncated {
+            preview.push("\x1b[2m… more changes hidden\x1b[0m".to_string());
+        }
         Some(preview.join("\n"))
+    }
+}
+
+fn colorize_patch_line(line: &str) -> String {
+    match line.chars().next() {
+        Some('+') => format!("\x1b[38;5;70m{line}\x1b[0m"),
+        Some('-') => format!("\x1b[38;5;203m{line}\x1b[0m"),
+        Some('@') => format!("\x1b[38;5;117m{line}\x1b[0m"),
+        _ => format!("\x1b[2m{line}\x1b[0m"),
     }
 }
 
