@@ -1,0 +1,3 @@
+{"created_at_ms":1776009106972,"session_id":"session-1776009106972-0","type":"session_meta","updated_at_ms":1776009111273,"version":1}
+{"message":{"blocks":[{"text":"hello","type":"text"}],"role":"user"},"type":"message"}
+{"message":{"blocks":[{"text":"Hello. What do you want to work on?","type":"text"}],"role":"assistant","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":3231,"output_tokens":11}},"type":"message"}

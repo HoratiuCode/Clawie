@@ -1,5 +1,6 @@
 use std::fmt::Write as FmtWrite;
 use std::io::{self, Write};
+use std::time::Instant;
 
 use crossterm::cursor::{MoveToColumn, RestorePosition, SavePosition};
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor, Stylize};
@@ -44,9 +45,19 @@ impl Default for ColorTheme {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Spinner {
     frame_index: usize,
+    started_at: Instant,
+}
+
+impl Default for Spinner {
+    fn default() -> Self {
+        Self {
+            frame_index: 0,
+            started_at: Instant::now(),
+        }
+    }
 }
 
 impl Spinner {
@@ -71,6 +82,12 @@ impl Spinner {
         } else {
             label.to_string()
         };
+        let elapsed_seconds = self.started_at.elapsed().as_secs();
+        let display_label = if elapsed_seconds > 0 {
+            format!("{animated_label} {elapsed_seconds}s")
+        } else {
+            animated_label
+        };
         self.frame_index += 1;
         queue!(
             out,
@@ -78,7 +95,7 @@ impl Spinner {
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             SetForegroundColor(theme.spinner_active),
-            Print(format!("{frame} {animated_label}")),
+            Print(format!("{frame} {display_label}")),
             ResetColor,
             RestorePosition
         )?;

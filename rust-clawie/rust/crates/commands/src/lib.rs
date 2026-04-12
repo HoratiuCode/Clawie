@@ -343,7 +343,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         name: "copy",
         aliases: &[],
         summary: "Copy conversation or output to clipboard",
-        argument_hint: Some("[last|all]"),
+        argument_hint: Some("[last|all|code]"),
         resume_supported: true,
     },
     SlashCommandSpec {

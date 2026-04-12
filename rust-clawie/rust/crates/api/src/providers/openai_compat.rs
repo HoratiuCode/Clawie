@@ -694,11 +694,14 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
             if text.is_empty() && tool_calls.is_empty() {
                 Vec::new()
             } else {
-                vec![json!({
+                let mut translated = json!({
                     "role": "assistant",
                     "content": (!text.is_empty()).then_some(text),
-                    "tool_calls": tool_calls,
-                })]
+                });
+                if !tool_calls.is_empty() {
+                    translated["tool_calls"] = Value::Array(tool_calls);
+                }
+                vec![translated]
             }
         }
         _ => message

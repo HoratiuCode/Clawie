@@ -18,6 +18,7 @@ use std::net::TcpListener;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -2542,22 +2543,39 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
-        let mut spinner = Spinner::new();
-        let mut stdout = io::stdout();
-        spinner.tick(
-            "Thinking...",
-            TerminalRenderer::new().color_theme(),
-            &mut stdout,
-        )?;
+        let spinner_theme = *TerminalRenderer::new().color_theme();
+        let thinking_done = Arc::new(AtomicBool::new(false));
+        let thinking_done_for_thread = Arc::clone(&thinking_done);
+        let spinner_handle = thread::spawn(move || -> io::Result<()> {
+            let mut spinner = Spinner::new();
+            let mut stdout = io::stdout();
+            while !thinking_done_for_thread.load(Ordering::Relaxed) {
+                spinner.tick("Thinking...", &spinner_theme, &mut stdout)?;
+                thread::sleep(Duration::from_millis(250));
+            }
+            Ok(())
+        });
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = runtime.run_turn(input, Some(&mut permission_prompter));
         hook_abort_monitor.stop();
+        thinking_done.store(true, Ordering::Relaxed);
+        match spinner_handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(Box::new(error)),
+            Err(_) => {
+                return Err(Box::new(io::Error::other(
+                    "thinking spinner thread panicked",
+                )))
+            }
+        }
+        let mut spinner = Spinner::new();
+        let mut stdout = io::stdout();
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
                 spinner.finish(
                     "✨ Done",
-                    TerminalRenderer::new().color_theme(),
+                    &spinner_theme,
                     &mut stdout,
                 )?;
                 println!();
@@ -2567,6 +2585,14 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
                         format_auto_compaction_notice(event.removed_message_count)
                     );
                 }
+                let visible_reply = final_assistant_text_or_fallback(input, &summary);
+                if !visible_reply.trim().is_empty() && final_assistant_text(&summary).trim().is_empty()
+                {
+                    println!("{visible_reply}");
+                }
+                if contains_fenced_code(&visible_reply) {
+                    println!("Copy code with /copy code");
+                }
                 self.persist_session()?;
                 Ok(())
             }
@@ -2574,7 +2600,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
                 runtime.shutdown_plugins()?;
                 spinner.fail(
                     "❌ Request failed",
-                    TerminalRenderer::new().color_theme(),
+                    &spinner_theme,
                     &mut stdout,
                 )?;
                 writeln!(&mut stdout, "{}", error)?;
@@ -2600,12 +2626,13 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
         let result = runtime.run_turn(input, Some(&mut permission_prompter));
         hook_abort_monitor.stop();
         let summary = result?;
+        let message = final_assistant_text_or_fallback(input, &summary);
         self.replace_runtime(runtime)?;
         self.persist_session()?;
         println!(
             "{}",
             json!({
-                "message": final_assistant_text(&summary),
+                "message": message,
                 "model": self.model,
                 "iterations": summary.iterations,
                 "auto_compaction": summary.auto_compaction.map(|event| json!({
@@ -2750,6 +2777,10 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
                 Self::print_skills(args.as_deref())?;
                 false
             }
+            SlashCommand::Copy { target } => {
+                self.copy_to_clipboard(target.as_deref())?;
+                false
+            }
             SlashCommand::Doctor
             | SlashCommand::Login
             | SlashCommand::Logout
@@ -2779,7 +2810,6 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
             | SlashCommand::Voice { .. }
             | SlashCommand::Usage { .. }
             | SlashCommand::Rename { .. }
-            | SlashCommand::Copy { .. }
             | SlashCommand::Hooks { .. }
             | SlashCommand::Context { .. }
             | SlashCommand::Color { .. }
@@ -2802,6 +2832,40 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
 
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.runtime.session().save_to_path(&self.session.path)?;
+        Ok(())
+    }
+
+    fn copy_to_clipboard(
+        &self,
+        target: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let target = target.unwrap_or("last").trim().to_ascii_lowercase();
+        let payload = match target.as_str() {
+            "" | "last" => latest_assistant_reply(self.runtime.session()),
+            "all" => render_export_text(self.runtime.session()),
+            "code" => latest_assistant_code_blocks(self.runtime.session())
+                .ok_or("no code block found in the last assistant reply.")?,
+            other => {
+                return Err(format!(
+                    "unsupported copy target '{other}'. Use /copy, /copy last, /copy all, or /copy code."
+                )
+                .into())
+            }
+        };
+
+        if payload.trim().is_empty() {
+            return Err("nothing available to copy yet.".into());
+        }
+
+        write_clipboard(&payload)?;
+        println!(
+            "Copied {} to clipboard.",
+            match target.as_str() {
+                "all" => "conversation",
+                "code" => "code",
+                _ => "last reply",
+            }
+        );
         Ok(())
     }
 
@@ -5124,6 +5188,118 @@ fn final_assistant_text(summary: &runtime::TurnSummary) -> String {
                 .join("")
         })
         .unwrap_or_default()
+}
+
+fn final_assistant_text_or_fallback(input: &str, summary: &runtime::TurnSummary) -> String {
+    let text = final_assistant_text(summary);
+    if !text.trim().is_empty() {
+        return text;
+    }
+    greeting_fallback(input).unwrap_or_default()
+}
+
+fn greeting_fallback(input: &str) -> Option<String> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let is_greeting = matches!(
+        normalized.as_str(),
+        "hi"
+            | "hello"
+            | "hey"
+            | "yo"
+            | "salut"
+            | "hola"
+            | "ciao"
+            | "good morning"
+            | "good afternoon"
+            | "good evening"
+    );
+    is_greeting.then_some("Hello. What do you want to work on?".to_string())
+}
+
+fn latest_assistant_reply(session: &Session) -> String {
+    session
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == MessageRole::Assistant)
+        .map(conversation_message_text)
+        .unwrap_or_default()
+}
+
+fn latest_assistant_code_blocks(session: &Session) -> Option<String> {
+    extract_fenced_code_blocks(&latest_assistant_reply(session))
+}
+
+fn conversation_message_text(message: &ConversationMessage) -> String {
+    message
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn contains_fenced_code(text: &str) -> bool {
+    text.contains("```")
+}
+
+fn extract_fenced_code_blocks(text: &str) -> Option<String> {
+    let mut in_block = false;
+    let mut current = Vec::new();
+    let mut blocks = Vec::new();
+
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            if in_block {
+                let block = current.join("\n");
+                if !block.trim().is_empty() {
+                    blocks.push(block);
+                }
+                current.clear();
+                in_block = false;
+            } else {
+                in_block = true;
+            }
+            continue;
+        }
+        if in_block {
+            current.push(line.to_string());
+        }
+    }
+
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks.join("\n\n"))
+    }
+}
+
+fn write_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error>> {
+    for program in [
+        ("pbcopy", Vec::<&str>::new()),
+        ("wl-copy", Vec::<&str>::new()),
+        ("xclip", vec!["-selection", "clipboard"]),
+    ] {
+        let mut child = match Command::new(program.0)
+            .args(program.1.iter().copied())
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => continue,
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())?;
+        }
+        let status = child.wait()?;
+        if status.success() {
+            return Ok(());
+        }
+    }
+    Err("no clipboard tool available. Install pbcopy, wl-copy, or xclip.".into())
 }
 
 fn collect_tool_uses(summary: &runtime::TurnSummary) -> Vec<serde_json::Value> {
@@ -7498,6 +7674,22 @@ UU conflicted.rs",
         assert!(usage.contains("/resume <session-path|session-id|latest>"));
         assert!(usage.contains(".claw/sessions/<session-id>.jsonl"));
         assert!(usage.contains("/session list"));
+    }
+
+    #[test]
+    fn greeting_fallback_returns_visible_reply_for_empty_turn() {
+        let summary = runtime::TurnSummary {
+            assistant_messages: vec![ConversationMessage::assistant(vec![])],
+            usage: TokenUsage::default(),
+            iterations: 0,
+            auto_compaction: None,
+            prompt_cache_events: Vec::new(),
+        };
+
+        assert_eq!(
+            final_assistant_text_or_fallback("hello", &summary),
+            "Hello. What do you want to work on?"
+        );
     }
 
     fn cwd_lock() -> &'static Mutex<()> {
