@@ -24,10 +24,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    metadata_for_model, resolve_startup_auth_source, AnthropicClient, AuthSource,
+    default_model_for_provider, metadata_for_model, parse_provider_preference,
+    provider_preference_from_env, resolve_startup_auth_source, AnthropicClient, AuthSource,
     ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
     OutputContentBlock, PromptCache, ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent,
-    ToolChoice, ToolDefinition, ToolResultContentBlock,
+    ToolChoice, ToolDefinition, ToolResultContentBlock, PROVIDER_PREFERENCE_ENV,
 };
 
 use commands::{
@@ -54,9 +55,16 @@ use serde_json::json;
 use tools::{GlobalToolRegistry, RuntimeToolDefinition, ToolSearchOutput};
 
 const DEFAULT_MODEL: &str = "gpt-4.1";
+const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_XAI_MODEL: &str = "grok-3";
 fn max_tokens_for_model(model: &str) -> u32 {
-    if model.contains("opus") {
+    let lower = model.trim().to_ascii_lowercase();
+    if lower.starts_with("gpt-") || lower.starts_with("openai/") {
+        32_768
+    } else if lower.contains("opus") {
         32_000
+    } else if lower.starts_with("grok") {
+        64_000
     } else {
         64_000
     }
@@ -106,6 +114,7 @@ Run `claw --help` for usage."
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    sync_provider_preference_for_current_dir();
     let args: Vec<String> = env::args().skip(1).collect();
     match parse_args(&args)? {
         CliAction::DumpManifests => dump_manifests(),
@@ -217,7 +226,7 @@ impl CliOutputFormat {
 
 #[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
-    let mut model = DEFAULT_MODEL.to_string();
+    let mut model = default_model_for_current_dir();
     let mut output_format = CliOutputFormat::Text;
     let mut permission_mode_override = None;
     let mut wants_help = false;
@@ -664,6 +673,55 @@ fn default_permission_mode() -> PermissionMode {
         .map(permission_mode_from_label)
         .or_else(config_permission_mode_for_current_dir)
         .unwrap_or(PermissionMode::DangerFullAccess)
+}
+
+fn default_model_for_current_dir() -> String {
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return DEFAULT_MODEL.to_string(),
+    };
+    let loader = ConfigLoader::default_for(&cwd);
+    let runtime_config = match loader.load() {
+        Ok(config) => config,
+        Err(_) => return fallback_model_for_preference(provider_preference_from_env()).to_string(),
+    };
+
+    if let Some(model) = runtime_config.model() {
+        return resolve_model_alias(model).to_string();
+    }
+
+    fallback_model_for_preference(provider_preference_from_env().or_else(|| {
+        runtime_config
+            .provider()
+            .and_then(parse_provider_preference)
+    }))
+    .to_string()
+}
+
+fn fallback_model_for_preference(preference: Option<ProviderKind>) -> &'static str {
+    match preference {
+        Some(ProviderKind::Anthropic) => DEFAULT_ANTHROPIC_MODEL,
+        Some(ProviderKind::Xai) => DEFAULT_XAI_MODEL,
+        Some(ProviderKind::OpenAi) => default_model_for_provider(ProviderKind::OpenAi),
+        None => DEFAULT_MODEL,
+    }
+}
+
+fn sync_provider_preference_for_current_dir() {
+    if provider_preference_from_env().is_some() {
+        return;
+    }
+    let Ok(cwd) = env::current_dir() else {
+        return;
+    };
+    let loader = ConfigLoader::default_for(&cwd);
+    let Ok(runtime_config) = loader.load() else {
+        return;
+    };
+    let Some(provider) = runtime_config.provider() else {
+        return;
+    };
+    env::set_var(PROVIDER_PREFERENCE_ENV, provider);
 }
 
 fn config_permission_mode_for_current_dir() -> Option<PermissionMode> {
@@ -1121,9 +1179,17 @@ fn format_providers_report() -> String {
     let mut lines = vec![
         "Providers".to_string(),
         "  Switch models with /model <name> or --model <name>".to_string(),
+        "  Set provider preference with config `provider` or env `CLAW_PROVIDER`".to_string(),
         "  Missing API keys are prompted on first use and saved to ~/.claw/launcher-provider.env"
             .to_string(),
     ];
+    if let Some(preference) = provider_preference_from_env() {
+        lines.push(format!(
+            "  Active preference {} default-model={}",
+            provider_label(preference),
+            default_model_for_provider(preference)
+        ));
+    }
 
     for model in providers {
         if let Some(metadata) = metadata_for_model(model) {
@@ -1685,6 +1751,12 @@ fn run_resume_command(
                 message: Some(handle_mcp_slash_command(args.as_deref(), &cwd)?),
             })
         }
+        SlashCommand::Chat => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(
+                "Chat mode is active.\n  File access       inspect folders, open files, and edit workspace files when needed\n  Current perms     resumed-session".to_string(),
+            ),
+        }),
         SlashCommand::Memory => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(render_memory_report()?),
@@ -2635,6 +2707,13 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context 
                     (None, Some(target)) => Some(target.to_string()),
                 };
                 Self::print_mcp(args.as_deref())?;
+                false
+            }
+            SlashCommand::Chat => {
+                println!(
+                    "Chat mode is active.\n  File access       inspect folders, open files, and edit workspace files when needed\n  Current perms     {}",
+                    self.permission_mode.as_str()
+                );
                 false
             }
             SlashCommand::Memory => {
@@ -3775,12 +3854,15 @@ fn render_config_report(section: Option<&str>) -> Result<String, Box<dyn std::er
             "env" => runtime_config.get("env"),
             "hooks" => runtime_config.get("hooks"),
             "model" => runtime_config.get("model"),
+            "provider" => runtime_config
+                .get("provider")
+                .or_else(|| runtime_config.get("preferredProvider")),
             "plugins" => runtime_config
                 .get("plugins")
                 .or_else(|| runtime_config.get("enabledPlugins")),
             other => {
                 lines.push(format!(
-                    "  Unsupported config section '{other}'. Use env, hooks, model, or plugins."
+                    "  Unsupported config section '{other}'. Use env, hooks, model, provider, or plugins."
                 ));
                 return Ok(lines.join(
                     "
@@ -4262,12 +4344,17 @@ fn resolve_export_path(
 }
 
 fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    Ok(load_system_prompt(
+    let mut sections = load_system_prompt(
         env::current_dir()?,
         DEFAULT_DATE,
         env::consts::OS,
         "unknown",
-    )?)
+    )?;
+    sections.push(
+        "When the user is discussing a change request, you may inspect folders, open files, and modify workspace files directly whenever that is the clearest way to complete the task. Use the available search and file-edit tools instead of only describing hypothetical edits."
+            .to_string(),
+    );
+    Ok(sections)
 }
 
 fn build_runtime_plugin_state() -> Result<RuntimePluginState, Box<dyn std::error::Error>> {
@@ -5114,6 +5201,7 @@ fn slash_command_completion_candidates_with_sessions(
         "/config env",
         "/config hooks",
         "/config model",
+        "/config provider",
         "/config plugins",
         "/mcp ",
         "/mcp list",
@@ -6726,7 +6814,7 @@ mod tests {
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
-        assert!(help.contains("/config [env|hooks|model|plugins]"));
+        assert!(help.contains("/config [env|hooks|model|provider|plugins]"));
         assert!(help.contains("/mcp [list|show <server>|help]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));

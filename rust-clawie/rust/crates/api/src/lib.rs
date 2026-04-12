@@ -17,8 +17,9 @@ pub use prompt_cache::{
 pub use providers::anthropic::{AnthropicClient, AnthropicClient as ApiClient, AuthSource};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
-    detect_provider_kind, max_tokens_for_model, metadata_for_model, resolve_model_alias,
-    ProviderKind,
+    default_model_for_provider, detect_provider_kind, max_tokens_for_model, metadata_for_model,
+    parse_provider_preference, provider_preference_from_env, resolve_model_alias, ProviderKind,
+    LEGACY_PROVIDER_PREFERENCE_ENV, PROVIDER_PREFERENCE_ENV,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{

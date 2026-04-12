@@ -16,9 +16,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
+    default_model_for_provider, parse_provider_preference, provider_preference_from_env,
     resolve_startup_auth_source, ClawApiClient, AuthSource, ContentBlockDelta, InputContentBlock,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
+    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, ProviderKind,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    PROVIDER_PREFERENCE_ENV,
 };
 
 use commands::{
@@ -41,9 +43,16 @@ use serde_json::json;
 use tools::GlobalToolRegistry;
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
+const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_XAI_MODEL: &str = "grok-3";
 fn max_tokens_for_model(model: &str) -> u32 {
-    if model.contains("opus") {
+    let lower = model.trim().to_ascii_lowercase();
+    if lower.starts_with("gpt-") || lower.starts_with("openai/") {
+        32_768
+    } else if lower.contains("opus") {
         32_000
+    } else if lower.starts_with("grok") {
+        64_000
     } else {
         64_000
     }
@@ -69,6 +78,7 @@ Run `claw --help` for usage."
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    sync_provider_preference_for_current_dir();
     let args: Vec<String> = env::args().skip(1).collect();
     match parse_args(&args)? {
         CliAction::DumpManifests => dump_manifests(),
@@ -160,7 +170,7 @@ impl CliOutputFormat {
 
 #[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
-    let mut model = DEFAULT_MODEL.to_string();
+    let mut model = default_model_for_current_dir();
     let mut output_format = CliOutputFormat::Text;
     let mut permission_mode = default_permission_mode();
     let mut wants_version = false;
@@ -381,6 +391,55 @@ fn default_permission_mode() -> PermissionMode {
         .as_deref()
         .and_then(normalize_permission_mode)
         .map_or(PermissionMode::DangerFullAccess, permission_mode_from_label)
+}
+
+fn default_model_for_current_dir() -> String {
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return DEFAULT_MODEL.to_string(),
+    };
+    let loader = ConfigLoader::default_for(&cwd);
+    let runtime_config = match loader.load() {
+        Ok(config) => config,
+        Err(_) => return fallback_model_for_preference(provider_preference_from_env()).to_string(),
+    };
+
+    if let Some(model) = runtime_config.model() {
+        return resolve_model_alias(model).to_string();
+    }
+
+    fallback_model_for_preference(provider_preference_from_env().or_else(|| {
+        runtime_config
+            .provider()
+            .and_then(parse_provider_preference)
+    }))
+    .to_string()
+}
+
+fn fallback_model_for_preference(preference: Option<ProviderKind>) -> &'static str {
+    match preference {
+        Some(ProviderKind::ClawApi) => DEFAULT_ANTHROPIC_MODEL,
+        Some(ProviderKind::Xai) => DEFAULT_XAI_MODEL,
+        Some(ProviderKind::OpenAi) => default_model_for_provider(ProviderKind::OpenAi),
+        None => DEFAULT_MODEL,
+    }
+}
+
+fn sync_provider_preference_for_current_dir() {
+    if provider_preference_from_env().is_some() {
+        return;
+    }
+    let Ok(cwd) = env::current_dir() else {
+        return;
+    };
+    let loader = ConfigLoader::default_for(&cwd);
+    let Ok(runtime_config) = loader.load() else {
+        return;
+    };
+    let Some(provider) = runtime_config.provider() else {
+        return;
+    };
+    env::set_var(PROVIDER_PREFERENCE_ENV, provider);
 }
 
 fn filter_tool_specs(
@@ -2006,12 +2065,15 @@ fn render_config_report(section: Option<&str>) -> Result<String, Box<dyn std::er
             "env" => runtime_config.get("env"),
             "hooks" => runtime_config.get("hooks"),
             "model" => runtime_config.get("model"),
+            "provider" => runtime_config
+                .get("provider")
+                .or_else(|| runtime_config.get("preferredProvider")),
             "plugins" => runtime_config
                 .get("plugins")
                 .or_else(|| runtime_config.get("enabledPlugins")),
             other => {
                 lines.push(format!(
-                    "  Unsupported config section '{other}'. Use env, hooks, model, or plugins."
+                    "  Unsupported config section '{other}'. Use env, hooks, model, provider, or plugins."
                 ));
                 return Ok(lines.join(
                     "
@@ -4163,7 +4225,7 @@ mod tests {
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
-        assert!(help.contains("/config [env|hooks|model|plugins]"));
+        assert!(help.contains("/config [env|hooks|model|provider|plugins]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
         assert!(help.contains("/diff"));

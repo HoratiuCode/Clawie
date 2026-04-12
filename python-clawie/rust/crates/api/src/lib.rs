@@ -12,7 +12,9 @@ pub use error::ApiError;
 pub use providers::claw_provider::{AuthSource, ClawApiClient, ClawApiClient as ApiClient};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
-    detect_provider_kind, max_tokens_for_model, resolve_model_alias, ProviderKind,
+    default_model_for_provider, detect_provider_kind, max_tokens_for_model,
+    parse_provider_preference, provider_preference_from_env, resolve_model_alias, ProviderKind,
+    LEGACY_PROVIDER_PREFERENCE_ENV, PROVIDER_PREFERENCE_ENV,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{

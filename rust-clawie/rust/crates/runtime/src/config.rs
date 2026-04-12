@@ -58,6 +58,7 @@ pub struct RuntimeFeatureConfig {
     mcp: McpConfigCollection,
     oauth: Option<OAuthConfig>,
     model: Option<String>,
+    provider: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
     permission_rules: RuntimePermissionRuleConfig,
     sandbox: SandboxConfig,
@@ -280,6 +281,7 @@ impl ConfigLoader {
             },
             oauth: parse_optional_oauth_config(&merged_value, "merged settings.oauth")?,
             model: parse_optional_model(&merged_value),
+            provider: parse_optional_provider(&merged_value)?,
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             permission_rules: parse_optional_permission_rules(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
@@ -354,6 +356,11 @@ impl RuntimeConfig {
     }
 
     #[must_use]
+    pub fn provider(&self) -> Option<&str> {
+        self.feature_config.provider.as_deref()
+    }
+
+    #[must_use]
     pub fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
         self.feature_config.permission_mode
     }
@@ -405,6 +412,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    #[must_use]
+    pub fn provider(&self) -> Option<&str> {
+        self.provider.as_deref()
     }
 
     #[must_use]
@@ -635,6 +647,28 @@ fn parse_optional_model(root: &JsonValue) -> Option<String> {
         .and_then(|object| object.get("model"))
         .and_then(JsonValue::as_str)
         .map(ToOwned::to_owned)
+}
+
+fn parse_optional_provider(root: &JsonValue) -> Result<Option<String>, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(None);
+    };
+    let Some(value) = object
+        .get("provider")
+        .or_else(|| object.get("preferredProvider"))
+        .and_then(JsonValue::as_str)
+    else {
+        return Ok(None);
+    };
+
+    match value.trim().to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" => Ok(Some("anthropic".to_string())),
+        "xai" | "grok" => Ok(Some("xai".to_string())),
+        "openai" | "gpt" => Ok(Some("openai".to_string())),
+        other => Err(ConfigError::Parse(format!(
+            "merged settings.provider: unsupported provider {other}"
+        ))),
+    }
 }
 
 fn parse_optional_hooks_config(root: &JsonValue) -> Result<RuntimeHookConfig, ConfigError> {
@@ -1138,7 +1172,7 @@ mod tests {
         .expect("write user compat config");
         fs::write(
             home.join("settings.json"),
-            r#"{"model":"sonnet","env":{"A2":"1"},"hooks":{"PreToolUse":["base"]},"permissions":{"defaultMode":"plan","allow":["Read"],"deny":["Bash(rm -rf)"]}}"#,
+            r#"{"model":"sonnet","provider":"claude","env":{"A2":"1"},"hooks":{"PreToolUse":["base"]},"permissions":{"defaultMode":"plan","allow":["Read"],"deny":["Bash(rm -rf)"]}}"#,
         )
         .expect("write user settings");
         fs::write(
@@ -1169,6 +1203,7 @@ mod tests {
             Some(&JsonValue::String("opus".to_string()))
         );
         assert_eq!(loaded.model(), Some("opus"));
+        assert_eq!(loaded.provider(), Some("anthropic"));
         assert_eq!(
             loaded.permission_mode(),
             Some(ResolvedPermissionMode::WorkspaceWrite)
@@ -1510,8 +1545,33 @@ mod tests {
 
         // then
         assert_eq!(loaded.loaded_entries().len(), 1);
+        assert_eq!(loaded.provider(), None);
         assert_eq!(loaded.permission_mode(), None);
         assert_eq!(loaded.plugins().enabled_plugins().len(), 0);
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn rejects_unknown_provider_preference() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.local.json"),
+            r#"{"provider":"unknown"}"#,
+        )
+        .expect("write local settings");
+
+        let error = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect_err("config should reject unknown provider");
+
+        assert!(error
+            .to_string()
+            .contains("merged settings.provider: unsupported provider unknown"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

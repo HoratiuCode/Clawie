@@ -51,6 +51,7 @@ pub struct RuntimeFeatureConfig {
     mcp: McpConfigCollection,
     oauth: Option<OAuthConfig>,
     model: Option<String>,
+    provider: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
     sandbox: SandboxConfig,
 }
@@ -247,6 +248,7 @@ impl ConfigLoader {
             },
             oauth: parse_optional_oauth_config(&merged_value, "merged settings.oauth")?,
             model: parse_optional_model(&merged_value),
+            provider: parse_optional_provider(&merged_value)?,
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
         };
@@ -320,6 +322,11 @@ impl RuntimeConfig {
     }
 
     #[must_use]
+    pub fn provider(&self) -> Option<&str> {
+        self.feature_config.provider.as_deref()
+    }
+
+    #[must_use]
     pub fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
         self.feature_config.permission_mode
     }
@@ -366,6 +373,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    #[must_use]
+    pub fn provider(&self) -> Option<&str> {
+        self.provider.as_deref()
     }
 
     #[must_use]
@@ -554,6 +566,28 @@ fn parse_optional_model(root: &JsonValue) -> Option<String> {
         .and_then(|object| object.get("model"))
         .and_then(JsonValue::as_str)
         .map(ToOwned::to_owned)
+}
+
+fn parse_optional_provider(root: &JsonValue) -> Result<Option<String>, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(None);
+    };
+    let Some(value) = object
+        .get("provider")
+        .or_else(|| object.get("preferredProvider"))
+        .and_then(JsonValue::as_str)
+    else {
+        return Ok(None);
+    };
+
+    match value.trim().to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" => Ok(Some("anthropic".to_string())),
+        "xai" | "grok" => Ok(Some("xai".to_string())),
+        "openai" | "gpt" => Ok(Some("openai".to_string())),
+        other => Err(ConfigError::Parse(format!(
+            "merged settings.provider: unsupported provider {other}"
+        ))),
+    }
 }
 
 fn parse_optional_hooks_config(root: &JsonValue) -> Result<RuntimeHookConfig, ConfigError> {

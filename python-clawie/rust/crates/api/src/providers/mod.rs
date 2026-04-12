@@ -30,6 +30,9 @@ pub enum ProviderKind {
     OpenAi,
 }
 
+pub const PROVIDER_PREFERENCE_ENV: &str = "CLAW_PROVIDER";
+pub const LEGACY_PROVIDER_PREFERENCE_ENV: &str = "CLAW_PROVIDER_PREFERENCE";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderMetadata {
     pub provider: ProviderKind,
@@ -185,9 +188,45 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
 }
 
 #[must_use]
+pub fn parse_provider_preference(value: &str) -> Option<ProviderKind> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" => Some(ProviderKind::ClawApi),
+        "xai" | "grok" => Some(ProviderKind::Xai),
+        "openai" | "gpt" => Some(ProviderKind::OpenAi),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn provider_preference_from_env() -> Option<ProviderKind> {
+    std::env::var(PROVIDER_PREFERENCE_ENV)
+        .ok()
+        .as_deref()
+        .and_then(parse_provider_preference)
+        .or_else(|| {
+            std::env::var(LEGACY_PROVIDER_PREFERENCE_ENV)
+                .ok()
+                .as_deref()
+                .and_then(parse_provider_preference)
+        })
+}
+
+#[must_use]
+pub const fn default_model_for_provider(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::ClawApi => "claude-sonnet-4-6",
+        ProviderKind::Xai => "grok-3",
+        ProviderKind::OpenAi => "gpt-4.1",
+    }
+}
+
+#[must_use]
 pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(metadata) = metadata_for_model(model) {
         return metadata.provider;
+    }
+    if let Some(preferred) = provider_preference_from_env() {
+        return preferred;
     }
     if claw_provider::has_auth_from_env_or_saved().unwrap_or(false) {
         return ProviderKind::ClawApi;
@@ -204,8 +243,12 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
 #[must_use]
 pub fn max_tokens_for_model(model: &str) -> u32 {
     let canonical = resolve_model_alias(model);
-    if canonical.contains("opus") {
+    if canonical.starts_with("gpt-") || canonical.starts_with("openai/") {
+        32_768
+    } else if canonical.contains("opus") {
         32_000
+    } else if canonical.starts_with("grok") {
+        64_000
     } else {
         64_000
     }
@@ -213,7 +256,10 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_provider_kind, max_tokens_for_model, resolve_model_alias, ProviderKind};
+    use super::{
+        default_model_for_provider, detect_provider_kind, max_tokens_for_model,
+        parse_provider_preference, resolve_model_alias, ProviderKind,
+    };
 
     #[test]
     fn resolves_grok_aliases() {
@@ -232,8 +278,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_provider_preferences_and_defaults() {
+        assert_eq!(parse_provider_preference("claude"), Some(ProviderKind::ClawApi));
+        assert_eq!(parse_provider_preference("gpt"), Some(ProviderKind::OpenAi));
+        assert_eq!(parse_provider_preference("grok"), Some(ProviderKind::Xai));
+        assert_eq!(
+            default_model_for_provider(ProviderKind::ClawApi),
+            "claude-sonnet-4-6"
+        );
+        assert_eq!(default_model_for_provider(ProviderKind::OpenAi), "gpt-4.1");
+        assert_eq!(default_model_for_provider(ProviderKind::Xai), "grok-3");
+    }
+
+    #[test]
     fn keeps_existing_max_token_heuristic() {
         assert_eq!(max_tokens_for_model("opus"), 32_000);
         assert_eq!(max_tokens_for_model("grok-3"), 64_000);
+        assert_eq!(max_tokens_for_model("gpt-4.1"), 32_768);
     }
 }

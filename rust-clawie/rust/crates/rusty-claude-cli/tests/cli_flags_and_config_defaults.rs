@@ -160,6 +160,29 @@ fn config_command_loads_defaults_from_standard_config_locations() {
     fs::remove_dir_all(temp_dir).expect("cleanup temp dir");
 }
 
+#[test]
+fn provider_preference_selects_default_model_from_config() {
+    let temp_dir = unique_temp_dir("provider-default-model");
+    let config_home = temp_dir.join("home").join(".claw");
+    fs::create_dir_all(temp_dir.join(".claw")).expect("project config dir should exist");
+    fs::create_dir_all(&config_home).expect("home config dir should exist");
+
+    fs::write(temp_dir.join(".claw.json"), r#"{"provider":"grok"}"#)
+        .expect("write project config");
+
+    let output = command_in(&temp_dir)
+        .env("CLAW_CONFIG_HOME", &config_home)
+        .args(["status"])
+        .output()
+        .expect("claw should launch");
+
+    assert_success(&output);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Model            grok-3"));
+
+    fs::remove_dir_all(temp_dir).expect("cleanup temp dir");
+}
+
 fn command_in(cwd: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_claw"));
     command.current_dir(cwd);

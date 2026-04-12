@@ -124,7 +124,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         name: "config",
         aliases: &[],
         summary: "Inspect Claude config files or merged sections",
-        argument_hint: Some("[env|hooks|model|plugins]"),
+        argument_hint: Some("[env|hooks|model|provider|plugins]"),
         resume_supported: true,
     },
     SlashCommandSpec {
@@ -1095,6 +1095,7 @@ pub enum SlashCommand {
         action: Option<String>,
         target: Option<String>,
     },
+    Chat,
     Memory,
     Init,
     Diff,
@@ -1301,6 +1302,10 @@ pub fn validate_slash_command_input(
             section: parse_config_section(&args)?,
         },
         "mcp" => parse_mcp_command(&args)?,
+        "chat" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Chat
+        }
         "memory" => {
             validate_no_args(command, &args)?;
             SlashCommand::Memory
@@ -1523,15 +1528,20 @@ fn parse_clear_args(args: &[&str]) -> Result<bool, SlashCommandParseError> {
 }
 
 fn parse_config_section(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
-    let section = optional_single_arg("config", args, "[env|hooks|model|plugins]")?;
+    let section = optional_single_arg("config", args, "[env|hooks|model|provider|plugins]")?;
     if let Some(section) = section {
-        if matches!(section.as_str(), "env" | "hooks" | "model" | "plugins") {
+        if matches!(
+            section.as_str(),
+            "env" | "hooks" | "model" | "provider" | "plugins"
+        ) {
             return Ok(Some(section));
         }
         return Err(command_error(
-            &format!("Unsupported /config section '{section}'. Use env, hooks, model, or plugins."),
+            &format!(
+                "Unsupported /config section '{section}'. Use env, hooks, model, provider, or plugins."
+            ),
             "config",
-            "/config [env|hooks|model|plugins]",
+            "/config [env|hooks|model|provider|plugins]",
         ));
     }
 
@@ -3418,6 +3428,7 @@ pub fn handle_slash_command(
         | SlashCommand::Resume { .. }
         | SlashCommand::Config { .. }
         | SlashCommand::Mcp { .. }
+        | SlashCommand::Chat
         | SlashCommand::Memory
         | SlashCommand::Init
         | SlashCommand::Diff
@@ -3708,6 +3719,7 @@ mod tests {
                 target: Some("remote".to_string())
             }))
         );
+        assert_eq!(SlashCommand::parse("/chat"), Ok(Some(SlashCommand::Chat)));
         assert_eq!(
             SlashCommand::parse("/memory"),
             Ok(Some(SlashCommand::Memory))
@@ -3910,7 +3922,7 @@ mod tests {
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
-        assert!(help.contains("/config [env|hooks|model|plugins]"));
+        assert!(help.contains("/config [env|hooks|model|provider|plugins]"));
         assert!(help.contains("/mcp [list|show <server>|help]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
@@ -3925,7 +3937,7 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|add <name> :: <instructions>|help]"));
-        assert_eq!(slash_command_specs().len(), 141);
+        assert_eq!(slash_command_specs().len(), 142);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 

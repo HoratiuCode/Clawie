@@ -46,6 +46,19 @@ fn provider_client_uses_explicit_anthropic_auth_without_env_lookup() {
 }
 
 #[test]
+fn provider_client_prefers_user_selected_provider_for_ambiguous_models() {
+    let _lock = env_lock();
+    let _provider = EnvVarGuard::set("CLAW_PROVIDER", Some("grok"));
+    let _openai_api_key = EnvVarGuard::set("OPENAI_API_KEY", Some("openai-test-key"));
+    let _xai_api_key = EnvVarGuard::set("XAI_API_KEY", Some("xai-test-key"));
+
+    let client =
+        ProviderClient::from_model("custom-chat-model").expect("preferred provider should win");
+
+    assert_eq!(client.provider_kind(), ProviderKind::Xai);
+}
+
+#[test]
 fn read_xai_base_url_prefers_env_override() {
     let _lock = env_lock();
     let _xai_base_url = EnvVarGuard::set("XAI_BASE_URL", Some("https://example.xai.test/v1"));
