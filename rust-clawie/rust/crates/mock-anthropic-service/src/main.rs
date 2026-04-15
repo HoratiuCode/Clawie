@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bind_addr = flag[7..].to_string();
             }
             "--help" | "-h" => {
-                println!("Usage: mock-anthropic-service [--bind HOST:PORT]");
+                println!("Usage: clawie-systems [--bind HOST:PORT]");
                 return Ok(());
             }
             other => {

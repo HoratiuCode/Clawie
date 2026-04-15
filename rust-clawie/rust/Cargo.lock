@@ -100,6 +100,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "clawie-systems"
+version = "0.1.0"
+dependencies = [
+ "api",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -720,15 +729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mock-anthropic-service"
-version = "0.1.0"
-dependencies = [
- "api",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "nibble_vec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1200,10 +1200,10 @@ name = "rusty-claude-cli"
 version = "0.1.0"
 dependencies = [
  "api",
+ "clawie-systems",
  "commands",
  "compat-harness",
  "crossterm",
- "mock-anthropic-service",
  "plugins",
  "pulldown-cmark",
  "runtime",

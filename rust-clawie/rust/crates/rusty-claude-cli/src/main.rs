@@ -5691,18 +5691,13 @@ fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
 
 fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
     let path = extract_tool_path(parsed);
-    let kind = parsed
-        .get("type")
-        .and_then(|value| value.as_str())
-        .unwrap_or("write");
     let line_count = parsed
         .get("content")
         .and_then(|value| value.as_str())
         .map_or(0, |content| content.lines().count());
     let preview = format_structured_patch_preview(parsed);
     let summary = format!(
-        "{icon} \x1b[1;32m✏️ {} {path}\x1b[0m \x1b[2m({line_count} lines)\x1b[0m",
-        if kind == "create" { "Wrote" } else { "Updated" },
+        "{icon} \x1b[1;32mwrite\x1b[0m \x1b[38;5;245m{path}\x1b[0m \x1b[2m({line_count} lines)\x1b[0m",
     );
     match preview {
         Some(preview) => format!("{summary}\n{preview}"),
@@ -5721,7 +5716,7 @@ fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String>
                 truncated = true;
                 break;
             }
-            preview.push(colorize_patch_line(line));
+            preview.push(format!("  - {}", colorize_patch_line(line)));
         }
     }
     if hunks.len() > 3 {
@@ -5731,7 +5726,7 @@ fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String>
         None
     } else {
         if truncated {
-            preview.push("\x1b[2m… more changes hidden\x1b[0m".to_string());
+            preview.push("  - \x1b[2m… more changes hidden\x1b[0m".to_string());
         }
         Some(preview.join("\n"))
     }
@@ -5770,8 +5765,8 @@ fn format_edit_result(icon: &str, parsed: &serde_json::Value) -> String {
     });
 
     match preview {
-        Some(preview) => format!("{icon} \x1b[1;33m📝 Edited {path}{suffix}\x1b[0m\n{preview}"),
-        None => format!("{icon} \x1b[1;33m📝 Edited {path}{suffix}\x1b[0m"),
+        Some(preview) => format!("{icon} \x1b[1;33medit\x1b[0m \x1b[38;5;245m{path}{suffix}\x1b[0m\n{preview}"),
+        None => format!("{icon} \x1b[1;33medit\x1b[0m \x1b[38;5;245m{path}{suffix}\x1b[0m"),
     }
 }
 
@@ -5793,9 +5788,14 @@ fn format_glob_result(icon: &str, parsed: &serde_json::Value) -> String {
         })
         .unwrap_or_default();
     if filenames.is_empty() {
-        format!("{icon} \x1b[38;5;245mglob_search\x1b[0m matched {num_files} files")
+        format!("{icon} \x1b[38;5;245mglob\x1b[0m matched {num_files} files")
     } else {
-        format!("{icon} \x1b[38;5;245mglob_search\x1b[0m matched {num_files} files\n{filenames}")
+        let list = filenames
+            .lines()
+            .map(|line| format!("  - {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{icon} \x1b[38;5;245mglob\x1b[0m matched {num_files} files\n{list}")
     }
 }
 
@@ -5825,7 +5825,7 @@ fn format_grep_result(icon: &str, parsed: &serde_json::Value) -> String {
         })
         .unwrap_or_default();
     let summary = format!(
-        "{icon} \x1b[38;5;245mgrep_search\x1b[0m {num_matches} matches across {num_files} files"
+        "{icon} \x1b[38;5;245mgrep\x1b[0m {num_matches} matches across {num_files} files"
     );
     if !content.trim().is_empty() {
         format!(
@@ -5835,9 +5835,18 @@ fn format_grep_result(icon: &str, parsed: &serde_json::Value) -> String {
                 TOOL_OUTPUT_DISPLAY_MAX_LINES,
                 TOOL_OUTPUT_DISPLAY_MAX_CHARS,
             )
+            .lines()
+            .map(|line| format!("  - {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
         )
     } else if !filenames.is_empty() {
-        format!("{summary}\n{filenames}")
+        let list = filenames
+            .lines()
+            .map(|line| format!("  - {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{summary}\n{list}")
     } else {
         summary
     }
