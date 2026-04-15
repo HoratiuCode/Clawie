@@ -1152,7 +1152,7 @@ fn format_model_report(model: &str, message_count: usize, turns: u32) -> String 
 
 Usage
   Inspect current model with /model
-  Switch models with /model <name>"
+  Model switching is disabled in Clawie"
     )
 }
 
@@ -2960,28 +2960,9 @@ Type \x1b[1mstart\x1b[0m to begin · \x1b[1msee commands\x1b[0m to view options 
             return Ok(false);
         }
 
-        let previous = self.model.clone();
-        let session = self.runtime.session().clone();
-        let message_count = session.messages.len();
-        if !ensure_provider_credentials_for_model(&model)? {
-            return Ok(false);
-        }
-        let runtime = build_runtime(
-            session,
-            &self.session.id,
-            model.clone(),
-            self.system_prompt.clone(),
-            true,
-            true,
-            self.allowed_tools.clone(),
-            self.permission_mode,
-            None,
-        )?;
-        self.replace_runtime(runtime)?;
-        self.model.clone_from(&model);
         println!(
-            "{}",
-            format_model_switch_report(&previous, &model, message_count)
+            "Model switching is disabled in Clawie.\n  Active model     {}\n  Requested model  {}\n  Usage            /model to inspect current model",
+            self.model, model
         );
         Ok(true)
     }

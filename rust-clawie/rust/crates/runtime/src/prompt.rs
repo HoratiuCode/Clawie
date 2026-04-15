@@ -448,7 +448,7 @@ fn render_config_section(config: &RuntimeConfig) -> String {
 
 fn get_simple_intro_section(has_output_style: bool) -> String {
     format!(
-        "You are an interactive agent that helps users {} Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.",
+        "You are an interactive agent that helps users {} Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.\n\nRESPONSE SHAPE FOR CODE WORK:\n- Use this vertical structure unless the user explicitly asks for a different format.\n- `Changed`\n- `Files`\n- `Notes`\n- `Verify`\n- `Next`\n- Keep each item on its own line.\n- Do not write long paragraphs when reporting code changes.\n- Do not output raw HTML, XML, or pasted markup unless the user explicitly requests it.\n- Prefer bullets, fenced blocks, and short lines.",
         if has_output_style {
             "according to your \"Output Style\" below, which describes how you should respond to user queries."
         } else {
@@ -467,6 +467,8 @@ fn get_simple_system_section() -> String {
         "The system may automatically compress prior messages as context grows.".to_string(),
         "When reporting progress or results, prefer compact list rows over long prose.".to_string(),
         "Use one idea per line, short labels, and small visual markers like bullets, emojis, or color only when they help scanning.".to_string(),
+        "Never dump raw HTML or pasted markup unless the user explicitly asks for it.".to_string(),
+        "For code changes, always prefer the vertical response shape with separate lines for Changed, Files, Notes, Verify, and Next.".to_string(),
     ]);
 
     std::iter::once("# System".to_string())
@@ -483,6 +485,10 @@ fn get_simple_doing_tasks_section() -> String {
         "If an approach fails, diagnose the failure before switching tactics.".to_string(),
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
+        "When showing code edits, use vertical structure: one file or one change per line.".to_string(),
+        "Prefer fenced code blocks or bullet lists for code, not inline paragraphs or long wrapped lines.".to_string(),
+        "If you list modified lines, keep them stacked top to bottom in order.".to_string(),
+        "Never present code edits as a wide paragraph or markup dump.".to_string(),
     ]);
 
     std::iter::once("# Doing tasks".to_string())
