@@ -2503,10 +2503,6 @@ impl LiveCli {
             || "unknown".to_string(),
             |context| context.git_summary.headline(),
         );
-        let session_path = self.session.path.strip_prefix(Path::new(&cwd)).map_or_else(
-            |_| self.session.path.display().to_string(),
-            |path| path.display().to_string(),
-        );
         let rows = vec![
             "~, clawie".to_string(),
             format!("Model            {}", self.model),
@@ -2514,8 +2510,6 @@ impl LiveCli {
             format!("Branch           {}", git_branch),
             format!("Workspace        {}", workspace),
             format!("Directory        {}", cwd),
-            format!("Session          {}", self.session.id),
-            format!("Auto-save        {}", session_path),
         ];
         let box_width = rows.iter().map(|row| row.len()).max().unwrap_or(0);
         let top_border = format!("┌{}┐", "─".repeat(box_width + 2));
@@ -5490,11 +5484,11 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
 
-    let detail = match name {
-        "bash" | "Bash" => format_bash_call(&parsed),
+    let (icon, label, detail) = match name {
+        "bash" | "Bash" => ("\x1b[1;36m⚙\x1b[0m", "bash", format_bash_call(&parsed)),
         "read_file" | "Read" => {
             let path = extract_tool_path(&parsed);
-            format!("\x1b[2m📄 Reading {path}…\x1b[0m")
+            ("\x1b[1;34m📄\x1b[0m", "read", format!("reading {path}"))
         }
         "write_file" | "Write" => {
             let path = extract_tool_path(&parsed);
@@ -5502,7 +5496,7 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
                 .get("content")
                 .and_then(|value| value.as_str())
                 .map_or(0, |content| content.lines().count());
-            format!("\x1b[1;32m✏️ Writing {path}\x1b[0m \x1b[2m({lines} lines)\x1b[0m")
+            ("\x1b[1;32m✏\x1b[0m", "write", format!("{path} • {lines} lines"))
         }
         "edit_file" | "Edit" => {
             let path = extract_tool_path(&parsed);
@@ -5516,27 +5510,22 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
                 .or_else(|| parsed.get("newString"))
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
-            format!(
-                "\x1b[1;33m📝 Editing {path}\x1b[0m{}",
-                format_patch_preview(old_value, new_value)
-                    .map(|preview| format!("\n{preview}"))
-                    .unwrap_or_default()
-            )
+            let preview = format_patch_preview(old_value, new_value)
+                .unwrap_or_default()
+                .replace('\n', " ");
+            ("\x1b[1;33m📝\x1b[0m", "edit", if preview.is_empty() {
+                path
+            } else {
+                format!("{path} • {preview}")
+            })
         }
-        "glob_search" | "Glob" => format_search_start("🔎 Glob", &parsed),
-        "grep_search" | "Grep" => format_search_start("🔎 Grep", &parsed),
-        "web_search" | "WebSearch" => parsed
-            .get("query")
-            .and_then(|value| value.as_str())
-            .unwrap_or("?")
-            .to_string(),
-        _ => summarize_tool_payload(input),
+        "glob_search" | "Glob" => ("\x1b[1;35m🔎\x1b[0m", "glob", describe_tool_progress(name, input)),
+        "grep_search" | "Grep" => ("\x1b[1;35m🔎\x1b[0m", "grep", describe_tool_progress(name, input)),
+        "web_search" | "WebSearch" => ("\x1b[1;34m🌐\x1b[0m", "web", describe_tool_progress(name, input)),
+        _ => ("\x1b[1;37m•\x1b[0m", name, summarize_tool_payload(input)),
     };
 
-    let border = "─".repeat(name.len() + 8);
-    format!(
-        "\x1b[38;5;245m╭─ \x1b[1;36m{name}\x1b[0;38;5;245m ─╮\x1b[0m\n\x1b[38;5;245m│\x1b[0m {detail}\n\x1b[38;5;245m╰{border}╯\x1b[0m"
-    )
+    format!("\x1b[38;5;245m{icon}\x1b[0m \x1b[1m{label}\x1b[0m \x1b[2m{detail}\x1b[0m")
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {

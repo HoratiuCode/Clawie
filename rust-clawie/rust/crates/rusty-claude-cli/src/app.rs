@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 
 use crate::args::{OutputFormat, PermissionMode};
 use crate::input::{LineEditor, ReadOutcome};
@@ -55,6 +56,7 @@ pub enum SlashCommand {
     Memory,
     Cost,
     Reload,
+    Ps,
     Search { query: Option<String>, path: Option<String> },
     Move { source: Option<String>, destination: Option<String> },
     Clear { confirm: bool },
@@ -87,6 +89,7 @@ impl SlashCommand {
             "memory" => Self::Memory,
             "cost" => Self::Cost,
             "reload" => Self::Reload,
+            "ps" => Self::Ps,
             "search" => Self::Search {
                 query: parts.next().map(ToOwned::to_owned),
                 path: parts.next().map(ToOwned::to_owned),
@@ -144,6 +147,10 @@ const SLASH_COMMAND_HANDLERS: &[SlashCommandHandler] = &[
     SlashCommandHandler {
         command: SlashCommand::Reload,
         summary: "Reload config and refresh the model client",
+    },
+    SlashCommandHandler {
+        command: SlashCommand::Ps,
+        summary: "Show hidden session and workspace details",
     },
     SlashCommandHandler {
         command: SlashCommand::Search {
@@ -240,6 +247,7 @@ impl CliApp {
             SlashCommand::Memory => self.handle_memory(out),
             SlashCommand::Cost => self.handle_cost(out),
             SlashCommand::Reload => self.handle_reload(out),
+            SlashCommand::Ps => self.handle_ps(out),
             SlashCommand::Search { query, path } => self.handle_search(query.as_deref(), path.as_deref(), out),
             SlashCommand::Move { source, destination } => self.handle_move(source.as_deref(), destination.as_deref(), out),
             SlashCommand::Clear { confirm } => self.handle_clear(confirm, out),
@@ -263,6 +271,7 @@ impl CliApp {
                 SlashCommand::Memory => "/memory",
                 SlashCommand::Cost => "/cost",
                 SlashCommand::Reload => "/reload",
+                SlashCommand::Ps => "/ps",
                 SlashCommand::Search { .. } => "/search <query> [path]",
                 SlashCommand::Move { .. } => "/move <source> <destination>",
                 SlashCommand::Clear { .. } => "/clear [--confirm]",
@@ -432,6 +441,35 @@ impl CliApp {
             "Reloaded config and refreshed the model client. Active model: {}",
             self.config.model
         )?;
+        Ok(CommandResult::Continue)
+    }
+
+    fn handle_ps(&mut self, out: &mut impl Write) -> io::Result<CommandResult> {
+        let cwd = env::current_dir().map_err(io::Error::other)?;
+        let branch = ProcessCommand::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&cwd)
+            .output()
+            .ok()
+            .and_then(|output| output.status.success().then_some(output.stdout))
+            .and_then(|stdout| String::from_utf8(stdout).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| String::from("<unknown>"));
+        let session_path = cwd.join(".claw/sessions");
+        let auto_save = self
+            .config
+            .config
+            .as_ref()
+            .map_or_else(|| String::from("<none>"), |path| path.display().to_string());
+        writeln!(out, "~, clawie")?;
+        writeln!(out, "Model       {}", self.state.last_model)?;
+        writeln!(out, "Permissions {}", self.config.permission_mode.as_str())?;
+        writeln!(out, "Branch      {}", branch)?;
+        writeln!(out, "Workspace   {}", cwd.display())?;
+        writeln!(out, "Directory   {}", cwd.display())?;
+        writeln!(out, "Session     {}", session_path.display())?;
+        writeln!(out, "Auto-save   {}", auto_save)?;
         Ok(CommandResult::Continue)
     }
 

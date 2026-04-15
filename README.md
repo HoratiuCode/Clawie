@@ -108,6 +108,7 @@ Clawie is meant to help a computer user inspect and reorganize a workspace witho
 
 - Use `/search <query> [path]` to look through filenames in the current workspace.
 - Use `/move <source> <destination>` to move a file or folder.
+- Use `/ps` to show the hidden session and workspace summary.
 - Use `/cost` to review token usage and estimated API cost.
 - Use `/reload` to reload config and refresh the active model client.
 
