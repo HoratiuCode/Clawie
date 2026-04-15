@@ -10,6 +10,16 @@ Jameclaw is treated here as the legacy/origin name for earlier local project lay
 
 The goal of this repository is simple: instead of sharing separate folders from different places on one machine, everything needed for the full Clawie project is grouped into one directory that can be uploaded to GitHub and shared with other users.
 
+## Quick Start
+
+If you are opening Clawie for the first time:
+
+1. Run `clawie`.
+2. Choose `start` to open the Rust CLI.
+3. Choose `see commands` to inspect the available commands first.
+4. Open `rust-clawie` when you want the main interactive shell.
+5. Open `python-clawie` when you want the Python workspace and mirrored project files.
+
 ## What Clawie Is
 
 Clawie is the primary product name.
@@ -72,11 +82,23 @@ This is useful because the original working copies came from different locations
 After cloning or downloading the repository:
 
 1. Open the root folder.
-2. Choose which part you want to work on.
-3. Enter `rust-clawie` if your focus is the terminal app and CLI behavior.
-4. Enter `python-clawie` if your focus is the Python project.
+2. Run `clawie` for the launcher flow.
+3. Use `start` for the Rust CLI.
+4. Use `see commands` for the command browser.
+5. Enter `rust-clawie` if your focus is the terminal app and CLI behavior.
+6. Enter `python-clawie` if your focus is the Python project.
 
-For most users, start with `commands` to see the available entries first, then open `rust-clawie` if you want the interactive Clawie application.
+For most users, the best default is `start`, because that opens the interactive Clawie application directly.
+
+## Documentation And Localization
+
+Clawie keeps its shared documentation at the repository root so the package is easy to understand from one place.
+
+- `README.md` is the main entry point for the packaged repository.
+- `rust-clawie` contains the interactive CLI and its startup/onboarding flow.
+- `python-clawie` contains the mirrored Python workspace and reference project files.
+
+If you add user-facing text, prefer keeping the launcher labels and docs consistent so onboarding stays easy to follow.
 
 ## Why This Combined Repository Exists
 
