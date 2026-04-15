@@ -55,7 +55,7 @@ impl InitReport {
                 artifact.status.label()
             ));
         }
-        lines.push("  Next step        Review and tailor the generated guidance".to_string());
+        lines.push("  Next step        start or see commands".to_string());
         lines.join("\n")
     }
 }

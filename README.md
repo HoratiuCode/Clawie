@@ -76,7 +76,7 @@ After cloning or downloading the repository:
 3. Enter `rust-clawie` if your focus is the terminal app and CLI behavior.
 4. Enter `python-clawie` if your focus is the Python project.
 
-For most users, the main starting point is `rust-clawie`, because that is where the interactive Clawie application lives.
+For most users, start with `commands` to see the available entries first, then open `rust-clawie` if you want the interactive Clawie application.
 
 ## Why This Combined Repository Exists
 

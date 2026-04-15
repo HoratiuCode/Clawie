@@ -18,7 +18,7 @@ class WorkspaceSetup:
 
     def startup_steps(self) -> tuple[str, ...]:
         return (
-            'start top-level prefetch side effects',
+            'start see commands',
             'build workspace context',
             'load mirrored command snapshot',
             'load mirrored tool snapshot',
