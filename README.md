@@ -19,6 +19,8 @@ If you are opening Clawie for the first time:
 3. Choose `see commands` to inspect the available commands first.
 4. Open `rust-clawie` when you want the main interactive shell.
 5. Open `python-clawie` when you want the Python workspace and mirrored project files.
+6. Use `/search` inside the shell to find files or text in the workspace.
+7. Use `/move <source> <destination>` to move a file or folder to another path.
 
 ## What Clawie Is
 
@@ -99,6 +101,15 @@ Clawie keeps its shared documentation at the repository root so the package is e
 - `python-clawie` contains the mirrored Python workspace and reference project files.
 
 If you add user-facing text, prefer keeping the launcher labels and docs consistent so onboarding stays easy to follow.
+
+## Search And File Moves
+
+Clawie is meant to help a computer user inspect and reorganize a workspace without leaving the terminal.
+
+- Use `/search <query> [path]` to look through filenames in the current workspace.
+- Use `/move <source> <destination>` to move a file or folder.
+- Use `/cost` to review token usage and estimated API cost.
+- Use `/reload` to reload config and refresh the active model client.
 
 ## Why This Combined Repository Exists
 

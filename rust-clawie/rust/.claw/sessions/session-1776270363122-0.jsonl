@@ -1,0 +1,3 @@
+{"created_at_ms":1776270363122,"session_id":"session-1776270363122-0","type":"session_meta","updated_at_ms":1776270367999,"version":1}
+{"message":{"blocks":[{"text":"hei","type":"text"}],"role":"user"},"type":"message"}
+{"message":{"blocks":[{"text":"Hei! Hvordan kan jeg hjelpe deg i dag? 😊","type":"text"}],"role":"assistant","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":2336,"output_tokens":12}},"type":"message"}

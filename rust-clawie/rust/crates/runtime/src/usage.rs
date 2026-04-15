@@ -54,6 +54,24 @@ impl UsageCostEstimate {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageAlertLevel {
+    Green,
+    Yellow,
+    Red,
+}
+
+impl UsageAlertLevel {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Green => "green",
+            Self::Yellow => "yellow",
+            Self::Red => "red",
+        }
+    }
+}
+
 /// Returns pricing metadata for a known model alias or family.
 #[must_use]
 pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
@@ -151,6 +169,19 @@ impl TokenUsage {
                 format_usd(cost.cache_read_cost_usd),
             ),
         ]
+    }
+
+    #[must_use]
+    pub fn alert_level_for_model(self, model: Option<&str>, yellow_threshold: f64, red_threshold: f64) -> UsageAlertLevel {
+        let pricing = model.and_then(pricing_for_model).unwrap_or_else(ModelPricing::default_sonnet_tier);
+        let cost = self.estimate_cost_usd_with_pricing(pricing).total_cost_usd();
+        if cost >= red_threshold {
+            UsageAlertLevel::Red
+        } else if cost >= yellow_threshold {
+            UsageAlertLevel::Yellow
+        } else {
+            UsageAlertLevel::Green
+        }
     }
 }
 

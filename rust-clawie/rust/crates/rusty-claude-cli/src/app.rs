@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -6,8 +7,8 @@ use crate::args::{OutputFormat, PermissionMode};
 use crate::input::{LineEditor, ReadOutcome};
 use crate::render::{Spinner, TerminalRenderer};
 use runtime::{
-    format_usd, pricing_for_model, ConfigLoader, ConversationClient, ConversationMessage,
-    ModelPricing, RuntimeError, StreamEvent, UsageSummary,
+    format_usd, glob_search, pricing_for_model, ConfigLoader, ConversationClient,
+    ConversationMessage, ModelPricing, RuntimeError, StreamEvent, UsageAlertLevel, UsageSummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +55,8 @@ pub enum SlashCommand {
     Memory,
     Cost,
     Reload,
+    Search { query: Option<String>, path: Option<String> },
+    Move { source: Option<String>, destination: Option<String> },
     Clear { confirm: bool },
     Unknown(String),
 }
@@ -84,6 +87,14 @@ impl SlashCommand {
             "memory" => Self::Memory,
             "cost" => Self::Cost,
             "reload" => Self::Reload,
+            "search" => Self::Search {
+                query: parts.next().map(ToOwned::to_owned),
+                path: parts.next().map(ToOwned::to_owned),
+            },
+            "move" => Self::Move {
+                source: parts.next().map(ToOwned::to_owned),
+                destination: parts.next().map(ToOwned::to_owned),
+            },
             "clear" => Self::Clear {
                 confirm: parts.next() == Some("--confirm"),
             },
@@ -133,6 +144,20 @@ const SLASH_COMMAND_HANDLERS: &[SlashCommandHandler] = &[
     SlashCommandHandler {
         command: SlashCommand::Reload,
         summary: "Reload config and refresh the model client",
+    },
+    SlashCommandHandler {
+        command: SlashCommand::Search {
+            query: None,
+            path: None,
+        },
+        summary: "Search files or contents in the workspace",
+    },
+    SlashCommandHandler {
+        command: SlashCommand::Move {
+            source: None,
+            destination: None,
+        },
+        summary: "Move a file or folder to another path",
     },
     SlashCommandHandler {
         command: SlashCommand::Clear { confirm: false },
@@ -215,6 +240,8 @@ impl CliApp {
             SlashCommand::Memory => self.handle_memory(out),
             SlashCommand::Cost => self.handle_cost(out),
             SlashCommand::Reload => self.handle_reload(out),
+            SlashCommand::Search { query, path } => self.handle_search(query.as_deref(), path.as_deref(), out),
+            SlashCommand::Move { source, destination } => self.handle_move(source.as_deref(), destination.as_deref(), out),
             SlashCommand::Clear { confirm } => self.handle_clear(confirm, out),
             SlashCommand::Unknown(name) => {
                 writeln!(out, "Unknown slash command: /{name}")?;
@@ -236,6 +263,8 @@ impl CliApp {
                 SlashCommand::Memory => "/memory",
                 SlashCommand::Cost => "/cost",
                 SlashCommand::Reload => "/reload",
+                SlashCommand::Search { .. } => "/search <query> [path]",
+                SlashCommand::Move { .. } => "/move <source> <destination>",
                 SlashCommand::Clear { .. } => "/clear [--confirm]",
                 SlashCommand::Unknown(_) => continue,
             };
@@ -378,6 +407,7 @@ impl CliApp {
             self.state.last_model,
             format_usd(cost.total_cost_usd())
         )?;
+        self.render_cost_alert_line(cost.total_cost_usd(), out)?;
         Ok(CommandResult::Continue)
     }
 
@@ -402,6 +432,46 @@ impl CliApp {
             "Reloaded config and refreshed the model client. Active model: {}",
             self.config.model
         )?;
+        Ok(CommandResult::Continue)
+    }
+
+    fn handle_search(
+        &mut self,
+        query: Option<&str>,
+        path: Option<&str>,
+        out: &mut impl Write,
+    ) -> io::Result<CommandResult> {
+        let Some(query) = query.filter(|value| !value.trim().is_empty()) else {
+            writeln!(out, "Usage: /search <query> [path]")?;
+            return Ok(CommandResult::Continue);
+        };
+        let results = glob_search(query, path).map_err(|error| io::Error::other(error.to_string()))?;
+        writeln!(out, "Search results for `{query}`:")?;
+        for entry in results.filenames.iter().take(20) {
+            writeln!(out, "  {}", entry)?;
+        }
+        if results.filenames.is_empty() {
+            writeln!(out, "  No matches found.")?;
+        }
+        Ok(CommandResult::Continue)
+    }
+
+    fn handle_move(
+        &mut self,
+        source: Option<&str>,
+        destination: Option<&str>,
+        out: &mut impl Write,
+    ) -> io::Result<CommandResult> {
+        let (Some(source), Some(destination)) = (source, destination) else {
+            writeln!(out, "Usage: /move <source> <destination>")?;
+            return Ok(CommandResult::Continue);
+        };
+        let destination_path = PathBuf::from(destination);
+        if let Some(parent) = destination_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(source, &destination_path)?;
+        writeln!(out, "Moved `{source}` to `{}`", destination_path.display())?;
         Ok(CommandResult::Continue)
     }
 
@@ -576,7 +646,11 @@ impl CliApp {
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(100_000);
-        let cost_alert = env::var("CLAWIE_USAGE_ALERT_USD")
+        let yellow_alert = env::var("CLAWIE_USAGE_ALERT_YELLOW_USD")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(5.0);
+        let red_alert = env::var("CLAWIE_USAGE_ALERT_RED_USD")
             .ok()
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(10.0);
@@ -588,14 +662,48 @@ impl CliApp {
                 token_alert
             )?;
         }
-        if total_cost >= cost_alert {
-            writeln!(
-                out,
-                "Alert: estimated API cost is {} for model {}, which is above the alert threshold of {}.",
-                format_usd(total_cost),
-                self.state.last_model,
-                format_usd(cost_alert)
-            )?;
+        self.render_cost_alert_line_with_thresholds(total_cost, yellow_alert, red_alert, out)?;
+        Ok(())
+    }
+
+    fn render_cost_alert_line(&self, total_cost: f64, out: &mut impl Write) -> io::Result<()> {
+        self.render_cost_alert_line_with_thresholds(total_cost, 5.0, 10.0, out)
+    }
+
+    fn render_cost_alert_line_with_thresholds(
+        &self,
+        total_cost: f64,
+        yellow_alert: f64,
+        red_alert: f64,
+        out: &mut impl Write,
+    ) -> io::Result<()> {
+        let level = if total_cost >= red_alert {
+            UsageAlertLevel::Red
+        } else if total_cost >= yellow_alert {
+            UsageAlertLevel::Yellow
+        } else {
+            UsageAlertLevel::Green
+        };
+        match level {
+            UsageAlertLevel::Green => {}
+            UsageAlertLevel::Yellow => {
+                writeln!(
+                    out,
+                    "Alert [yellow]: estimated API cost is {} for model {}, which is above the yellow threshold of {}.",
+                    format_usd(total_cost),
+                    self.state.last_model,
+                    format_usd(yellow_alert)
+                )?;
+            }
+            UsageAlertLevel::Red => {
+                writeln!(
+                    out,
+                    "Alert [red]: estimated API cost is {} for model {}, which is above the red threshold of {}.",
+                    format_usd(total_cost),
+                    self.state.last_model,
+                    format_usd(red_alert)
+                )?;
+            }
         }
         Ok(())
     }
