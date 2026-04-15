@@ -6356,7 +6356,8 @@ mod tests {
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         upsert_export_line, write_mcp_server_fixture, CliAction, CliOutputFormat,
         CliToolExecutor, GitWorkspaceSummary, InternalPromptProgressEvent,
-        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, DEFAULT_MODEL,
+        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, TokenUsage,
+        DEFAULT_MODEL, final_assistant_text_or_fallback,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -7739,6 +7740,7 @@ UU conflicted.rs",
     fn greeting_fallback_returns_visible_reply_for_empty_turn() {
         let summary = runtime::TurnSummary {
             assistant_messages: vec![ConversationMessage::assistant(vec![])],
+            tool_results: vec![],
             usage: TokenUsage::default(),
             iterations: 0,
             auto_compaction: None,

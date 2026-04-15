@@ -1,10 +1,14 @@
+use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::args::{OutputFormat, PermissionMode};
 use crate::input::{LineEditor, ReadOutcome};
 use crate::render::{Spinner, TerminalRenderer};
-use runtime::{ConversationClient, ConversationMessage, RuntimeError, StreamEvent, UsageSummary};
+use runtime::{
+    format_usd, pricing_for_model, ConfigLoader, ConversationClient, ConversationMessage,
+    ModelPricing, RuntimeError, StreamEvent, UsageSummary,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionConfig {
@@ -48,6 +52,8 @@ pub enum SlashCommand {
     Permissions { mode: Option<String> },
     Config { section: Option<String> },
     Memory,
+    Cost,
+    Reload,
     Clear { confirm: bool },
     Unknown(String),
 }
@@ -76,6 +82,8 @@ impl SlashCommand {
                 section: parts.next().map(ToOwned::to_owned),
             },
             "memory" => Self::Memory,
+            "cost" => Self::Cost,
+            "reload" => Self::Reload,
             "clear" => Self::Clear {
                 confirm: parts.next() == Some("--confirm"),
             },
@@ -117,6 +125,14 @@ const SLASH_COMMAND_HANDLERS: &[SlashCommandHandler] = &[
     SlashCommandHandler {
         command: SlashCommand::Memory,
         summary: "Inspect loaded memory/instruction files",
+    },
+    SlashCommandHandler {
+        command: SlashCommand::Cost,
+        summary: "Show usage and estimated API cost",
+    },
+    SlashCommandHandler {
+        command: SlashCommand::Reload,
+        summary: "Reload config and refresh the model client",
     },
     SlashCommandHandler {
         command: SlashCommand::Clear { confirm: false },
@@ -197,6 +213,8 @@ impl CliApp {
             SlashCommand::Permissions { mode } => self.handle_permissions(mode.as_deref(), out),
             SlashCommand::Config { section } => self.handle_config(section.as_deref(), out),
             SlashCommand::Memory => self.handle_memory(out),
+            SlashCommand::Cost => self.handle_cost(out),
+            SlashCommand::Reload => self.handle_reload(out),
             SlashCommand::Clear { confirm } => self.handle_clear(confirm, out),
             SlashCommand::Unknown(name) => {
                 writeln!(out, "Unknown slash command: /{name}")?;
@@ -216,6 +234,8 @@ impl CliApp {
                 SlashCommand::Permissions { .. } => "/permissions [mode]",
                 SlashCommand::Config { .. } => "/config [section]",
                 SlashCommand::Memory => "/memory",
+                SlashCommand::Cost => "/cost",
+                SlashCommand::Reload => "/reload",
                 SlashCommand::Clear { .. } => "/clear [--confirm]",
                 SlashCommand::Unknown(_) => continue,
             };
@@ -263,6 +283,8 @@ impl CliApp {
             Some(model) => {
                 self.config.model = model.to_string();
                 self.state.last_model = model.to_string();
+                self.conversation_client = ConversationClient::from_env(self.config.model.clone())
+                    .map_err(|error| io::Error::other(error.to_string()))?;
                 writeln!(out, "Active model set to {model}")?;
             }
             None => {
@@ -332,6 +354,53 @@ impl CliApp {
                 .config
                 .as_ref()
                 .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+        )?;
+        Ok(CommandResult::Continue)
+    }
+
+    fn handle_cost(&mut self, out: &mut impl Write) -> io::Result<CommandResult> {
+        let pricing = pricing_for_model(&self.state.last_model);
+        let cost = pricing.map_or_else(
+            || self.state.last_usage.estimate_cost_usd(),
+            |pricing| self.state.last_usage.estimate_cost_usd_with_pricing(pricing),
+        );
+        writeln!(
+            out,
+            "Usage: {} input / {} output / {} cache-write / {} cache-read",
+            self.state.last_usage.input_tokens,
+            self.state.last_usage.output_tokens,
+            self.state.last_usage.cache_creation_input_tokens,
+            self.state.last_usage.cache_read_input_tokens
+        )?;
+        writeln!(
+            out,
+            "Estimated API cost for model {}: {}",
+            self.state.last_model,
+            format_usd(cost.total_cost_usd())
+        )?;
+        Ok(CommandResult::Continue)
+    }
+
+    fn handle_reload(&mut self, out: &mut impl Write) -> io::Result<CommandResult> {
+        let cwd = env::current_dir().map_err(io::Error::other)?;
+        let loaded = ConfigLoader::default_for(&cwd)
+            .load()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if let Some(model) = loaded.model() {
+            self.config.model = model.to_string();
+            self.state.last_model = model.to_string();
+        }
+        if let Some(config_model) = loaded.model() {
+            self.conversation_client = ConversationClient::from_env(config_model.to_string())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+        } else {
+            self.conversation_client =
+                ConversationClient::from_env(self.config.model.clone()).map_err(io::Error::other)?;
+        }
+        writeln!(
+            out,
+            "Reloaded config and refreshed the model client. Active model: {}",
+            self.config.model
         )?;
         Ok(CommandResult::Continue)
     }
@@ -489,7 +558,45 @@ impl CliApp {
         }
 
         self.write_turn_output(&summary, out)?;
+        self.render_usage_alerts(out)?;
         let _ = turn_usage;
+        Ok(())
+    }
+
+    fn render_usage_alerts(&self, out: &mut impl Write) -> io::Result<()> {
+        let total_cost = self
+            .state
+            .last_usage
+            .estimate_cost_usd_with_pricing(
+                pricing_for_model(&self.state.last_model)
+                    .unwrap_or_else(ModelPricing::default_sonnet_tier),
+            )
+            .total_cost_usd();
+        let token_alert = env::var("CLAWIE_USAGE_ALERT_TOKENS")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(100_000);
+        let cost_alert = env::var("CLAWIE_USAGE_ALERT_USD")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(10.0);
+        if self.state.last_usage.total_tokens() >= token_alert {
+            writeln!(
+                out,
+                "Alert: this session has used {} tokens, which is above the alert threshold of {}.",
+                self.state.last_usage.total_tokens(),
+                token_alert
+            )?;
+        }
+        if total_cost >= cost_alert {
+            writeln!(
+                out,
+                "Alert: estimated API cost is {} for model {}, which is above the alert threshold of {}.",
+                format_usd(total_cost),
+                self.state.last_model,
+                format_usd(cost_alert)
+            )?;
+        }
         Ok(())
     }
 }
