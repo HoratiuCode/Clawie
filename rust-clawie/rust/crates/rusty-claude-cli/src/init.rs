@@ -55,7 +55,7 @@ impl InitReport {
                 artifact.status.label()
             ));
         }
-        lines.push("  Next step        start or see commands".to_string());
+        lines.push("  Next step        launch ./clawie from the repo root".to_string());
         lines.join("\n")
     }
 }
