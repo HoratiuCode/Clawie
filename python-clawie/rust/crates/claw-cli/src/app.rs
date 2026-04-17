@@ -182,6 +182,7 @@ impl CliApp {
                 SlashCommand::Compact => "/compact",
                 _ => continue,
             };
+            Self::write_bullet(out, format!("`{name}` — {}", handler.summary))?;
         }
         Ok(CommandResult::Continue)
     }
