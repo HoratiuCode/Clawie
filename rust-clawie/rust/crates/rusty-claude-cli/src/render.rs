@@ -245,6 +245,8 @@ pub struct TerminalRenderer {
     color_theme: ColorTheme,
 }
 
+const VERTICAL_REPLY_WRAP_WIDTH: usize = 42;
+
 impl Default for TerminalRenderer {
     fn default() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
@@ -296,6 +298,12 @@ impl TerminalRenderer {
     #[must_use]
     pub fn markdown_to_ansi(&self, markdown: &str) -> String {
         self.render_markdown(markdown)
+    }
+
+    #[must_use]
+    pub fn vertical_markdown_to_ansi(&self, markdown: &str) -> String {
+        let reflowed = reflow_markdown_for_vertical_layout(markdown, VERTICAL_REPLY_WRAP_WIDTH);
+        self.render_markdown(&reflowed)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -632,7 +640,7 @@ impl MarkdownStreamState {
         let split = find_stream_safe_boundary(&self.pending)?;
         let ready = self.pending[..split].to_string();
         self.pending.drain(..split);
-        Some(renderer.markdown_to_ansi(&ready))
+        Some(renderer.vertical_markdown_to_ansi(&ready))
     }
 
     #[must_use]
@@ -642,9 +650,124 @@ impl MarkdownStreamState {
             None
         } else {
             let pending = std::mem::take(&mut self.pending);
-            Some(renderer.markdown_to_ansi(&pending))
+            Some(renderer.vertical_markdown_to_ansi(&pending))
         }
     }
+}
+
+fn reflow_markdown_for_vertical_layout(markdown: &str, wrap_width: usize) -> String {
+    let mut output = Vec::new();
+    let mut in_fence = false;
+
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            output.push(line.to_string());
+            continue;
+        }
+
+        if in_fence
+            || trimmed.is_empty()
+            || trimmed.starts_with('|')
+            || trimmed.starts_with("---")
+            || trimmed.starts_with("===")
+        {
+            output.push(line.to_string());
+            continue;
+        }
+
+        if let Some((first_prefix, continuation_prefix, content)) = split_list_item(line) {
+            output.extend(wrap_with_prefix(
+                &content,
+                &first_prefix,
+                &continuation_prefix,
+                wrap_width,
+            ));
+        } else {
+            output.extend(wrap_with_prefix(trimmed, "", "", wrap_width));
+        }
+    }
+
+    output.join("\n")
+}
+
+fn split_list_item(line: &str) -> Option<(String, String, String)> {
+    let indent_len = line.len().saturating_sub(line.trim_start().len());
+    let trimmed = &line[indent_len..];
+
+    let marker_len = if matches!(trimmed.as_bytes().first().copied(), Some(b'-' | b'*' | b'+'))
+        && trimmed.as_bytes().get(1) == Some(&b' ')
+    {
+        2
+    } else {
+        let mut digits = 0usize;
+        for ch in trimmed.chars() {
+            if ch.is_ascii_digit() {
+                digits += ch.len_utf8();
+                continue;
+            }
+            break;
+        }
+        if digits > 0
+            && trimmed[digits..]
+                .strip_prefix(". ")
+                .is_some()
+        {
+            digits + 2
+        } else {
+            return None;
+        }
+    };
+
+    let prefix = trimmed[..marker_len].to_string();
+    let content = trimmed[marker_len..].trim().to_string();
+    let first_prefix = format!("{}{}", " ".repeat(indent_len), prefix);
+    let continuation_prefix = " ".repeat(first_prefix.chars().count());
+    Some((first_prefix, continuation_prefix, content))
+}
+
+fn wrap_with_prefix(
+    text: &str,
+    first_prefix: &str,
+    continuation_prefix: &str,
+    wrap_width: usize,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut prefix = first_prefix;
+    let mut available = wrap_width.saturating_sub(prefix.chars().count());
+
+    for word in text.split_whitespace() {
+        let next_len = if current.is_empty() {
+            word.chars().count()
+        } else {
+            current.chars().count() + 1 + word.chars().count()
+        };
+
+        if !current.is_empty() && next_len > available {
+            lines.push(format!("{prefix}{current}"));
+            current.clear();
+            current.push_str(word);
+            prefix = continuation_prefix;
+            available = wrap_width.saturating_sub(prefix.chars().count());
+        } else if current.is_empty() {
+            current.push_str(word);
+        } else {
+            current.push(' ');
+            current.push_str(word);
+        }
+    }
+
+    if current.is_empty() {
+        if lines.is_empty() {
+            lines.push(prefix.to_string());
+        }
+    } else {
+        lines.push(format!("{prefix}{current}"));
+    }
+
+    lines
 }
 
 fn apply_code_block_background(line: &str) -> String {
@@ -765,6 +888,20 @@ mod tests {
         assert!(plain_text.contains("2. second"));
         assert!(plain_text.contains("  • nested"));
         assert!(plain_text.contains("  • child"));
+    }
+
+    #[test]
+    fn vertically_reflows_long_bullets_before_rendering() {
+        let terminal_renderer = TerminalRenderer::new();
+        let markdown_output = terminal_renderer.vertical_markdown_to_ansi(
+            "- Open and view the file's contents\n- Edit or replace text in the file",
+        );
+        let plain_text = strip_ansi(&markdown_output);
+
+        assert!(plain_text.lines().any(|line| line.contains("Open and view the file")));
+        assert!(plain_text.lines().any(|line| line.contains("contents")));
+        assert!(plain_text.lines().any(|line| line.contains("Edit or replace text in the")));
+        assert!(plain_text.lines().any(|line| line.contains("file")));
     }
 
     #[test]
