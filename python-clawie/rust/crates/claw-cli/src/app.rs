@@ -169,8 +169,12 @@ impl CliApp {
         }
     }
 
+    fn write_bullet(out: &mut impl Write, text: impl AsRef<str>) -> io::Result<()> {
+        writeln!(out, "- {}", text.as_ref())
+    }
+
     fn handle_help(out: &mut impl Write) -> io::Result<CommandResult> {
-        writeln!(out, "Available commands:")?;
+        writeln!(out, "Available commands")?;
         for handler in SLASH_COMMAND_HANDLERS {
             let name = match handler.command {
                 SlashCommand::Help => "/help",
@@ -178,25 +182,32 @@ impl CliApp {
                 SlashCommand::Compact => "/compact",
                 _ => continue,
             };
-            writeln!(out, "  {name:<9} {}", handler.summary)?;
         }
         Ok(CommandResult::Continue)
     }
 
     fn handle_status(&mut self, out: &mut impl Write) -> io::Result<CommandResult> {
-        writeln!(
+        writeln!(out, "Status")?;
+        Self::write_bullet(out, format!("turns: {}", self.state.turns))?;
+        Self::write_bullet(out, format!("model: {}", self.state.last_model))?;
+        Self::write_bullet(out, format!("permission mode: {:?}", self.config.permission_mode))?;
+        Self::write_bullet(out, format!("output format: {:?}", self.config.output_format))?;
+        Self::write_bullet(
             out,
-            "status: turns={} model={} permission-mode={:?} output-format={:?} last-usage={} in/{} out config={}",
-            self.state.turns,
-            self.state.last_model,
-            self.config.permission_mode,
-            self.config.output_format,
-            self.state.last_usage.input_tokens,
-            self.state.last_usage.output_tokens,
-            self.config
-                .config
-                .as_ref()
-                .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+            format!(
+                "last usage: {} in / {} out",
+                self.state.last_usage.input_tokens, self.state.last_usage.output_tokens
+            ),
+        )?;
+        Self::write_bullet(
+            out,
+            format!(
+                "config: {}",
+                self.config
+                    .config
+                    .as_ref()
+                    .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+            ),
         )?;
         Ok(CommandResult::Continue)
     }
@@ -205,10 +216,13 @@ impl CliApp {
         self.state.compacted_messages += self.state.turns;
         self.state.turns = 0;
         self.conversation_history.clear();
-        writeln!(
+        writeln!(out, "Compact")?;
+        Self::write_bullet(
             out,
-            "Compacted session history into a local summary ({} messages total compacted).",
-            self.state.compacted_messages
+            format!(
+                "session history compacted: {} messages total",
+                self.state.compacted_messages
+            ),
         )?;
         Ok(CommandResult::Continue)
     }
@@ -219,6 +233,7 @@ impl CliApp {
         stream_spinner: &mut Spinner,
         tool_spinner: &mut Spinner,
         saw_text: &mut bool,
+        assistant_text: &mut String,
         turn_usage: &mut UsageSummary,
         out: &mut impl Write,
     ) {
@@ -229,11 +244,14 @@ impl CliApp {
                         stream_spinner.finish("Streaming response", renderer.color_theme(), out);
                     *saw_text = true;
                 }
-                let rendered = renderer.vertical_markdown_to_ansi(&delta);
-                let _ = write!(out, "{rendered}");
-                let _ = out.flush();
+                assistant_text.push_str(&delta);
             }
             StreamEvent::ToolCallStart { name, input } => {
+                if !assistant_text.trim().is_empty() {
+                    let rendered = renderer.vertical_markdown_to_ansi(assistant_text.trim());
+                    let _ = writeln!(out, "{rendered}");
+                    assistant_text.clear();
+                }
                 if *saw_text {
                     let _ = writeln!(out);
                 }
@@ -318,6 +336,7 @@ impl CliApp {
         let mut turn_usage = UsageSummary::default();
         let mut tool_spinner = Spinner::new();
         let mut saw_text = false;
+        let mut assistant_text = String::new();
         let renderer = &self.renderer;
 
         let result =
@@ -329,6 +348,7 @@ impl CliApp {
                         &mut stream_spinner,
                         &mut tool_spinner,
                         &mut saw_text,
+                        &mut assistant_text,
                         &mut turn_usage,
                         out,
                     );
@@ -346,6 +366,11 @@ impl CliApp {
             }
         };
         self.state.last_usage = summary.usage.clone();
+        if !assistant_text.trim().is_empty() {
+            let rendered = self.renderer.vertical_markdown_to_ansi(assistant_text.trim());
+            writeln!(out, "{rendered}")?;
+            assistant_text.clear();
+        }
         if saw_text {
             writeln!(out)?;
         } else {

@@ -258,8 +258,12 @@ impl CliApp {
         }
     }
 
+    fn write_bullet(out: &mut impl Write, text: impl AsRef<str>) -> io::Result<()> {
+        writeln!(out, "- {}", text.as_ref())
+    }
+
     fn handle_help(out: &mut impl Write) -> io::Result<CommandResult> {
-        writeln!(out, "Available commands:")?;
+        writeln!(out, "Available commands")?;
         for handler in SLASH_COMMAND_HANDLERS {
             let name = match handler.command {
                 SlashCommand::Help => "/help",
@@ -277,25 +281,33 @@ impl CliApp {
                 SlashCommand::Clear { .. } => "/clear [--confirm]",
                 SlashCommand::Unknown(_) => continue,
             };
-            writeln!(out, "  {name:<9} {}", handler.summary)?;
+            Self::write_bullet(out, format!("`{name}` — {}", handler.summary))?;
         }
         Ok(CommandResult::Continue)
     }
 
     fn handle_status(&mut self, out: &mut impl Write) -> io::Result<CommandResult> {
-        writeln!(
+        writeln!(out, "Status")?;
+        Self::write_bullet(out, format!("turns: {}", self.state.turns))?;
+        Self::write_bullet(out, format!("model: {}", self.state.last_model))?;
+        Self::write_bullet(out, format!("permission mode: {:?}", self.config.permission_mode))?;
+        Self::write_bullet(out, format!("output format: {:?}", self.config.output_format))?;
+        Self::write_bullet(
             out,
-            "status: turns={} model={} permission-mode={:?} output-format={:?} last-usage={} in/{} out config={}",
-            self.state.turns,
-            self.state.last_model,
-            self.config.permission_mode,
-            self.config.output_format,
-            self.state.last_usage.input_tokens,
-            self.state.last_usage.output_tokens,
-            self.config
-                .config
-                .as_ref()
-                .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+            format!(
+                "last usage: {} in / {} out",
+                self.state.last_usage.input_tokens, self.state.last_usage.output_tokens
+            ),
+        )?;
+        Self::write_bullet(
+            out,
+            format!(
+                "config: {}",
+                self.config
+                    .config
+                    .as_ref()
+                    .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+            ),
         )?;
         Ok(CommandResult::Continue)
     }
@@ -304,10 +316,13 @@ impl CliApp {
         self.state.compacted_messages += self.state.turns;
         self.state.turns = 0;
         self.conversation_history.clear();
-        writeln!(
+        writeln!(out, "Compact")?;
+        Self::write_bullet(
             out,
-            "Compacted session history into a local summary ({} messages total compacted).",
-            self.state.compacted_messages
+            format!(
+                "session history compacted: {} messages total",
+                self.state.compacted_messages
+            ),
         )?;
         Ok(CommandResult::Continue)
     }
@@ -323,10 +338,12 @@ impl CliApp {
                 self.state.last_model = model.to_string();
                 self.conversation_client = ConversationClient::from_env(self.config.model.clone())
                     .map_err(|error| io::Error::other(error.to_string()))?;
-                writeln!(out, "Active model set to {model}")?;
+                writeln!(out, "Model")?;
+                Self::write_bullet(out, format!("active model set to {model}"))?;
             }
             None => {
-                writeln!(out, "Active model: {}", self.config.model)?;
+                writeln!(out, "Model")?;
+                Self::write_bullet(out, format!("active model: {}", self.config.model))?;
             }
         }
         Ok(CommandResult::Continue)
@@ -338,21 +355,28 @@ impl CliApp {
         out: &mut impl Write,
     ) -> io::Result<CommandResult> {
         match mode {
-            None => writeln!(out, "Permission mode: {:?}", self.config.permission_mode)?,
+            None => {
+                writeln!(out, "Permission mode")?;
+                Self::write_bullet(out, format!("{:?}", self.config.permission_mode))?;
+            }
             Some("read-only") => {
                 self.config.permission_mode = PermissionMode::ReadOnly;
-                writeln!(out, "Permission mode set to read-only")?;
+                writeln!(out, "Permission mode")?;
+                Self::write_bullet(out, "set to read-only")?;
             }
             Some("workspace-write") => {
                 self.config.permission_mode = PermissionMode::WorkspaceWrite;
-                writeln!(out, "Permission mode set to workspace-write")?;
+                writeln!(out, "Permission mode")?;
+                Self::write_bullet(out, "set to workspace-write")?;
             }
             Some("danger-full-access") => {
                 self.config.permission_mode = PermissionMode::DangerFullAccess;
-                writeln!(out, "Permission mode set to danger-full-access")?;
+                writeln!(out, "Permission mode")?;
+                Self::write_bullet(out, "set to danger-full-access")?;
             }
             Some(other) => {
-                writeln!(out, "Unknown permission mode: {other}")?;
+                writeln!(out, "Permission mode")?;
+                Self::write_bullet(out, format!("unknown mode: {other}"))?;
             }
         }
         Ok(CommandResult::Continue)
@@ -364,34 +388,51 @@ impl CliApp {
         out: &mut impl Write,
     ) -> io::Result<CommandResult> {
         match section {
-            None => writeln!(
-                out,
-                "Config path: {}",
-                self.config
-                    .config
-                    .as_ref()
-                    .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
-            )?,
-            Some(section) => writeln!(
-                out,
-                "Config section `{section}` is not fully implemented yet; current config path is {}",
-                self.config
-                    .config
-                    .as_ref()
-                    .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
-            )?,
+            None => {
+                writeln!(out, "Config")?;
+                Self::write_bullet(
+                    out,
+                    format!(
+                        "path: {}",
+                        self.config
+                            .config
+                            .as_ref()
+                            .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+                    ),
+                )?;
+            }
+            Some(section) => {
+                writeln!(out, "Config")?;
+                Self::write_bullet(
+                    out,
+                    format!("section `{section}` is not fully implemented yet"),
+                )?;
+                Self::write_bullet(
+                    out,
+                    format!(
+                        "current path: {}",
+                        self.config
+                            .config
+                            .as_ref()
+                            .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+                    ),
+                )?;
+            }
         }
         Ok(CommandResult::Continue)
     }
 
     fn handle_memory(&mut self, out: &mut impl Write) -> io::Result<CommandResult> {
-        writeln!(
+        writeln!(out, "Memory")?;
+        Self::write_bullet(
             out,
-            "Loaded memory/config file: {}",
-            self.config
-                .config
-                .as_ref()
-                .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+            format!(
+                "loaded config file: {}",
+                self.config
+                    .config
+                    .as_ref()
+                    .map_or_else(|| String::from("<none>"), |path| path.display().to_string())
+            ),
         )?;
         Ok(CommandResult::Continue)
     }
@@ -402,19 +443,24 @@ impl CliApp {
             || self.state.last_usage.estimate_cost_usd(),
             |pricing| self.state.last_usage.estimate_cost_usd_with_pricing(pricing),
         );
-        writeln!(
+        writeln!(out, "Cost")?;
+        Self::write_bullet(
             out,
-            "Usage: {} input / {} output / {} cache-write / {} cache-read",
-            self.state.last_usage.input_tokens,
-            self.state.last_usage.output_tokens,
-            self.state.last_usage.cache_creation_input_tokens,
-            self.state.last_usage.cache_read_input_tokens
+            format!(
+                "usage: {} input / {} output / {} cache-write / {} cache-read",
+                self.state.last_usage.input_tokens,
+                self.state.last_usage.output_tokens,
+                self.state.last_usage.cache_creation_input_tokens,
+                self.state.last_usage.cache_read_input_tokens
+            ),
         )?;
-        writeln!(
+        Self::write_bullet(
             out,
-            "Estimated API cost for model {}: {}",
-            self.state.last_model,
-            format_usd(cost.total_cost_usd())
+            format!(
+                "estimated API cost for model {}: {}",
+                self.state.last_model,
+                format_usd(cost.total_cost_usd())
+            ),
         )?;
         self.render_cost_alert_line(cost.total_cost_usd(), out)?;
         Ok(CommandResult::Continue)
@@ -436,11 +482,9 @@ impl CliApp {
             self.conversation_client =
                 ConversationClient::from_env(self.config.model.clone()).map_err(io::Error::other)?;
         }
-        writeln!(
-            out,
-            "Reloaded config and refreshed the model client. Active model: {}",
-            self.config.model
-        )?;
+        writeln!(out, "Reload")?;
+        Self::write_bullet(out, "config reloaded and model client refreshed")?;
+        Self::write_bullet(out, format!("active model: {}", self.config.model))?;
         Ok(CommandResult::Continue)
     }
 
@@ -462,14 +506,14 @@ impl CliApp {
             .config
             .as_ref()
             .map_or_else(|| String::from("<none>"), |path| path.display().to_string());
-        writeln!(out, "~, clawie")?;
-        writeln!(out, "Model       {}", self.state.last_model)?;
-        writeln!(out, "Permissions {}", self.config.permission_mode.as_str())?;
-        writeln!(out, "Branch      {}", branch)?;
-        writeln!(out, "Workspace   {}", cwd.display())?;
-        writeln!(out, "Directory   {}", cwd.display())?;
-        writeln!(out, "Session     {}", session_path.display())?;
-        writeln!(out, "Auto-save   {}", auto_save)?;
+        writeln!(out, "Session")?;
+        Self::write_bullet(out, format!("model: {}", self.state.last_model))?;
+        Self::write_bullet(out, format!("permissions: {}", self.config.permission_mode.as_str()))?;
+        Self::write_bullet(out, format!("branch: {}", branch))?;
+        Self::write_bullet(out, format!("workspace: {}", cwd.display()))?;
+        Self::write_bullet(out, format!("directory: {}", cwd.display()))?;
+        Self::write_bullet(out, format!("session: {}", session_path.display()))?;
+        Self::write_bullet(out, format!("auto-save: {}", auto_save))?;
         Ok(CommandResult::Continue)
     }
 
@@ -480,16 +524,18 @@ impl CliApp {
         out: &mut impl Write,
     ) -> io::Result<CommandResult> {
         let Some(query) = query.filter(|value| !value.trim().is_empty()) else {
-            writeln!(out, "Usage: /search <query> [path]")?;
+            writeln!(out, "Search")?;
+            Self::write_bullet(out, "usage: /search <query> [path]")?;
             return Ok(CommandResult::Continue);
         };
         let results = glob_search(query, path).map_err(|error| io::Error::other(error.to_string()))?;
-        writeln!(out, "Search results for `{query}`:")?;
+        writeln!(out, "Search")?;
+        Self::write_bullet(out, format!("results for `{query}`"))?;
         for entry in results.filenames.iter().take(20) {
-            writeln!(out, "  {}", entry)?;
+            Self::write_bullet(out, entry.display().to_string())?;
         }
         if results.filenames.is_empty() {
-            writeln!(out, "  No matches found.")?;
+            Self::write_bullet(out, "no matches found")?;
         }
         Ok(CommandResult::Continue)
     }
@@ -501,7 +547,8 @@ impl CliApp {
         out: &mut impl Write,
     ) -> io::Result<CommandResult> {
         let (Some(source), Some(destination)) = (source, destination) else {
-            writeln!(out, "Usage: /move <source> <destination>")?;
+            writeln!(out, "Move")?;
+            Self::write_bullet(out, "usage: /move <source> <destination>")?;
             return Ok(CommandResult::Continue);
         };
         let destination_path = PathBuf::from(destination);
@@ -509,13 +556,19 @@ impl CliApp {
             fs::create_dir_all(parent)?;
         }
         fs::rename(source, &destination_path)?;
-        writeln!(out, "Moved `{source}` to `{}`", destination_path.display())?;
+        writeln!(out, "Move")?;
+        Self::write_bullet(
+            out,
+            format!("moved `{source}` to `{}`", destination_path.display()),
+        )?;
         Ok(CommandResult::Continue)
     }
 
     fn handle_clear(&mut self, confirm: bool, out: &mut impl Write) -> io::Result<CommandResult> {
         if !confirm {
-            writeln!(out, "Refusing to clear without confirmation. Re-run as /clear --confirm")?;
+            writeln!(out, "Clear")?;
+            Self::write_bullet(out, "refusing to clear without confirmation")?;
+            Self::write_bullet(out, "re-run as /clear --confirm")?;
             return Ok(CommandResult::Continue);
         }
 
@@ -523,7 +576,8 @@ impl CliApp {
         self.state.compacted_messages = 0;
         self.state.last_usage = UsageSummary::default();
         self.conversation_history.clear();
-        writeln!(out, "Started a fresh local session.")?;
+        writeln!(out, "Clear")?;
+        Self::write_bullet(out, "started a fresh local session")?;
         Ok(CommandResult::Continue)
     }
 
@@ -533,6 +587,7 @@ impl CliApp {
         stream_spinner: &mut Spinner,
         tool_spinner: &mut Spinner,
         saw_text: &mut bool,
+        assistant_text: &mut String,
         turn_usage: &mut UsageSummary,
         out: &mut impl Write,
     ) {
@@ -543,11 +598,14 @@ impl CliApp {
                         stream_spinner.finish("Streaming response", renderer.color_theme(), out);
                     *saw_text = true;
                 }
-                let rendered = renderer.vertical_markdown_to_ansi(&delta);
-                let _ = write!(out, "{rendered}");
-                let _ = out.flush();
+                assistant_text.push_str(&delta);
             }
             StreamEvent::ToolCallStart { name, input } => {
+                if !assistant_text.trim().is_empty() {
+                    let rendered = renderer.vertical_markdown_to_ansi(assistant_text.trim());
+                    let _ = writeln!(out, "{rendered}");
+                    assistant_text.clear();
+                }
                 if *saw_text {
                     let _ = writeln!(out);
                 }
@@ -632,6 +690,7 @@ impl CliApp {
         let mut turn_usage = UsageSummary::default();
         let mut tool_spinner = Spinner::new();
         let mut saw_text = false;
+        let mut assistant_text = String::new();
         let renderer = &self.renderer;
 
         let result =
@@ -643,6 +702,7 @@ impl CliApp {
                         &mut stream_spinner,
                         &mut tool_spinner,
                         &mut saw_text,
+                        &mut assistant_text,
                         &mut turn_usage,
                         out,
                     );
@@ -660,6 +720,11 @@ impl CliApp {
             }
         };
         self.state.last_usage = summary.usage.clone();
+        if !assistant_text.trim().is_empty() {
+            let rendered = self.renderer.vertical_markdown_to_ansi(assistant_text.trim());
+            writeln!(out, "{rendered}")?;
+            assistant_text.clear();
+        }
         if saw_text {
             writeln!(out)?;
         } else {
