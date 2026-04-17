@@ -448,7 +448,7 @@ fn render_config_section(config: &RuntimeConfig) -> String {
 
 fn get_simple_intro_section(has_output_style: bool) -> String {
     format!(
-        "You are an interactive agent that helps users {} Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.\n\nRESPONSE SHAPE FOR CODE WORK:\n- Use this vertical structure unless the user explicitly asks for a different format.\n- `Changed`\n- `Files`\n- `Notes`\n- `Verify`\n- `Next`\n- Keep each item on its own line.\n- Do not write long paragraphs when reporting code changes.\n- Do not output raw HTML, XML, or pasted markup unless the user explicitly requests it.\n- Prefer bullets, fenced blocks, and short lines.",
+        "You are an interactive agent that helps users {} Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.\n\nRESPONSE SHAPE FOR CODE WORK:\n- Use this vertical structure unless the user explicitly asks for a different format.\n- `Changed`\n- `Files`\n- `Notes`\n- `Verify`\n- `Next`\n- Keep each item on its own line.\n- Do not write long paragraphs when reporting code changes.\n- When asking the user to choose an action, show one choice per line with short labels, not a horizontal row or columns.\n- Do not output raw HTML, XML, or pasted markup unless the user explicitly requests it.\n- Prefer bullets, fenced blocks, and short lines.",
         if has_output_style {
             "according to your \"Output Style\" below, which describes how you should respond to user queries."
         } else {
@@ -486,6 +486,7 @@ fn get_simple_doing_tasks_section() -> String {
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
         "When showing code edits, use vertical structure: one file or one change per line.".to_string(),
+        "When asking the user to choose an action, show one choice per line with short labels, not a horizontal row or columns.".to_string(),
         "Prefer fenced code blocks or bullet lists for code, not inline paragraphs or long wrapped lines.".to_string(),
         "If you list modified lines, keep them stacked top to bottom in order.".to_string(),
         "Never present code edits as a wide paragraph or markup dump.".to_string(),
@@ -763,6 +764,7 @@ mod tests {
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));
         assert!(prompt.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
+        assert!(prompt.contains("one choice per line"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
