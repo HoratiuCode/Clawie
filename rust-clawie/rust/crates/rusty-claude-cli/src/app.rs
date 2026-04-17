@@ -543,7 +543,8 @@ impl CliApp {
                         stream_spinner.finish("Streaming response", renderer.color_theme(), out);
                     *saw_text = true;
                 }
-                let _ = write!(out, "{delta}");
+                let rendered = renderer.vertical_markdown_to_ansi(&delta);
+                let _ = write!(out, "{rendered}");
                 let _ = out.flush();
             }
             StreamEvent::ToolCallStart { name, input } => {
