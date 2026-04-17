@@ -15,7 +15,7 @@ The goal of this repository is simple: instead of sharing separate folders from 
 If you are opening Clawie for the first time:
 
 1. Run `./clawie` from this repository root.
-2. It opens the Rust interactive shell by default.
+2. It opens the Rust interactive shell directly by default.
 3. Open `rust-clawie` when you want the main interactive shell sources.
 4. Open `python-clawie` when you want the Python workspace and mirrored project files.
 5. Use `/search` inside the shell to find files or text in the workspace.
@@ -87,7 +87,7 @@ After cloning or downloading the repository:
 3. Enter `rust-clawie` if your focus is the terminal app and CLI behavior.
 4. Enter `python-clawie` if your focus is the Python project.
 
-For most users, the best default is `./clawie`, because that opens the interactive Clawie application directly.
+For most users, the best default is `./clawie`, because that opens the interactive Clawie application directly with no intermediate menu.
 
 ## Documentation And Localization
 

@@ -18,7 +18,7 @@ class WorkspaceSetup:
 
     def startup_steps(self) -> tuple[str, ...]:
         return (
-            'launch ./clawie from the repository root',
+            'launch ./clawie directly from the repository root',
             'build workspace context',
             'load mirrored command snapshot',
             'load mirrored tool snapshot',
