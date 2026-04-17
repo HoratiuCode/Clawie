@@ -2620,7 +2620,8 @@ Type \x1b[1mstart\x1b[0m to begin · \x1b[1msee commands\x1b[0m to view options 
                 let visible_reply = final_assistant_text_or_fallback(input, &summary);
                 if !visible_reply.trim().is_empty() && final_assistant_text(&summary).trim().is_empty()
                 {
-                    println!("{visible_reply}");
+                    let rendered_reply = TerminalRenderer::new().vertical_markdown_to_ansi(&visible_reply);
+                    println!("{rendered_reply}");
                 }
                 if contains_fenced_code(&visible_reply) {
                     println!("Copy code with /copy code");
@@ -5929,7 +5930,7 @@ fn push_output_block(
     match block {
         OutputContentBlock::Text { text } => {
             if !text.is_empty() {
-                let rendered = TerminalRenderer::new().markdown_to_ansi(&text);
+                let rendered = TerminalRenderer::new().vertical_markdown_to_ansi(&text);
                 write!(out, "{rendered}")
                     .and_then(|()| out.flush())
                     .map_err(|error| RuntimeError::new(error.to_string()))?;

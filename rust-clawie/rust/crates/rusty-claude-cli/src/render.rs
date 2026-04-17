@@ -302,7 +302,8 @@ impl TerminalRenderer {
 
     #[must_use]
     pub fn vertical_markdown_to_ansi(&self, markdown: &str) -> String {
-        let reflowed = reflow_markdown_for_vertical_layout(markdown, VERTICAL_REPLY_WRAP_WIDTH);
+        let normalized = normalize_reply_markdown(markdown);
+        let reflowed = reflow_markdown_for_vertical_layout(&normalized, VERTICAL_REPLY_WRAP_WIDTH);
         self.render_markdown(&reflowed)
     }
 
@@ -692,6 +693,71 @@ fn reflow_markdown_for_vertical_layout(markdown: &str, wrap_width: usize) -> Str
     output.join("\n")
 }
 
+fn normalize_reply_markdown(markdown: &str) -> String {
+    if looks_structured(markdown) {
+        return markdown.to_string();
+    }
+
+    let sentences = split_into_sentences(markdown)
+        .into_iter()
+        .filter(|sentence| !sentence.trim().is_empty())
+        .map(|sentence| format!("- {}", sentence.trim()))
+        .collect::<Vec<_>>();
+
+    if sentences.is_empty() {
+        markdown.to_string()
+    } else {
+        sentences.join("\n")
+    }
+}
+
+fn looks_structured(markdown: &str) -> bool {
+    markdown.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with('#')
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+            || trimmed.starts_with("1. ")
+            || trimmed.starts_with("2. ")
+            || trimmed.starts_with("3. ")
+            || trimmed.starts_with('>')
+            || trimmed.starts_with('|')
+            || trimmed.starts_with("```")
+            || trimmed.starts_with("~~~")
+    })
+}
+
+fn split_into_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        current.push(ch);
+        if matches!(ch, '.' | '!' | '?') {
+            let next_non_space = chars.clone().find(|c| !c.is_whitespace());
+            let should_split = next_non_space
+                .map(|next| next.is_uppercase() || next.is_ascii_digit() || matches!(next, '"' | '\'' | '`' | '(' | '['))
+                .unwrap_or(true);
+            if should_split {
+                let sentence = current.trim();
+                if !sentence.is_empty() {
+                    sentences.push(sentence.to_string());
+                }
+                current.clear();
+            }
+        }
+    }
+
+    let tail = current.trim();
+    if !tail.is_empty() {
+        sentences.push(tail.to_string());
+    }
+
+    sentences
+}
+
 fn split_list_item(line: &str) -> Option<(String, String, String)> {
     let indent_len = line.len().saturating_sub(line.trim_start().len());
     let trimmed = &line[indent_len..];
@@ -902,6 +968,18 @@ mod tests {
         assert!(plain_text.lines().any(|line| line.contains("contents")));
         assert!(plain_text.lines().any(|line| line.contains("Edit or replace text in the")));
         assert!(plain_text.lines().any(|line| line.contains("file")));
+    }
+
+    #[test]
+    fn renders_plain_prose_as_vertical_bullets() {
+        let terminal_renderer = TerminalRenderer::new();
+        let markdown_output = terminal_renderer.vertical_markdown_to_ansi(
+            "Just to confirm, would you like me to open and display the contents of the file or directory at /Users/example? Please specify if you want to read a file, list a directory, or perform another action.",
+        );
+        let plain_text = strip_ansi(&markdown_output);
+
+        assert!(plain_text.lines().any(|line| line.starts_with("• Just to confirm")));
+        assert!(plain_text.lines().any(|line| line.contains("Please specify")));
     }
 
     #[test]
