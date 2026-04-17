@@ -40,7 +40,7 @@ use commands::{
 use compat_harness::{extract_manifest, UpstreamPaths};
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
-use render::{MarkdownStreamState, Spinner, TerminalRenderer};
+use render::{Spinner, TerminalRenderer};
 use runtime::{
     clear_oauth_credentials, format_usd, generate_pkce_pair, generate_state, load_system_prompt,
     parse_oauth_callback_request_target, pricing_for_model, resolve_sandbox_status,
@@ -5074,7 +5074,7 @@ impl ApiClient for AnthropicRuntimeClient {
                 &mut sink
             };
             let renderer = TerminalRenderer::new();
-            let mut markdown_stream = MarkdownStreamState::default();
+            let mut assistant_text = String::new();
             let mut events = Vec::new();
             let mut pending_tool: Option<(String, String, String)> = None;
             let mut saw_stop = false;
@@ -5105,11 +5105,7 @@ impl ApiClient for AnthropicRuntimeClient {
                                 if let Some(progress_reporter) = &self.progress_reporter {
                                     progress_reporter.mark_text_phase(&text);
                                 }
-                                if let Some(rendered) = markdown_stream.push(&renderer, &text) {
-                                    write!(out, "{rendered}")
-                                        .and_then(|()| out.flush())
-                                        .map_err(|error| RuntimeError::new(error.to_string()))?;
-                                }
+                                assistant_text.push_str(&text);
                                 events.push(AssistantEvent::TextDelta(text));
                             }
                         }
@@ -5122,10 +5118,12 @@ impl ApiClient for AnthropicRuntimeClient {
                         | ContentBlockDelta::SignatureDelta { .. } => {}
                     },
                     ApiStreamEvent::ContentBlockStop(_) => {
-                        if let Some(rendered) = markdown_stream.flush(&renderer) {
+                        if !assistant_text.trim().is_empty() {
+                            let rendered = renderer.vertical_markdown_to_ansi(assistant_text.trim());
                             write!(out, "{rendered}")
                                 .and_then(|()| out.flush())
                                 .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            assistant_text.clear();
                         }
                         if let Some((id, name, input)) = pending_tool.take() {
                             if let Some(progress_reporter) = &self.progress_reporter {
@@ -5143,10 +5141,12 @@ impl ApiClient for AnthropicRuntimeClient {
                     }
                     ApiStreamEvent::MessageStop(_) => {
                         saw_stop = true;
-                        if let Some(rendered) = markdown_stream.flush(&renderer) {
+                        if !assistant_text.trim().is_empty() {
+                            let rendered = renderer.vertical_markdown_to_ansi(assistant_text.trim());
                             write!(out, "{rendered}")
                                 .and_then(|()| out.flush())
                                 .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            assistant_text.clear();
                         }
                         events.push(AssistantEvent::MessageStop);
                     }
