@@ -104,6 +104,7 @@ If you add user-facing text, prefer keeping the launcher labels and docs consist
 Clawie is meant to help a computer user inspect and reorganize a workspace without leaving the terminal.
 
 - Use `/search <query> [path]` to look through filenames in the current workspace.
+- Use `read_file` to open files or directory listings when you need to inspect contents.
 - Use `/move <source> <destination>` to move a file or folder.
 - Use `/ps` to show the hidden session and workspace summary.
 - Use `/cost` to review token usage and estimated API cost.

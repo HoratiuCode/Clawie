@@ -171,16 +171,20 @@ pub struct GrepSearchOutput {
     pub applied_offset: Option<usize>,
 }
 
-/// Reads a text file and returns a line-windowed payload.
+/// Reads a text file or opens a directory listing and returns a line-windowed payload.
 pub fn read_file(
     path: &str,
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
+    let metadata = fs::metadata(&absolute_path)?;
+
+    if metadata.is_dir() {
+        return read_directory(&absolute_path, offset, limit);
+    }
 
     // Check file size before reading
-    let metadata = fs::metadata(&absolute_path)?;
     if metadata.len() > MAX_READ_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -212,6 +216,60 @@ pub fn read_file(
         kind: String::from("text"),
         file: TextFilePayload {
             file_path: absolute_path.to_string_lossy().into_owned(),
+            content: selected,
+            num_lines: end_index.saturating_sub(start_index),
+            start_line: start_index.saturating_add(1),
+            total_lines: lines.len(),
+        },
+    })
+}
+
+fn read_directory(
+    path: &Path,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> io::Result<ReadFileOutput> {
+    let mut entries = fs::read_dir(path)?
+        .map(|entry_result| {
+            let entry = entry_result?;
+            let file_type = entry.file_type()?;
+            let kind = if file_type.is_dir() {
+                "directory"
+            } else if file_type.is_symlink() {
+                "symlink"
+            } else {
+                "file"
+            };
+            let mut name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() {
+                name.push('/');
+            } else if file_type.is_symlink() {
+                name.push('@');
+            }
+            Ok((kind.to_string(), name))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+
+    entries.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.to_lowercase().cmp(&right.1.to_lowercase()))
+    });
+
+    let lines = entries
+        .into_iter()
+        .map(|(kind, name)| format!("{kind}\t{name}"))
+        .collect::<Vec<_>>();
+    let start_index = offset.unwrap_or(0).min(lines.len());
+    let end_index = limit.map_or(lines.len(), |limit| {
+        start_index.saturating_add(limit).min(lines.len())
+    });
+    let selected = lines[start_index..end_index].join("\n");
+
+    Ok(ReadFileOutput {
+        kind: String::from("directory"),
+        file: TextFilePayload {
+            file_path: path.to_string_lossy().into_owned(),
             content: selected,
             num_lines: end_index.saturating_sub(start_index),
             start_line: start_index.saturating_add(1),
@@ -646,6 +704,23 @@ mod tests {
         let read_output = read_file(path.to_string_lossy().as_ref(), Some(1), Some(1))
             .expect("read should succeed");
         assert_eq!(read_output.file.content, "two");
+    }
+
+    #[test]
+    fn reads_directory_listings() {
+        let dir = temp_path("read-dir");
+        std::fs::create_dir_all(dir.join("nested")).expect("directory should be created");
+        write_file(dir.join("alpha.txt").to_string_lossy().as_ref(), "alpha")
+            .expect("file write should succeed");
+        write_file(dir.join("beta.txt").to_string_lossy().as_ref(), "beta")
+            .expect("file write should succeed");
+
+        let read_output = read_file(dir.to_string_lossy().as_ref(), None, None)
+            .expect("directory read should succeed");
+        assert_eq!(read_output.kind, "directory");
+        assert!(read_output.file.content.contains("file\talpha.txt"));
+        assert!(read_output.file.content.contains("file\tbeta.txt"));
+        assert!(read_output.file.content.contains("directory\tnested/"));
     }
 
     #[test]

@@ -5642,6 +5642,10 @@ fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
 }
 
 fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
+    let kind = parsed
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("text");
     let file = parsed.get("file").unwrap_or(parsed);
     let path = extract_tool_path(file);
     let start_line = file
@@ -5661,9 +5665,15 @@ fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
         .and_then(|value| value.as_str())
         .unwrap_or_default();
     let end_line = start_line.saturating_add(num_lines.saturating_sub(1));
+    let label = if kind == "directory" {
+        "Open"
+    } else {
+        "Read"
+    };
+    let emoji = if kind == "directory" { "📁" } else { "📄" };
 
     format!(
-        "{icon} \x1b[2m📄 Read {path} (lines {}-{} of {})\x1b[0m\n{}",
+        "{icon} \x1b[2m{emoji} {label} {path} (lines {}-{} of {})\x1b[0m\n{}",
         start_line,
         end_line.max(start_line),
         total_lines,

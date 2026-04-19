@@ -480,6 +480,7 @@ fn get_simple_system_section() -> String {
 fn get_simple_doing_tasks_section() -> String {
     let items = prepend_bullets(vec![
         "Read relevant code before changing it and keep changes tightly scoped to the request.".to_string(),
+        "Use `read_file` to open files or directory listings; if you need to locate a target first, combine `glob_search` and `grep_search` before reading.".to_string(),
         "Do not add speculative abstractions, compatibility shims, or unrelated cleanup.".to_string(),
         "Do not create files unless they are required to complete the task.".to_string(),
         "If an approach fails, diagnose the failure before switching tactics.".to_string(),
