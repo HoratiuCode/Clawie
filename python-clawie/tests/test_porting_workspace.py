@@ -5,12 +5,14 @@ import sys
 import unittest
 from uuid import uuid4
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from src.commands import PORTED_COMMANDS
 from src.memory_store import load_workspace_memory
 from src.parity_audit import run_parity_audit
 from src.port_manifest import build_port_manifest
 from src.query_engine import QueryEnginePort
+from src.shrimpi import scan_workspace
 from src.session_store import SessionStoreError, load_session
 from src.tools import PORTED_TOOLS
 
@@ -207,6 +209,51 @@ class PortingWorkspaceTests(unittest.TestCase):
             text=True,
         )
         self.assertIn('Workspace Memory', result.stdout)
+
+    def test_shrimpi_scan_reports_findings(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            src_root = root / 'src'
+            src_root.mkdir()
+            (src_root / 'example.py').write_text(
+                'def bad(value):\n'
+                '    # TODO remove this\n'
+                '    try:\n'
+                '        return value + 1\n'
+                '    except Exception:\n'
+                '        pass\n',
+                encoding='utf-8',
+            )
+            report = scan_workspace(root)
+            self.assertFalse(report.ready_to_ship)
+            self.assertGreaterEqual(len(report.findings), 2)
+            rendered = report.as_markdown()
+            self.assertIn('Before Ship', rendered)
+            self.assertIn('What Found', rendered)
+            self.assertIn('Modifications', rendered)
+
+    def test_shrimpi_cli_runs(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            src_root = root / 'src'
+            src_root.mkdir()
+            (src_root / 'example.py').write_text(
+                'def bad(value):\n'
+                '    # TODO remove this\n'
+                '    try:\n'
+                '        return value + 1\n'
+                '    except Exception:\n'
+                '        pass\n',
+                encoding='utf-8',
+            )
+            result = subprocess.run(
+                [sys.executable, '-m', 'src.main', 'shrimpi', str(root)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('Shrimpi Shipie Notes', result.stdout)
+            self.assertIn('What Found', result.stdout)
 
     def test_load_session_missing_raises_clear_error(self) -> None:
         missing_id = uuid4().hex

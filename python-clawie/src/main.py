@@ -11,6 +11,7 @@ from .parity_audit import run_parity_audit
 from .permissions import ToolPermissionContext
 from .port_manifest import build_port_manifest
 from .query_engine import QueryEnginePort
+from .shrimpi import scan_workspace
 from .remote_runtime import run_remote_mode, run_ssh_mode, run_teleport_mode
 from .runtime import PortRuntime
 from .session_store import SessionStoreError, load_session
@@ -75,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument('session_id')
     resume_parser.add_argument('prompt')
     resume_parser.add_argument('--limit', type=int, default=5)
+
+    shrimpi_parser = subparsers.add_parser('shrimpi', help='scan code before shipping and print cleaner notes')
+    shrimpi_parser.add_argument('target', nargs='?', default='.')
+    shrimpi_parser.add_argument('--limit', type=int, default=20)
 
     remote_parser = subparsers.add_parser('remote-mode', help='simulate remote-control runtime branching')
     remote_parser.add_argument('target')
@@ -203,6 +208,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f'persisted_session_path={path}')
             print(f'memory_notes={len(engine.workspace_memory.notes)}')
             print(f'code_references={len(engine.workspace_memory.code_references)}')
+            return 0
+        if args.command == 'shrimpi':
+            print(scan_workspace(args.target).as_markdown(limit=args.limit))
             return 0
         if args.command == 'remote-mode':
             print(run_remote_mode(args.target).as_text())

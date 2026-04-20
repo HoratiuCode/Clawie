@@ -5,6 +5,7 @@ from .parity_audit import ParityAuditResult, run_parity_audit
 from .memory_store import WorkspaceMemory
 from .port_manifest import PortManifest, build_port_manifest
 from .query_engine import QueryEnginePort, TurnResult
+from .shrimpi import ShrimpiFinding, ShrimpiReport, scan_workspace
 from .runtime import PortRuntime, RuntimeSession
 from .session_store import SessionStoreError, StoredSession, load_session, save_session
 from .system_init import build_system_init_message
@@ -16,6 +17,8 @@ __all__ = [
     'PortRuntime',
     'QueryEnginePort',
     'RuntimeSession',
+    'ShrimpiFinding',
+    'ShrimpiReport',
     'WorkspaceMemory',
     'SessionStoreError',
     'StoredSession',
@@ -28,5 +31,6 @@ __all__ = [
     'build_tool_backlog',
     'load_session',
     'run_parity_audit',
+    'scan_workspace',
     'save_session',
 ]

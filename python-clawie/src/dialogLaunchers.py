@@ -12,4 +12,5 @@ class DialogLauncher:
 DEFAULT_DIALOGS = (
     DialogLauncher('summary', 'Launch the Markdown summary view'),
     DialogLauncher('parity_audit', 'Launch the parity audit view'),
+    DialogLauncher('shrimpi', 'Launch the pre-ship code cleaner view'),
 )

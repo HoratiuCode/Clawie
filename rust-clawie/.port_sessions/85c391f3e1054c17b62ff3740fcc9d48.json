@@ -1,0 +1,19 @@
+{
+  "session_id": "85c391f3e1054c17b62ff3740fcc9d48",
+  "messages": [
+    "review MCP tool",
+    "review MCP tool"
+  ],
+  "input_tokens": 6,
+  "output_tokens": 32,
+  "memory_journal": [
+    "Prompt: review MCP tool",
+    "Matched commands: UltrareviewOverageDialog",
+    "Matched tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool",
+    "Permission denials: 0"
+  ],
+  "code_references": [
+    "rust-clawie/src/query_engine.py",
+    "rust-clawie/src/session_store.py"
+  ]
+}
