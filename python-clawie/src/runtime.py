@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .commands import PORTED_COMMANDS
 from .context import PortContext, build_port_context, render_context
+from .ink import render_smooth_output
 from .history import HistoryLog
 from .models import PermissionDenial, PortingModule
 from .query_engine import QueryEngineConfig, QueryEnginePort, TurnResult
@@ -56,7 +57,7 @@ class RuntimeSession:
             *(f'- {step}' for step in self.setup.startup_steps()),
             '',
             '## System Init',
-            self.system_init_message,
+            render_smooth_output(self.system_init_message),
             '',
             '## Long-Term Memory',
         ]
@@ -89,7 +90,7 @@ class RuntimeSession:
             *(f"- {event['type']}: {event}" for event in self.stream_events),
             '',
             '## Turn Result',
-            self.turn_result.output,
+            render_smooth_output(self.turn_result.output),
             '',
             f'Persisted session path: {self.persisted_session_path}',
             '',

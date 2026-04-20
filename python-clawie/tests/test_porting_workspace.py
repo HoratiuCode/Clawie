@@ -200,6 +200,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         )
         self.assertIn('memory_notes=', result.stdout)
         self.assertIn('code_references=', result.stdout)
+        self.assertIn('```text', result.stdout)
 
     def test_memory_cli_runs(self) -> None:
         result = subprocess.run(
@@ -292,6 +293,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         )
         self.assertIn('## Turn 1', result.stdout)
         self.assertIn('stop_reason=', result.stdout)
+        self.assertIn('```json', result.stdout)
 
     def test_remote_mode_clis_run(self) -> None:
         remote_result = subprocess.run([sys.executable, '-m', 'src.main', 'remote-mode', 'workspace'], check=True, capture_output=True, text=True)

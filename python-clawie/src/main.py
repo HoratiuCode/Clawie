@@ -7,6 +7,7 @@ from .bootstrap_graph import build_bootstrap_graph
 from .command_graph import build_command_graph
 from .commands import execute_command, get_command, get_commands, render_command_index
 from .direct_modes import run_deep_link, run_direct_connect
+from .ink import render_smooth_output
 from .parity_audit import run_parity_audit
 from .permissions import ToolPermissionContext
 from .port_manifest import build_port_manifest
@@ -176,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
             results = PortRuntime().run_turn_loop(args.prompt, limit=args.limit, max_turns=args.max_turns, structured_output=args.structured_output)
             for idx, result in enumerate(results, start=1):
                 print(f'## Turn {idx}')
-                print(result.output)
+                print(render_smooth_output(result.output))
                 print(f'stop_reason={result.stop_reason}')
             return 0
         if args.command == 'flush-transcript':
@@ -203,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
                 matched_tools=tuple(match.name for match in matches if match.kind == 'tool'),
             )
             path = engine.persist_session()
-            print(result.output)
+            print(render_smooth_output(result.output))
             print(f'session_id={engine.session_id}')
             print(f'persisted_session_path={path}')
             print(f'memory_notes={len(engine.workspace_memory.notes)}')
@@ -232,22 +233,22 @@ def main(argv: list[str] | None = None) -> int:
             if module is None:
                 print(f'Command not found: {args.name}')
                 return 1
-            print('\n'.join([module.name, module.source_hint, module.responsibility]))
+            print(render_smooth_output('\n'.join([module.name, module.source_hint, module.responsibility]), language='text'))
             return 0
         if args.command == 'show-tool':
             module = get_tool(args.name)
             if module is None:
                 print(f'Tool not found: {args.name}')
                 return 1
-            print('\n'.join([module.name, module.source_hint, module.responsibility]))
+            print(render_smooth_output('\n'.join([module.name, module.source_hint, module.responsibility]), language='text'))
             return 0
         if args.command == 'exec-command':
             result = execute_command(args.name, args.prompt)
-            print(result.message)
+            print(render_smooth_output(result.message))
             return 0 if result.handled else 1
         if args.command == 'exec-tool':
             result = execute_tool(args.name, args.payload)
-            print(result.message)
+            print(render_smooth_output(result.message))
             return 0 if result.handled else 1
         parser.error(f'unknown command: {args.command}')
         return 2

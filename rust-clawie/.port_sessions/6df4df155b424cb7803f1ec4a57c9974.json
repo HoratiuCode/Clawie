@@ -1,0 +1,18 @@
+{
+  "session_id": "6df4df155b424cb7803f1ec4a57c9974",
+  "messages": [
+    "review MCP tool"
+  ],
+  "input_tokens": 3,
+  "output_tokens": 13,
+  "memory_journal": [
+    "Prompt: review MCP tool",
+    "Matched commands: none",
+    "Matched tools: none",
+    "Permission denials: 0"
+  ],
+  "code_references": [
+    "rust-clawie/src/query_engine.py",
+    "rust-clawie/src/session_store.py"
+  ]
+}
