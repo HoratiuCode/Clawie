@@ -5,7 +5,7 @@ from .parity_audit import ParityAuditResult, run_parity_audit
 from .port_manifest import PortManifest, build_port_manifest
 from .query_engine import QueryEnginePort, TurnResult
 from .runtime import PortRuntime, RuntimeSession
-from .session_store import StoredSession, load_session, save_session
+from .session_store import SessionStoreError, StoredSession, load_session, save_session
 from .system_init import build_system_init_message
 from .tools import PORTED_TOOLS, build_tool_backlog
 
@@ -15,6 +15,7 @@ __all__ = [
     'PortRuntime',
     'QueryEnginePort',
     'RuntimeSession',
+    'SessionStoreError',
     'StoredSession',
     'TurnResult',
     'PORTED_COMMANDS',

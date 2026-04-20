@@ -166,7 +166,9 @@ class QueryEnginePort:
             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive branch
                 last_error = exc
                 payload = {'summary': ['structured output retry'], 'session_id': self.session_id}
-        raise RuntimeError('structured output rendering failed') from last_error
+        raise RuntimeError(
+            f'structured output rendering failed after {self.config.structured_retry_limit} attempts'
+        ) from last_error
 
     def render_summary(self) -> str:
         command_backlog = build_command_backlog()

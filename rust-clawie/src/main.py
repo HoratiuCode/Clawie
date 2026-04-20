@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from .bootstrap_graph import build_bootstrap_graph
 from .command_graph import build_command_graph
@@ -12,7 +13,7 @@ from .port_manifest import build_port_manifest
 from .query_engine import QueryEnginePort
 from .remote_runtime import run_remote_mode, run_ssh_mode, run_teleport_mode
 from .runtime import PortRuntime
-from .session_store import load_session
+from .session_store import SessionStoreError, load_session
 from .setup import run_setup
 from .tool_pool import assemble_tool_pool
 from .tools import execute_tool, get_tool, get_tools, render_tool_index
@@ -93,122 +94,132 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_error(exc: Exception) -> int:
+    print(f'Error: {exc}', file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     manifest = build_port_manifest()
-    if args.command == 'summary':
-        print(QueryEnginePort(manifest).render_summary())
-        return 0
-    if args.command == 'manifest':
-        print(manifest.to_markdown())
-        return 0
-    if args.command == 'parity-audit':
-        print(run_parity_audit().to_markdown())
-        return 0
-    if args.command == 'setup-report':
-        print(run_setup().as_markdown())
-        return 0
-    if args.command == 'command-graph':
-        print(build_command_graph().as_markdown())
-        return 0
-    if args.command == 'tool-pool':
-        print(assemble_tool_pool().as_markdown())
-        return 0
-    if args.command == 'bootstrap-graph':
-        print(build_bootstrap_graph().as_markdown())
-        return 0
-    if args.command == 'subsystems':
-        for subsystem in manifest.top_level_modules[: args.limit]:
-            print(f'{subsystem.name}\t{subsystem.file_count}\t{subsystem.notes}')
-        return 0
-    if args.command == 'commands':
-        if args.query:
-            print(render_command_index(limit=args.limit, query=args.query))
-        else:
-            commands = get_commands(include_plugin_commands=not args.no_plugin_commands, include_skill_commands=not args.no_skill_commands)
-            output_lines = [f'Command entries: {len(commands)}', '']
-            output_lines.extend(f'- {module.name} — {module.source_hint}' for module in commands[: args.limit])
-            print('\n'.join(output_lines))
-        return 0
-    if args.command == 'tools':
-        if args.query:
-            print(render_tool_index(limit=args.limit, query=args.query))
-        else:
-            permission_context = ToolPermissionContext.from_iterables(args.deny_tool, args.deny_prefix)
-            tools = get_tools(simple_mode=args.simple_mode, include_mcp=not args.no_mcp, permission_context=permission_context)
-            output_lines = [f'Tool entries: {len(tools)}', '']
-            output_lines.extend(f'- {module.name} — {module.source_hint}' for module in tools[: args.limit])
-            print('\n'.join(output_lines))
-        return 0
-    if args.command == 'route':
-        matches = PortRuntime().route_prompt(args.prompt, limit=args.limit)
-        if not matches:
-            print('No mirrored command/tool matches found.')
+    try:
+        if args.command == 'summary':
+            print(QueryEnginePort(manifest).render_summary())
             return 0
-        for match in matches:
-            print(f'{match.kind}\t{match.name}\t{match.score}\t{match.source_hint}')
-        return 0
-    if args.command == 'bootstrap':
-        print(PortRuntime().bootstrap_session(args.prompt, limit=args.limit).as_markdown())
-        return 0
-    if args.command == 'turn-loop':
-        results = PortRuntime().run_turn_loop(args.prompt, limit=args.limit, max_turns=args.max_turns, structured_output=args.structured_output)
-        for idx, result in enumerate(results, start=1):
-            print(f'## Turn {idx}')
-            print(result.output)
-            print(f'stop_reason={result.stop_reason}')
-        return 0
-    if args.command == 'flush-transcript':
-        engine = QueryEnginePort.from_workspace()
-        engine.submit_message(args.prompt)
-        path = engine.persist_session()
-        print(path)
-        print(f'flushed={engine.transcript_store.flushed}')
-        return 0
-    if args.command == 'load-session':
-        session = load_session(args.session_id)
-        print(f'{session.session_id}\n{len(session.messages)} messages\nin={session.input_tokens} out={session.output_tokens}')
-        return 0
-    if args.command == 'remote-mode':
-        print(run_remote_mode(args.target).as_text())
-        return 0
-    if args.command == 'ssh-mode':
-        print(run_ssh_mode(args.target).as_text())
-        return 0
-    if args.command == 'teleport-mode':
-        print(run_teleport_mode(args.target).as_text())
-        return 0
-    if args.command == 'direct-connect-mode':
-        print(run_direct_connect(args.target).as_text())
-        return 0
-    if args.command == 'deep-link-mode':
-        print(run_deep_link(args.target).as_text())
-        return 0
-    if args.command == 'show-command':
-        module = get_command(args.name)
-        if module is None:
-            print(f'Command not found: {args.name}')
-            return 1
-        print('\n'.join([module.name, module.source_hint, module.responsibility]))
-        return 0
-    if args.command == 'show-tool':
-        module = get_tool(args.name)
-        if module is None:
-            print(f'Tool not found: {args.name}')
-            return 1
-        print('\n'.join([module.name, module.source_hint, module.responsibility]))
-        return 0
-    if args.command == 'exec-command':
-        result = execute_command(args.name, args.prompt)
-        print(result.message)
-        return 0 if result.handled else 1
-    if args.command == 'exec-tool':
-        result = execute_tool(args.name, args.payload)
-        print(result.message)
-        return 0 if result.handled else 1
-    parser.error(f'unknown command: {args.command}')
-    return 2
+        if args.command == 'manifest':
+            print(manifest.to_markdown())
+            return 0
+        if args.command == 'parity-audit':
+            print(run_parity_audit().to_markdown())
+            return 0
+        if args.command == 'setup-report':
+            print(run_setup().as_markdown())
+            return 0
+        if args.command == 'command-graph':
+            print(build_command_graph().as_markdown())
+            return 0
+        if args.command == 'tool-pool':
+            print(assemble_tool_pool().as_markdown())
+            return 0
+        if args.command == 'bootstrap-graph':
+            print(build_bootstrap_graph().as_markdown())
+            return 0
+        if args.command == 'subsystems':
+            for subsystem in manifest.top_level_modules[: args.limit]:
+                print(f'{subsystem.name}\t{subsystem.file_count}\t{subsystem.notes}')
+            return 0
+        if args.command == 'commands':
+            if args.query:
+                print(render_command_index(limit=args.limit, query=args.query))
+            else:
+                commands = get_commands(include_plugin_commands=not args.no_plugin_commands, include_skill_commands=not args.no_skill_commands)
+                output_lines = [f'Command entries: {len(commands)}', '']
+                output_lines.extend(f'- {module.name} — {module.source_hint}' for module in commands[: args.limit])
+                print('\n'.join(output_lines))
+            return 0
+        if args.command == 'tools':
+            if args.query:
+                print(render_tool_index(limit=args.limit, query=args.query))
+            else:
+                permission_context = ToolPermissionContext.from_iterables(args.deny_tool, args.deny_prefix)
+                tools = get_tools(simple_mode=args.simple_mode, include_mcp=not args.no_mcp, permission_context=permission_context)
+                output_lines = [f'Tool entries: {len(tools)}', '']
+                output_lines.extend(f'- {module.name} — {module.source_hint}' for module in tools[: args.limit])
+                print('\n'.join(output_lines))
+            return 0
+        if args.command == 'route':
+            matches = PortRuntime().route_prompt(args.prompt, limit=args.limit)
+            if not matches:
+                print('No mirrored command/tool matches found.')
+                return 0
+            for match in matches:
+                print(f'{match.kind}\t{match.name}\t{match.score}\t{match.source_hint}')
+            return 0
+        if args.command == 'bootstrap':
+            print(PortRuntime().bootstrap_session(args.prompt, limit=args.limit).as_markdown())
+            return 0
+        if args.command == 'turn-loop':
+            results = PortRuntime().run_turn_loop(args.prompt, limit=args.limit, max_turns=args.max_turns, structured_output=args.structured_output)
+            for idx, result in enumerate(results, start=1):
+                print(f'## Turn {idx}')
+                print(result.output)
+                print(f'stop_reason={result.stop_reason}')
+            return 0
+        if args.command == 'flush-transcript':
+            engine = QueryEnginePort.from_workspace()
+            engine.submit_message(args.prompt)
+            path = engine.persist_session()
+            print(path)
+            print(f'flushed={engine.transcript_store.flushed}')
+            return 0
+        if args.command == 'load-session':
+            session = load_session(args.session_id)
+            print(f'{session.session_id}\n{len(session.messages)} messages\nin={session.input_tokens} out={session.output_tokens}')
+            return 0
+        if args.command == 'remote-mode':
+            print(run_remote_mode(args.target).as_text())
+            return 0
+        if args.command == 'ssh-mode':
+            print(run_ssh_mode(args.target).as_text())
+            return 0
+        if args.command == 'teleport-mode':
+            print(run_teleport_mode(args.target).as_text())
+            return 0
+        if args.command == 'direct-connect-mode':
+            print(run_direct_connect(args.target).as_text())
+            return 0
+        if args.command == 'deep-link-mode':
+            print(run_deep_link(args.target).as_text())
+            return 0
+        if args.command == 'show-command':
+            module = get_command(args.name)
+            if module is None:
+                print(f'Command not found: {args.name}')
+                return 1
+            print('\n'.join([module.name, module.source_hint, module.responsibility]))
+            return 0
+        if args.command == 'show-tool':
+            module = get_tool(args.name)
+            if module is None:
+                print(f'Tool not found: {args.name}')
+                return 1
+            print('\n'.join([module.name, module.source_hint, module.responsibility]))
+            return 0
+        if args.command == 'exec-command':
+            result = execute_command(args.name, args.prompt)
+            print(result.message)
+            return 0 if result.handled else 1
+        if args.command == 'exec-tool':
+            result = execute_tool(args.name, args.payload)
+            print(result.message)
+            return 0 if result.handled else 1
+        parser.error(f'unknown command: {args.command}')
+        return 2
+    except SessionStoreError as exc:
+        return _print_error(exc)
+    except Exception as exc:
+        return _print_error(exc)
 
 
 if __name__ == '__main__':

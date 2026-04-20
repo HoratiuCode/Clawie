@@ -3,12 +3,14 @@ from __future__ import annotations
 import subprocess
 import sys
 import unittest
+from uuid import uuid4
 from pathlib import Path
 
 from src.commands import PORTED_COMMANDS
 from src.parity_audit import run_parity_audit
 from src.port_manifest import build_port_manifest
 from src.query_engine import QueryEnginePort
+from src.session_store import SessionStoreError, load_session
 from src.tools import PORTED_TOOLS
 
 
@@ -172,6 +174,24 @@ class PortingWorkspaceTests(unittest.TestCase):
         )
         self.assertIn(session_id, result.stdout)
         self.assertIn('messages', result.stdout)
+
+    def test_load_session_missing_raises_clear_error(self) -> None:
+        missing_id = uuid4().hex
+        with self.assertRaises(SessionStoreError) as context:
+            load_session(missing_id)
+        self.assertIn('was not found', str(context.exception))
+
+    def test_load_session_missing_cli_reports_clear_error(self) -> None:
+        missing_id = uuid4().hex
+        result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'load-session', missing_id],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Error:', result.stderr)
+        self.assertIn('was not found', result.stderr)
 
     def test_tool_permission_filtering_cli_runs(self) -> None:
         result = subprocess.run(
