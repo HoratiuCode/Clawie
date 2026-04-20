@@ -2,6 +2,7 @@
 
 from .commands import PORTED_COMMANDS, build_command_backlog
 from .parity_audit import ParityAuditResult, run_parity_audit
+from .memory_store import WorkspaceMemory
 from .port_manifest import PortManifest, build_port_manifest
 from .query_engine import QueryEnginePort, TurnResult
 from .runtime import PortRuntime, RuntimeSession
@@ -15,6 +16,7 @@ __all__ = [
     'PortRuntime',
     'QueryEnginePort',
     'RuntimeSession',
+    'WorkspaceMemory',
     'SessionStoreError',
     'StoredSession',
     'TurnResult',

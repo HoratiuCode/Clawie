@@ -1,6 +1,7 @@
 """Python workspace for Clawie by ShrimpAI, from the Jameclaw project lineage."""
 
 from .commands import PORTED_COMMANDS, build_command_backlog
+from .memory_store import WorkspaceMemory
 from .parity_audit import ParityAuditResult, run_parity_audit
 from .port_manifest import PortManifest, build_port_manifest
 from .query_engine import QueryEnginePort, TurnResult
@@ -15,6 +16,7 @@ __all__ = [
     'PortRuntime',
     'QueryEnginePort',
     'RuntimeSession',
+    'WorkspaceMemory',
     'SessionStoreError',
     'StoredSession',
     'TurnResult',

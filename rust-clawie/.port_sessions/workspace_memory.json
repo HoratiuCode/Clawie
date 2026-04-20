@@ -1,0 +1,34 @@
+{
+  "notes": [
+    "Prompt: review MCP tool | Matched commands: UltrareviewOverageDialog | Matched tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool |...",
+    "review MCP tool",
+    "Prompt: review MCP tool\nMatched commands: UltrareviewOverageDialog\nMatched tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool\nPermission denials: 0",
+    "UltrareviewOverageDialog",
+    "ListMcpResourcesTool",
+    "MCPTool",
+    "McpAuthTool",
+    "ReadMcpResourceTool",
+    "Prompt: review MCP tool | Matched commands: none | Matched tools: none | Permission denials: 0",
+    "Prompt: review MCP tool\nMatched commands: none\nMatched tools: none\nPermission denials: 0",
+    "Prompt: review rust-clawie/src/query_engine.py and rust-clawie/src/session_store.py | Matched commands: none | Matched tools: none | Permission denials:...",
+    "review rust-clawie/src/query_engine.py and rust-clawie/src/session_store.py",
+    "Prompt: review rust-clawie/src/query_engine.py and rust-clawie/src/session_store.py\nMatched commands: none\nMatched tools: none\nPermission denials: 0",
+    "Prompt: continue reviewing the same code paths | Matched commands: theme, theme | Matched tools: SyntheticOutputTool...",
+    "continue reviewing the same code paths",
+    "Prompt: continue reviewing the same code paths Matched commands: theme, theme Matched tools: SyntheticOutputTool Permission denials:...",
+    "theme",
+    "SyntheticOutputTool"
+  ],
+  "code_references": [
+    "rust-clawie/src/query_engine.py",
+    "rust-clawie/src/session_store.py"
+  ],
+  "session_ids": [
+    "83e8813003ac4a2cb1ea5da66a01fe16",
+    "c59475c8b77d4884bbb392d1d538a290",
+    "c760e4a537e0464aa1c0f09173c2b04c",
+    "aa085257e4684c71bed590d582151523",
+    "15bc6944adcc4647b7d838fd35d82ed7",
+    "5a085201cfa34152bd0f5db8a01c54d4"
+  ]
+}

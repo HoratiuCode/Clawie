@@ -27,6 +27,8 @@ class RuntimeSession:
     context: PortContext
     setup: WorkspaceSetup
     setup_report: SetupReport
+    memory_notes: tuple[str, ...]
+    memory_code_references: tuple[str, ...]
     system_init_message: str
     history: HistoryLog
     routed_matches: list[RoutedMatch]
@@ -56,8 +58,18 @@ class RuntimeSession:
             '## System Init',
             self.system_init_message,
             '',
-            '## Routed Matches',
+            '## Long-Term Memory',
         ]
+        if self.memory_notes:
+            lines.extend(self.memory_notes)
+        else:
+            lines.append('- none')
+        if self.memory_code_references:
+            lines.extend(f'- code ref: {reference}' for reference in self.memory_code_references)
+        lines.extend([
+            '',
+            '## Routed Matches',
+        ])
         if self.routed_matches:
             lines.extend(
                 f'- [{match.kind}] {match.name} ({match.score}) — {match.source_hint}'
@@ -135,12 +147,15 @@ class PortRuntime:
         history.add('routing', f'matches={len(matches)} for prompt={prompt!r}')
         history.add('execution', f'command_execs={len(command_execs)} tool_execs={len(tool_execs)}')
         history.add('turn', f'commands={len(turn_result.matched_commands)} tools={len(turn_result.matched_tools)} denials={len(turn_result.permission_denials)} stop={turn_result.stop_reason}')
+        history.add('memory', f'notes={len(engine.workspace_memory.notes)} code_refs={len(engine.workspace_memory.code_references)}')
         history.add('session_store', persisted_session_path)
         return RuntimeSession(
             prompt=prompt,
             context=context,
             setup=setup,
             setup_report=setup_report,
+            memory_notes=engine.workspace_memory.notes[-5:],
+            memory_code_references=engine.workspace_memory.code_references[-5:],
             system_init_message=build_system_init_message(trusted=True),
             history=history,
             routed_matches=matches,

@@ -1,0 +1,16 @@
+{
+  "session_id": "c59475c8b77d4884bbb392d1d538a290",
+  "messages": [
+    "review MCP tool",
+    "review MCP tool"
+  ],
+  "input_tokens": 6,
+  "output_tokens": 32,
+  "memory_journal": [
+    "Prompt: review MCP tool",
+    "Matched commands: UltrareviewOverageDialog",
+    "Matched tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool",
+    "Permission denials: 0"
+  ],
+  "code_references": []
+}

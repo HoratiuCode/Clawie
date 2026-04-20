@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from .commands import build_command_backlog
+from .memory_store import WorkspaceMemory, load_workspace_memory, merge_workspace_memory, save_workspace_memory
 from .models import PermissionDenial, UsageSummary
 from .port_manifest import PortManifest, build_port_manifest
 from .session_store import StoredSession, load_session, save_session
@@ -41,6 +42,7 @@ class QueryEnginePort:
     permission_denials: list[PermissionDenial] = field(default_factory=list)
     total_usage: UsageSummary = field(default_factory=UsageSummary)
     transcript_store: TranscriptStore = field(default_factory=TranscriptStore)
+    workspace_memory: WorkspaceMemory = field(default_factory=load_workspace_memory)
 
     @classmethod
     def from_workspace(cls) -> 'QueryEnginePort':
@@ -49,13 +51,18 @@ class QueryEnginePort:
     @classmethod
     def from_saved_session(cls, session_id: str) -> 'QueryEnginePort':
         stored = load_session(session_id)
-        transcript = TranscriptStore(entries=list(stored.messages), flushed=True)
+        transcript = TranscriptStore(
+            entries=list(stored.messages),
+            memory_journal=list(stored.memory_journal),
+            flushed=True,
+        )
         return cls(
             manifest=build_port_manifest(),
             session_id=stored.session_id,
             mutable_messages=list(stored.messages),
             total_usage=UsageSummary(stored.input_tokens, stored.output_tokens),
             transcript_store=transcript,
+            workspace_memory=load_workspace_memory(),
         )
 
     def submit_message(
@@ -90,6 +97,13 @@ class QueryEnginePort:
             stop_reason = 'max_budget_reached'
         self.mutable_messages.append(prompt)
         self.transcript_store.append(prompt)
+        self.transcript_store.remember(*summary_lines)
+        self.workspace_memory = merge_workspace_memory(
+            self.workspace_memory,
+            self.session_id,
+            summary_lines,
+            (prompt, output, *matched_commands, *matched_tools),
+        )
         self.permission_denials.extend(denied_tools)
         self.total_usage = projected_usage
         self.compact_messages_if_needed()
@@ -145,8 +159,11 @@ class QueryEnginePort:
                 messages=tuple(self.mutable_messages),
                 input_tokens=self.total_usage.input_tokens,
                 output_tokens=self.total_usage.output_tokens,
+                memory_journal=tuple(self.transcript_store.memory_journal),
+                code_references=self.workspace_memory.code_references,
             )
         )
+        save_workspace_memory(self.workspace_memory)
         return str(path)
 
     def _format_output(self, summary_lines: list[str]) -> str:
@@ -188,8 +205,19 @@ class QueryEnginePort:
             f'Conversation turns stored: {len(self.mutable_messages)}',
             f'Permission denials tracked: {len(self.permission_denials)}',
             f'Usage totals: in={self.total_usage.input_tokens} out={self.total_usage.output_tokens}',
+            f'Workspace memory notes: {len(self.workspace_memory.notes)}',
+            f'Workspace code references: {len(self.workspace_memory.code_references)}',
             f'Max turns: {self.config.max_turns}',
             f'Max budget tokens: {self.config.max_budget_tokens}',
             f'Transcript flushed: {self.transcript_store.flushed}',
         ]
+        if self.workspace_memory.notes:
+            sections.extend(['', 'Recent memory notes:'])
+            sections.extend(self.workspace_memory.notes[-5:])
+        if self.workspace_memory.code_references:
+            sections.extend(['', 'Recent code references:'])
+            sections.extend(self.workspace_memory.code_references[-5:])
         return '\n'.join(sections)
+
+    def render_memory_snapshot(self) -> str:
+        return self.workspace_memory.as_markdown()

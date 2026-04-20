@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -11,6 +12,8 @@ class StoredSession:
     messages: tuple[str, ...]
     input_tokens: int
     output_tokens: int
+    memory_journal: tuple[str, ...] = ()
+    code_references: tuple[str, ...] = ()
 
 
 class SessionStoreError(RuntimeError):
@@ -52,9 +55,19 @@ def load_session(session_id: str, directory: Path | None = None) -> StoredSessio
         stored_session_id = data['session_id']
     except KeyError as exc:
         raise SessionStoreError(f"Session '{session_id}' is missing required field: {exc.args[0]}") from exc
+    memory_journal = _coerce_string_tuple(data.get('memory_journal', ()))
+    code_references = _coerce_string_tuple(data.get('code_references', ()))
     return StoredSession(
         session_id=stored_session_id,
         messages=messages,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        memory_journal=memory_journal,
+        code_references=code_references,
     )
+
+
+def _coerce_string_tuple(value: object) -> tuple[str, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(str(item) for item in value)
+    return ()

@@ -68,6 +68,14 @@ def build_parser() -> argparse.ArgumentParser:
     load_session_parser = subparsers.add_parser('load-session', help='load a previously persisted session')
     load_session_parser.add_argument('session_id')
 
+    memory_parser = subparsers.add_parser('memory', help='show the long-term workspace memory snapshot')
+    memory_parser.add_argument('--limit', type=int, default=10)
+
+    resume_parser = subparsers.add_parser('resume-session', help='resume a saved session with a new prompt')
+    resume_parser.add_argument('session_id')
+    resume_parser.add_argument('prompt')
+    resume_parser.add_argument('--limit', type=int, default=5)
+
     remote_parser = subparsers.add_parser('remote-mode', help='simulate remote-control runtime branching')
     remote_parser.add_argument('target')
     ssh_parser = subparsers.add_parser('ssh-mode', help='simulate SSH runtime branching')
@@ -176,6 +184,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == 'load-session':
             session = load_session(args.session_id)
             print(f'{session.session_id}\n{len(session.messages)} messages\nin={session.input_tokens} out={session.output_tokens}')
+            return 0
+        if args.command == 'memory':
+            print(QueryEnginePort.from_workspace().render_memory_snapshot())
+            return 0
+        if args.command == 'resume-session':
+            runtime = PortRuntime()
+            engine = QueryEnginePort.from_saved_session(args.session_id)
+            matches = runtime.route_prompt(args.prompt, limit=args.limit)
+            result = engine.submit_message(
+                args.prompt,
+                matched_commands=tuple(match.name for match in matches if match.kind == 'command'),
+                matched_tools=tuple(match.name for match in matches if match.kind == 'tool'),
+            )
+            path = engine.persist_session()
+            print(result.output)
+            print(f'session_id={engine.session_id}')
+            print(f'persisted_session_path={path}')
+            print(f'memory_notes={len(engine.workspace_memory.notes)}')
+            print(f'code_references={len(engine.workspace_memory.code_references)}')
             return 0
         if args.command == 'remote-mode':
             print(run_remote_mode(args.target).as_text())

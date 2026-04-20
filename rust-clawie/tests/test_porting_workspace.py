@@ -7,6 +7,7 @@ from uuid import uuid4
 from pathlib import Path
 
 from src.commands import PORTED_COMMANDS
+from src.memory_store import load_workspace_memory
 from src.parity_audit import run_parity_audit
 from src.port_manifest import build_port_manifest
 from src.query_engine import QueryEnginePort
@@ -174,6 +175,38 @@ class PortingWorkspaceTests(unittest.TestCase):
         )
         self.assertIn(session_id, result.stdout)
         self.assertIn('messages', result.stdout)
+
+    def test_memory_snapshot_grows_after_bootstrap(self) -> None:
+        before = load_workspace_memory()
+        engine = QueryEnginePort.from_workspace()
+        engine.submit_message('review rust-clawie/src/query_engine.py and rust-clawie/src/session_store.py')
+        engine.persist_session()
+        after = load_workspace_memory()
+        self.assertGreaterEqual(len(after.notes), len(before.notes))
+        self.assertGreater(len(after.code_references), 0)
+
+    def test_resume_session_cli_runs(self) -> None:
+        from src.runtime import PortRuntime
+
+        session = PortRuntime().bootstrap_session('review MCP tool', limit=5)
+        session_id = Path(session.persisted_session_path).stem
+        result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'resume-session', session_id, 'continue reviewing the same code paths'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('memory_notes=', result.stdout)
+        self.assertIn('code_references=', result.stdout)
+
+    def test_memory_cli_runs(self) -> None:
+        result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'memory'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('Workspace Memory', result.stdout)
 
     def test_load_session_missing_raises_clear_error(self) -> None:
         missing_id = uuid4().hex
