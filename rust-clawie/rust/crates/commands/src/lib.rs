@@ -543,20 +543,6 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: false,
     },
     SlashCommandSpec {
-        name: "approve",
-        aliases: &["yes", "y"],
-        summary: "Approve a pending tool execution",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "deny",
-        aliases: &["no", "n"],
-        summary: "Deny a pending tool execution",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
         name: "undo",
         aliases: &[],
         summary: "Undo the last file write or edit",
@@ -3937,7 +3923,7 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|add <name> :: <instructions>|help]"));
-        assert_eq!(slash_command_specs().len(), 142);
+        assert_eq!(slash_command_specs().len(), 140);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 
