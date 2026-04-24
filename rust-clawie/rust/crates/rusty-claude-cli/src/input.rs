@@ -35,6 +35,28 @@ struct SlashMenuItem {
 
 static SLASH_MENU_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+pub fn prompt_prefix() -> &'static str {
+    "🦐 clawie › "
+}
+
+pub fn render_prompt_banner() -> String {
+    let rows = [
+        "🦐 Clawie Composer".to_string(),
+        format!("Prompt          {}", prompt_prefix()),
+        "Tab             opens the slash menu".to_string(),
+        "Shift+Enter     inserts a newline".to_string(),
+        "Ctrl+J          inserts a newline".to_string(),
+    ];
+    let width = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0);
+    let border = "─".repeat(width + 2);
+
+    let mut lines = Vec::with_capacity(rows.len() + 2);
+    lines.push(format!("╭{}╮", border));
+    lines.extend(rows.into_iter().map(|row| format!("│ {:<width$} │", row, width = width)));
+    lines.push(format!("╰{}╯", border));
+    lines.join("\n")
+}
+
 struct SlashCommandHelper {
     completions: Vec<String>,
     current_line: RefCell<String>,
@@ -123,7 +145,7 @@ impl ConditionalEventHandler for SlashTabMenuEventHandler {
         _positive: bool,
         ctx: &EventContext,
     ) -> Option<Cmd> {
-        if slash_command_prefix(ctx.line(), ctx.pos()).is_some() {
+        if (ctx.line().is_empty() && ctx.pos() == 0) || slash_command_prefix(ctx.line(), ctx.pos()).is_some() {
             SLASH_MENU_REQUESTED.store(true, Ordering::Relaxed);
             Some(Cmd::Interrupt)
         } else {
@@ -291,9 +313,31 @@ impl LineEditor {
             let mut offset = 0usize;
             let window_size = 8usize;
             let mut previous_lines = 0usize;
+            let title = if items.first().is_some_and(|item| item.value.starts_with("/model")) {
+                "🦐 Model Picker"
+            } else {
+                "🌶 Slash Menu"
+            };
             loop {
                 let visible_end = items.len().min(offset + window_size);
                 let visible = &items[offset..visible_end];
+                let subtitle = if title == "🦐 Model Picker" {
+                    "Choose a model and press Enter"
+                } else {
+                    "Type a slash command and press Enter"
+                };
+                let footer = "↑↓ move · Enter select · Esc cancel";
+                let item_width = visible
+                    .iter()
+                    .map(|item| item.label.chars().count() + 2)
+                    .max()
+                    .unwrap_or(0);
+                let inner_width = title
+                    .chars()
+                    .count()
+                    .max(subtitle.chars().count())
+                    .max(footer.chars().count())
+                    .max(item_width);
 
                 if previous_lines > 0 {
                     execute!(stdout, MoveUp(previous_lines as u16))?;
@@ -304,18 +348,43 @@ impl LineEditor {
                     Clear(ClearType::FromCursorDown)
                 )?;
 
+                execute!(
+                    stdout,
+                    SetForegroundColor(Color::Red),
+                    Print(format!("╭{}╮\r\n", "─".repeat(inner_width + 2))),
+                    Print(format!("│ {:<width$} │\r\n", title, width = inner_width)),
+                    ResetColor,
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(format!("│ {:<width$} │\r\n", subtitle, width = inner_width)),
+                    ResetColor
+                )?;
+
                 for (index, item) in visible.iter().enumerate() {
                     let actual_index = offset + index;
                     let is_selected = actual_index == selected;
-                    execute!(stdout, Print("  ["))?;
+                    execute!(stdout, Print("│ "))?;
                     if is_selected {
                         execute!(stdout, SetForegroundColor(Color::Green), Print("●"), ResetColor)?;
                     } else {
                         execute!(stdout, Print(" "))?;
                     }
-                    execute!(stdout, Print("] "), Print(&item.label), Print("\r\n"))?;
+                    execute!(
+                        stdout,
+                        Print(" "),
+                        Print(format!("{:<width$}", item.label, width = inner_width.saturating_sub(2))),
+                        Print(" │\r\n")
+                    )?;
                 }
-                previous_lines = visible.len();
+
+                execute!(
+                    stdout,
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(format!("│ {:<width$} │\r\n", footer, width = inner_width)),
+                    Print(format!("╰{}╯\r\n", "─".repeat(inner_width + 2))),
+                    ResetColor
+                )?;
+
+                previous_lines = visible.len() + 5;
                 stdout.flush()?;
 
                 let event = read()?;
@@ -463,8 +532,8 @@ fn format_model_picker_label(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_model_picker_label, slash_command_prefix, LineEditor, SlashCommandHelper,
-        SlashMenuItem,
+        format_model_picker_label, prompt_prefix, render_prompt_banner, slash_command_prefix,
+        LineEditor, SlashCommandHelper, SlashMenuItem,
     };
     use rustyline::completion::Completer;
     use rustyline::highlight::Highlighter;
@@ -623,5 +692,19 @@ mod tests {
         assert_eq!(format_model_picker_label("gpt-4.1"), "OpenAI     gpt-4.1");
         assert_eq!(format_model_picker_label("grok-3"), "xAI        grok-3");
         assert_eq!(format_model_picker_label("custom-model"), "Custom     custom-model");
+    }
+
+    #[test]
+    fn prompt_prefix_keeps_clawie_branding() {
+        assert!(prompt_prefix().contains("claw"));
+        assert!(prompt_prefix().contains("🦐"));
+    }
+
+    #[test]
+    fn prompt_banner_surfaces_composer_shortcuts() {
+        let banner = render_prompt_banner();
+        assert!(banner.contains("Clawie Composer"));
+        assert!(banner.contains("Tab"));
+        assert!(banner.contains("Shift+Enter"));
     }
 }

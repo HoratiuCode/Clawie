@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 use crate::args::{OutputFormat, PermissionMode};
-use crate::input::{LineEditor, ReadOutcome};
+use crate::input::{LineEditor, ReadOutcome, prompt_prefix, render_prompt_banner};
 use crate::render::{Spinner, TerminalRenderer};
 use runtime::{
     format_usd, glob_search, pricing_for_model, ConfigLoader, ConversationClient,
@@ -194,9 +194,10 @@ impl CliApp {
     }
 
     pub fn run_repl(&mut self) -> io::Result<()> {
-        let mut editor = LineEditor::new("› ", Vec::new());
+        let mut editor = LineEditor::new(prompt_prefix(), Vec::new());
         println!("Rusty Claude CLI interactive mode");
         println!("Type /help for commands. Shift+Enter or Ctrl+J inserts a newline.");
+        println!("{}", render_prompt_banner());
 
         loop {
             match editor.read_line()? {

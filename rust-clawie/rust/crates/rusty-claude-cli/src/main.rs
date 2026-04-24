@@ -1879,8 +1879,10 @@ fn run_repl(
     permission_mode: PermissionMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
-    let mut editor =
-        input::LineEditor::new("> ", cli.repl_completion_candidates().unwrap_or_default());
+    let mut editor = input::LineEditor::new(
+        input::prompt_prefix(),
+        cli.repl_completion_candidates().unwrap_or_default(),
+    );
     println!("{}", cli.startup_banner());
 
     loop {
@@ -2545,7 +2547,8 @@ impl LiveCli {
 {top_border}\n\
 {middle}\n\
 {bottom_border}\n\n\
-Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline",
+Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline\n\n{prompt_banner}",
+            prompt_banner = input::render_prompt_banner(),
         )
     }
 
