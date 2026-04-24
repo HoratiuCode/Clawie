@@ -179,7 +179,10 @@ fn resume_latest_restores_the_most_recent_managed_session() {
     // given
     let temp_dir = unique_temp_dir("resume-latest");
     let project_dir = temp_dir.join("project");
-    let sessions_dir = project_dir.join(".claw").join("sessions");
+    let claw_home = temp_dir.join("home").join(".claw");
+    let sessions_dir = claw_home.join("sessions");
+    fs::create_dir_all(&project_dir).expect("project dir should exist");
+    fs::create_dir_all(&claw_home).expect("claw home should exist");
     fs::create_dir_all(&sessions_dir).expect("sessions dir should exist");
 
     let older_path = sessions_dir.join("session-older.jsonl");
@@ -205,7 +208,11 @@ fn resume_latest_restores_the_most_recent_managed_session() {
         .expect("newer session should persist");
 
     // when
-    let output = run_claw(&project_dir, &["--resume", "latest", "/status"]);
+    let output = run_claw_with_env(
+        &project_dir,
+        &["--resume", "latest", "/status"],
+        &[("CLAW_CONFIG_HOME", claw_home.to_str().expect("utf8 path"))],
+    );
 
     // then
     assert!(

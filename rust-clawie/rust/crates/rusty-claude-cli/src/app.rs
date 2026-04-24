@@ -500,7 +500,7 @@ impl CliApp {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| String::from("<unknown>"));
-        let session_path = cwd.join(".claw/sessions");
+        let session_path = claw_home_dir().join("sessions");
         let auto_save = self
             .config
             .config
@@ -811,6 +811,13 @@ impl CliApp {
         }
         Ok(())
     }
+}
+
+fn claw_home_dir() -> PathBuf {
+    env::var_os("CLAW_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".claw")))
+        .unwrap_or_else(|| PathBuf::from(".claw"))
 }
 
 #[cfg(test)]

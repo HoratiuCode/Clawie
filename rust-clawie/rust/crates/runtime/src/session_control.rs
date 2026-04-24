@@ -75,7 +75,7 @@ impl From<SessionError> for SessionControlError {
 }
 
 pub fn sessions_dir() -> Result<PathBuf, SessionControlError> {
-    managed_sessions_dir_for(env::current_dir()?)
+    Ok(managed_sessions_home_dir()?.join("sessions"))
 }
 
 pub fn managed_sessions_dir_for(
@@ -89,7 +89,9 @@ pub fn managed_sessions_dir_for(
 pub fn create_managed_session_handle(
     session_id: &str,
 ) -> Result<SessionHandle, SessionControlError> {
-    create_managed_session_handle_for(env::current_dir()?, session_id)
+    let id = session_id.to_string();
+    let path = sessions_dir()?.join(format!("{id}.{PRIMARY_SESSION_EXTENSION}"));
+    Ok(SessionHandle { id, path })
 }
 
 pub fn create_managed_session_handle_for(
@@ -143,7 +145,16 @@ pub fn resolve_session_reference_for(
 }
 
 pub fn resolve_managed_session_path(session_id: &str) -> Result<PathBuf, SessionControlError> {
-    resolve_managed_session_path_for(env::current_dir()?, session_id)
+    let directory = sessions_dir()?;
+    for extension in [PRIMARY_SESSION_EXTENSION, LEGACY_SESSION_EXTENSION] {
+        let path = directory.join(format!("{session_id}.{extension}"));
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    Err(SessionControlError::Format(
+        format_missing_session_reference(session_id),
+    ))
 }
 
 pub fn resolve_managed_session_path_for(
@@ -172,7 +183,64 @@ pub fn is_managed_session_file(path: &Path) -> bool {
 }
 
 pub fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, SessionControlError> {
-    list_managed_sessions_for(env::current_dir()?)
+    let mut sessions = Vec::new();
+    for entry in fs::read_dir(sessions_dir()?)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !is_managed_session_file(&path) {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        let modified_epoch_millis = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        let (id, message_count, parent_session_id, branch_name) =
+            match Session::load_from_path(&path) {
+                Ok(session) => {
+                    let parent_session_id = session
+                        .fork
+                        .as_ref()
+                        .map(|fork| fork.parent_session_id.clone());
+                    let branch_name = session
+                        .fork
+                        .as_ref()
+                        .and_then(|fork| fork.branch_name.clone());
+                    (
+                        session.session_id,
+                        session.messages.len(),
+                        parent_session_id,
+                        branch_name,
+                    )
+                }
+                Err(_) => (
+                    path.file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    0,
+                    None,
+                    None,
+                ),
+            };
+        sessions.push(ManagedSessionSummary {
+            id,
+            path,
+            modified_epoch_millis,
+            message_count,
+            parent_session_id,
+            branch_name,
+        });
+    }
+    sessions.sort_by(|left, right| {
+        right
+            .modified_epoch_millis
+            .cmp(&left.modified_epoch_millis)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    Ok(sessions)
 }
 
 pub fn list_managed_sessions_for(
@@ -318,14 +386,23 @@ fn session_id_from_path(path: &Path) -> Option<String> {
 
 fn format_missing_session_reference(reference: &str) -> String {
     format!(
-        "session not found: {reference}\nHint: managed sessions live in .claw/sessions/. Try `{LATEST_SESSION_REFERENCE}` for the most recent session or `/session list` in the REPL."
+        "session not found: {reference}\nHint: managed sessions live in your Claw home directory (`~/.claw/sessions` by default). Try `{LATEST_SESSION_REFERENCE}` for the most recent session or `/session list` in the REPL."
     )
 }
 
 fn format_no_managed_sessions() -> String {
     format!(
-        "no managed sessions found in .claw/sessions/\nStart `claw` to create a session, then rerun with `--resume {LATEST_SESSION_REFERENCE}`."
+        "no managed sessions found in your Claw home directory (`~/.claw/sessions` by default)\nStart `claw` to create a session, then rerun with `--resume {LATEST_SESSION_REFERENCE}`."
     )
+}
+
+fn managed_sessions_home_dir() -> Result<PathBuf, SessionControlError> {
+    if let Some(path) = env::var_os("CLAW_CONFIG_HOME") {
+        return Ok(PathBuf::from(path));
+    }
+    let home = env::var_os("HOME")
+        .ok_or_else(|| SessionControlError::Format("HOME is not set".to_string()))?;
+    Ok(PathBuf::from(home).join(".claw"))
 }
 
 #[cfg(test)]
