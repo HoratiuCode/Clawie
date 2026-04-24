@@ -2620,6 +2620,7 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
         }
         let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
+        let mut reply_header_written = false;
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
@@ -2638,8 +2639,12 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
                 let visible_reply = final_assistant_text_or_fallback(input, &summary);
                 if !visible_reply.trim().is_empty() && final_assistant_text(&summary).trim().is_empty()
                 {
-                    let rendered_reply = TerminalRenderer::new().vertical_markdown_to_ansi(&visible_reply);
-                    println!("{rendered_reply}");
+                    write_structured_reply(
+                        &mut stdout,
+                        &TerminalRenderer::new(),
+                        &visible_reply,
+                        &mut reply_header_written,
+                    )?;
                 }
                 if contains_fenced_code(&visible_reply) {
                     println!("Copy code with /copy code");
@@ -5102,6 +5107,7 @@ impl ApiClient for AnthropicRuntimeClient {
             let mut events = Vec::new();
             let mut pending_tool: Option<(String, String, String)> = None;
             let mut saw_stop = false;
+            let mut reply_header_written = false;
 
             while let Some(event) = stream
                 .next_event()
@@ -5143,10 +5149,14 @@ impl ApiClient for AnthropicRuntimeClient {
                     },
                     ApiStreamEvent::ContentBlockStop(_) => {
                         if !assistant_text.trim().is_empty() {
-                            let rendered = renderer.vertical_markdown_to_ansi(assistant_text.trim());
-                            write!(out, "{rendered}")
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            write_structured_reply(
+                                out,
+                                &renderer,
+                                &assistant_text,
+                                &mut reply_header_written,
+                            )
+                            .and_then(|()| out.flush())
+                            .map_err(|error| RuntimeError::new(error.to_string()))?;
                             assistant_text.clear();
                         }
                         if let Some((id, name, input)) = pending_tool.take() {
@@ -5166,10 +5176,14 @@ impl ApiClient for AnthropicRuntimeClient {
                     ApiStreamEvent::MessageStop(_) => {
                         saw_stop = true;
                         if !assistant_text.trim().is_empty() {
-                            let rendered = renderer.vertical_markdown_to_ansi(assistant_text.trim());
-                            write!(out, "{rendered}")
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            write_structured_reply(
+                                out,
+                                &renderer,
+                                &assistant_text,
+                                &mut reply_header_written,
+                            )
+                            .and_then(|()| out.flush())
+                            .map_err(|error| RuntimeError::new(error.to_string()))?;
                             assistant_text.clear();
                         }
                         events.push(AssistantEvent::MessageStop);
@@ -5226,6 +5240,25 @@ fn final_assistant_text(summary: &runtime::TurnSummary) -> String {
                 .join("")
         })
         .unwrap_or_default()
+}
+
+fn write_structured_reply(
+    out: &mut (impl Write + ?Sized),
+    renderer: &TerminalRenderer,
+    assistant_text: &str,
+    reply_header_written: &mut bool,
+) -> io::Result<()> {
+    let body = assistant_text.trim();
+    if body.is_empty() {
+        return Ok(());
+    }
+    if !*reply_header_written {
+        writeln!(out, "🦐 Response")?;
+        *reply_header_written = true;
+    }
+    let rendered = renderer.vertical_markdown_to_ansi(body);
+    writeln!(out, "{rendered}")?;
+    Ok(())
 }
 
 fn final_assistant_text_or_fallback(input: &str, summary: &runtime::TurnSummary) -> String {

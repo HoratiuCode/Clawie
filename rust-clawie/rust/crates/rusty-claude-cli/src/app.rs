@@ -582,6 +582,25 @@ impl CliApp {
         Ok(CommandResult::Continue)
     }
 
+    fn write_structured_reply(
+        renderer: &TerminalRenderer,
+        out: &mut impl Write,
+        assistant_text: &str,
+        reply_header_written: &mut bool,
+    ) -> io::Result<()> {
+        let body = assistant_text.trim();
+        if body.is_empty() {
+            return Ok(());
+        }
+        if !*reply_header_written {
+            writeln!(out, "🦐 Response")?;
+            *reply_header_written = true;
+        }
+        let rendered = renderer.vertical_markdown_to_ansi(body);
+        writeln!(out, "{rendered}")?;
+        Ok(())
+    }
+
     fn handle_stream_event(
         renderer: &TerminalRenderer,
         event: StreamEvent,
@@ -589,6 +608,7 @@ impl CliApp {
         tool_spinner: &mut Spinner,
         saw_text: &mut bool,
         assistant_text: &mut String,
+        reply_header_written: &mut bool,
         turn_usage: &mut UsageSummary,
         out: &mut impl Write,
     ) {
@@ -603,8 +623,12 @@ impl CliApp {
             }
             StreamEvent::ToolCallStart { name, input } => {
                 if !assistant_text.trim().is_empty() {
-                    let rendered = renderer.vertical_markdown_to_ansi(assistant_text.trim());
-                    let _ = writeln!(out, "{rendered}");
+                    let _ = Self::write_structured_reply(
+                        renderer,
+                        out,
+                        assistant_text,
+                        reply_header_written,
+                    );
                     assistant_text.clear();
                 }
                 if *saw_text {
@@ -643,6 +667,13 @@ impl CliApp {
     ) -> io::Result<()> {
         match self.config.output_format {
             OutputFormat::Text => {
+                if !summary.assistant_text.trim().is_empty() {
+                    writeln!(out, "🦐 Response")?;
+                    let rendered = self
+                        .renderer
+                        .vertical_markdown_to_ansi(summary.assistant_text.trim());
+                    writeln!(out, "{rendered}")?;
+                }
                 writeln!(
                     out,
                     "\nToken usage: {} input / {} output",
@@ -692,6 +723,7 @@ impl CliApp {
         let mut tool_spinner = Spinner::new();
         let mut saw_text = false;
         let mut assistant_text = String::new();
+        let mut reply_header_written = false;
         let renderer = &self.renderer;
 
         let result =
@@ -704,6 +736,7 @@ impl CliApp {
                         &mut tool_spinner,
                         &mut saw_text,
                         &mut assistant_text,
+                        &mut reply_header_written,
                         &mut turn_usage,
                         out,
                     );
@@ -722,8 +755,12 @@ impl CliApp {
         };
         self.state.last_usage = summary.usage.clone();
         if !assistant_text.trim().is_empty() {
-            let rendered = self.renderer.vertical_markdown_to_ansi(assistant_text.trim());
-            writeln!(out, "{rendered}")?;
+            Self::write_structured_reply(
+                renderer,
+                out,
+                &assistant_text,
+                &mut reply_header_written,
+            )?;
             assistant_text.clear();
         }
         if saw_text {
