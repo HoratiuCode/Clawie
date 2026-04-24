@@ -398,7 +398,11 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 permission_mode,
             })
         }
-        other if other.starts_with('/') => parse_direct_slash_cli_action(&rest),
+        other if other.starts_with('/') => parse_direct_slash_cli_action(
+            &rest,
+            &model,
+            permission_mode_override.unwrap_or_else(default_permission_mode),
+        ),
         _other => Ok(CliAction::Prompt {
             prompt: rest.join(" "),
             model,
@@ -469,10 +473,18 @@ fn join_optional_args(args: &[String]) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
+fn parse_direct_slash_cli_action(
+    rest: &[String],
+    model: &str,
+    permission_mode: PermissionMode,
+) -> Result<CliAction, String> {
     let raw = rest.join(" ");
     match SlashCommand::parse(&raw) {
         Ok(Some(SlashCommand::Help)) => Ok(CliAction::Help),
+        Ok(Some(SlashCommand::Status)) => Ok(CliAction::Status {
+            model: model.to_string(),
+            permission_mode,
+        }),
         Ok(Some(SlashCommand::Agents { args })) => Ok(CliAction::Agents { args }),
         Ok(Some(SlashCommand::Mcp { action, target })) => Ok(CliAction::Mcp {
             args: match (action, target) {
@@ -482,6 +494,9 @@ fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
                 (None, Some(target)) => Some(target),
             },
         }),
+        Ok(Some(SlashCommand::Sandbox)) => Ok(CliAction::Sandbox),
+        Ok(Some(SlashCommand::Providers)) => Ok(CliAction::Providers),
+        Ok(Some(SlashCommand::Experimental { mode })) => Ok(CliAction::Experimental { mode }),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
@@ -6803,7 +6818,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_direct_agents_mcp_and_skills_slash_commands() {
+    fn parses_direct_agents_mcp_skills_and_status_slash_commands() {
+        let _guard = env_lock();
+        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
         assert_eq!(
             parse_args(&["/agents".to_string()]).expect("/agents should parse"),
             CliAction::Agents { args: None }
@@ -6844,10 +6861,14 @@ mod tests {
                 args: Some("install ./fixtures/help-skill".to_string())
             }
         );
-        let error = parse_args(&["/status".to_string()])
-            .expect_err("/status should remain REPL-only when invoked directly");
-        assert!(error.contains("interactive-only"));
-        assert!(error.contains("claw --resume SESSION.jsonl /status"));
+        let status = parse_args(&["/status".to_string()]).expect("/status should parse");
+        assert_eq!(
+            status,
+            CliAction::Status {
+                model: DEFAULT_MODEL.to_string(),
+                permission_mode: PermissionMode::DangerFullAccess,
+            }
+        );
     }
 
     #[test]
