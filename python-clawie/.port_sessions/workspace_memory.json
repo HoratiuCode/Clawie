@@ -18,7 +18,15 @@
     "Prompt: continue reviewing the same code paths Matched commands: theme, theme Matched tools: SyntheticOutputTool, clawCodeGuideAgent Permission...",
     "theme",
     "SyntheticOutputTool",
-    "clawCodeGuideAgent"
+    "clawCodeGuideAgent",
+    "Prompt: review MCP tool | Commands: UltrareviewOverageDialog | Tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool | Permission denials:...",
+    "Prompt: review MCP tool\nCommands: UltrareviewOverageDialog\nTools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool\nPermission denials: 0",
+    "Prompt: review MCP tool | Commands: none | Tools: none | Permission denials: 0",
+    "Prompt: review MCP tool\nCommands: none\nTools: none\nPermission denials: 0",
+    "Prompt: review python-clawie/src/query_engine.py and python-clawie/src/session_store.py | Commands: none | Tools: none | Permission denials: 0",
+    "Prompt: review python-clawie/src/query_engine.py and python-clawie/src/session_store.py\nCommands: none\nTools: none\nPermission denials: 0",
+    "Prompt: continue reviewing the same code paths | Commands: theme, theme | Tools: SyntheticOutputTool, clawCodeGuideAgent |...",
+    "Prompt: continue reviewing the same code paths\nCommands: theme, theme\nTools: SyntheticOutputTool, clawCodeGuideAgent\nPermission denials: 0"
   ],
   "code_references": [
     "python-clawie/src/query_engine.py",
@@ -48,6 +56,12 @@
     "b6c6bc5a08ce4f7ca56df3c7b2efddf1",
     "b8b5d004096844329faec507edff662e",
     "c77df341277247bab466741ae87c25ca",
-    "a701070ed8dc4f73b95dfef29ee10628"
+    "a701070ed8dc4f73b95dfef29ee10628",
+    "505651f2f5bf45e5a7782e9e1e96185a",
+    "b1f5954082754a6bbfa04c6b8a426b10",
+    "9e9c9f1c386e4692b8d76388058b1f1a",
+    "e257169b162e4d34924f6fb8f877ffa5",
+    "21cffe380c8e4c1395eff7e5c13a2148",
+    "729a94f1de15411b93e5879e9e2f68d3"
   ]
 }

@@ -78,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument('prompt')
     resume_parser.add_argument('--limit', type=int, default=5)
 
-    shrimpi_parser = subparsers.add_parser('shrimpi', help='scan code before shipping and print cleaner notes')
+    shrimpi_parser = subparsers.add_parser('shrimpi', help='scan code before shipping and print clean notes')
     shrimpi_parser.add_argument('target', nargs='?', default='.')
     shrimpi_parser.add_argument('--limit', type=int, default=20)
 

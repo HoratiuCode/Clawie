@@ -75,8 +75,8 @@ def find_commands(query: str, limit: int = 20) -> list[PortingModule]:
 def execute_command(name: str, prompt: str = '') -> CommandExecution:
     module = get_command(name)
     if module is None:
-        return CommandExecution(name=name, source_hint='', prompt=prompt, handled=False, message=f'Unknown mirrored command: {name}')
-    action = f"Mirrored command '{module.name}' from {module.source_hint} would handle prompt {prompt!r}."
+        return CommandExecution(name=name, source_hint='', prompt=prompt, handled=False, message=f'Unknown command: {name}')
+    action = f"Command {module.name} would handle prompt {prompt!r}."
     return CommandExecution(name=module.name, source_hint=module.source_hint, prompt=prompt, handled=True, message=action)
 
 

@@ -1,0 +1,19 @@
+{
+  "session_id": "e257169b162e4d34924f6fb8f877ffa5",
+  "messages": [
+    "review MCP tool",
+    "review MCP tool"
+  ],
+  "input_tokens": 6,
+  "output_tokens": 28,
+  "memory_journal": [
+    "Prompt: review MCP tool",
+    "Commands: UltrareviewOverageDialog",
+    "Tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool",
+    "Permission denials: 0"
+  ],
+  "code_references": [
+    "python-clawie/src/query_engine.py",
+    "python-clawie/src/session_store.py"
+  ]
+}

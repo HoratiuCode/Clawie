@@ -37,16 +37,16 @@ class ShrimpiReport:
 
     def as_markdown(self, limit: int = 20) -> str:
         lines = [
-            '# Shrimpi Shipie Notes',
+            '# Shrimpi Report',
             '',
-            '## Before Ship',
+            '## Pre-ship',
             f'- Scan roots: {", ".join(self.roots) if self.roots else "none"}',
             f'- Files scanned: {self.scanned_files}',
             f'- Clean files: {self.clean_files}',
             f'- Findings: {len(self.findings)}',
-            f'- Ready to ship: {self.ready_to_ship}',
+            f'- Ship-ready: {self.ready_to_ship}',
             '',
-            '## What Found',
+            '## Findings',
         ]
         if self.findings:
             for finding in self.findings[:limit]:
@@ -56,7 +56,7 @@ class ShrimpiReport:
                 )
         else:
             lines.append('- none')
-        lines.extend(['', '## What Not Found'])
+        lines.extend(['', '## Checks Passed'])
         if self.passed_checks:
             lines.extend(f'- {check}' for check in self.passed_checks)
         else:
@@ -64,16 +64,16 @@ class ShrimpiReport:
         suggestions = _dedupe(
             finding.suggestion for finding in self.findings if finding.suggestion
         )
-        lines.extend(['', '## Modifications'])
+        lines.extend(['', '## Recommended Fixes'])
         if suggestions:
             lines.extend(f'- {suggestion}' for suggestion in suggestions[:limit])
         else:
             lines.append('- none')
-        lines.extend(['', '## After Ship'])
+        lines.extend(['', '## Status'])
         if self.ready_to_ship:
-            lines.append('- Shipie status: ready')
+            lines.append('- Ready for ship: yes')
         else:
-            lines.append('- Shipie status: blocked until the findings above are cleared')
+            lines.append('- Ready for ship: no')
         if self.blocked_checks:
             lines.extend(['', 'Blocked checks:'])
             lines.extend(f'- {check}' for check in self.blocked_checks)

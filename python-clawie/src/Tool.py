@@ -12,5 +12,5 @@ class ToolDefinition:
 DEFAULT_TOOLS = (
     ToolDefinition('port_manifest', 'Summarize the active Python workspace'),
     ToolDefinition('query_engine', 'Render a Python-first porting summary'),
-    ToolDefinition('shrimpi', 'Scan code before shipping and emit cleaner notes'),
+    ToolDefinition('shrimpi', 'Scan code before shipping and emit clean notes'),
 )

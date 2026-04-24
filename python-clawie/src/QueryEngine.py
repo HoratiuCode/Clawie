@@ -9,7 +9,7 @@ class QueryEngineRuntime(QueryEnginePort):
         matches = PortRuntime().route_prompt(prompt, limit=limit)
         lines = ['# Query Engine Route', '', f'Prompt: {prompt}', '']
         if not matches:
-            lines.append('No mirrored command/tool matches found.')
+            lines.append('No matches found.')
             return '\n'.join(lines)
         lines.append('Matches:')
         lines.extend(f'- [{match.kind}] {match.name} ({match.score}) — {match.source_hint}' for match in matches)

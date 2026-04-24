@@ -1,0 +1,23 @@
+{
+  "session_id": "729a94f1de15411b93e5879e9e2f68d3",
+  "messages": [
+    "review MCP tool",
+    "review MCP tool",
+    "continue reviewing the same code paths"
+  ],
+  "input_tokens": 12,
+  "output_tokens": 44,
+  "memory_journal": [
+    "Prompt: review MCP tool",
+    "Commands: UltrareviewOverageDialog",
+    "Tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool",
+    "Permission denials: 0",
+    "Prompt: continue reviewing the same code paths",
+    "Commands: theme, theme",
+    "Tools: SyntheticOutputTool, clawCodeGuideAgent"
+  ],
+  "code_references": [
+    "python-clawie/src/query_engine.py",
+    "python-clawie/src/session_store.py"
+  ]
+}

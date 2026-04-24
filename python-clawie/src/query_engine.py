@@ -86,8 +86,8 @@ class QueryEnginePort:
 
         summary_lines = [
             f'Prompt: {prompt}',
-            f'Matched commands: {", ".join(matched_commands) if matched_commands else "none"}',
-            f'Matched tools: {", ".join(matched_tools) if matched_tools else "none"}',
+            f'Commands: {", ".join(matched_commands) if matched_commands else "none"}',
+            f'Tools: {", ".join(matched_tools) if matched_tools else "none"}',
             f'Permission denials: {len(denied_tools)}',
         ]
         output = self._format_output(summary_lines)
