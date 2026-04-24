@@ -5253,7 +5253,7 @@ fn write_structured_reply(
         return Ok(());
     }
     if !*reply_header_written {
-        writeln!(out, "🦐 Response")?;
+        writeln!(out, "✍️ Response")?;
         *reply_header_written = true;
     }
     let rendered = renderer.vertical_markdown_to_ansi(body);

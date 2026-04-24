@@ -57,6 +57,23 @@ def get_command(name: str) -> PortingModule | None:
     return None
 
 
+def command_emoji(module: PortingModule) -> str:
+    text = f'{module.name} {module.source_hint}'.lower()
+    if any(token in text for token in ('dir', 'folder')):
+        return '📁'
+    if any(token in text for token in ('write', 'edit', 'update', 'create', 'add')):
+        return '✏️'
+    if any(token in text for token in ('find', 'search', 'grep', 'glob', 'inspect', 'scan', 'audit', 'query')):
+        return '🔎'
+    if any(token in text for token in ('read', 'load', 'summary', 'view', 'show')):
+        return '📄'
+    return '⚙️'
+
+
+def format_command_entry(module: PortingModule) -> str:
+    return f'- {command_emoji(module)} {module.name} — {module.source_hint}'
+
+
 def get_commands(cwd: str | None = None, include_plugin_commands: bool = True, include_skill_commands: bool = True) -> tuple[PortingModule, ...]:
     commands = list(PORTED_COMMANDS)
     if not include_plugin_commands:
@@ -86,5 +103,5 @@ def render_command_index(limit: int = 20, query: str | None = None) -> str:
     if query:
         lines.append(f'Filtered by: {query}')
         lines.append('')
-    lines.extend(f'- {module.name} — {module.source_hint}' for module in modules)
+    lines.extend(format_command_entry(module) for module in modules)
     return '\n'.join(lines)

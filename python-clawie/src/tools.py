@@ -53,6 +53,23 @@ def get_tool(name: str) -> PortingModule | None:
     return None
 
 
+def tool_emoji(module: PortingModule) -> str:
+    text = f'{module.name} {module.source_hint} {module.responsibility}'.lower()
+    if any(token in text for token in ('dir', 'folder')):
+        return '📁'
+    if any(token in text for token in ('write', 'edit', 'update', 'create', 'save')):
+        return '✏️'
+    if any(token in text for token in ('find', 'search', 'grep', 'glob', 'inspect', 'scan', 'query')):
+        return '🔎'
+    if any(token in text for token in ('read', 'load', 'summary', 'view', 'show')):
+        return '📄'
+    return '🧰'
+
+
+def format_tool_entry(module: PortingModule) -> str:
+    return f'- {tool_emoji(module)} {module.name} — {module.source_hint}'
+
+
 def filter_tools_by_permission_context(tools: tuple[PortingModule, ...], permission_context: ToolPermissionContext | None = None) -> tuple[PortingModule, ...]:
     if permission_context is None:
         return tools
@@ -92,5 +109,5 @@ def render_tool_index(limit: int = 20, query: str | None = None) -> str:
     if query:
         lines.append(f'Filtered by: {query}')
         lines.append('')
-    lines.extend(f'- {module.name} — {module.source_hint}' for module in modules)
+    lines.extend(format_tool_entry(module) for module in modules)
     return '\n'.join(lines)

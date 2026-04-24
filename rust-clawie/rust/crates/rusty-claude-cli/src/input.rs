@@ -36,12 +36,12 @@ struct SlashMenuItem {
 static SLASH_MENU_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub fn prompt_prefix() -> &'static str {
-    "🦐 clawie › "
+    "📁 clawie › "
 }
 
 pub fn render_prompt_banner() -> String {
     let rows = [
-        "🦐 Clawie Composer".to_string(),
+        "📁 Clawie Composer".to_string(),
         format!("Prompt          {}", prompt_prefix()),
         "Tab             opens the slash menu".to_string(),
         "Shift+Enter     inserts a newline".to_string(),
@@ -314,14 +314,14 @@ impl LineEditor {
             let window_size = 8usize;
             let mut previous_lines = 0usize;
             let title = if items.first().is_some_and(|item| item.value.starts_with("/model")) {
-                "🦐 Model Picker"
+                "🔎 Model Picker"
             } else {
                 "🌶 Slash Menu"
             };
             loop {
                 let visible_end = items.len().min(offset + window_size);
                 let visible = &items[offset..visible_end];
-                let subtitle = if title == "🦐 Model Picker" {
+                let subtitle = if title == "🔎 Model Picker" {
                     "Choose a model and press Enter"
                 } else {
                     "Type a slash command and press Enter"
@@ -697,7 +697,7 @@ mod tests {
     #[test]
     fn prompt_prefix_keeps_clawie_branding() {
         assert!(prompt_prefix().contains("claw"));
-        assert!(prompt_prefix().contains("🦐"));
+        assert!(prompt_prefix().contains("📁"));
     }
 
     #[test]

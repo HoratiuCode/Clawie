@@ -18,7 +18,8 @@ from .runtime import PortRuntime
 from .session_store import SessionStoreError, load_session
 from .setup import run_setup
 from .tool_pool import assemble_tool_pool
-from .tools import execute_tool, get_tool, get_tools, render_tool_index
+from .commands import format_command_entry
+from .tools import execute_tool, format_tool_entry, get_tool, get_tools, render_tool_index
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -149,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 commands = get_commands(include_plugin_commands=not args.no_plugin_commands, include_skill_commands=not args.no_skill_commands)
                 output_lines = [f'Command entries: {len(commands)}', '']
-                output_lines.extend(f'- {module.name} — {module.source_hint}' for module in commands[: args.limit])
+                output_lines.extend(format_command_entry(module) for module in commands[: args.limit])
                 print('\n'.join(output_lines))
             return 0
         if args.command == 'tools':
@@ -159,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                 permission_context = ToolPermissionContext.from_iterables(args.deny_tool, args.deny_prefix)
                 tools = get_tools(simple_mode=args.simple_mode, include_mcp=not args.no_mcp, permission_context=permission_context)
                 output_lines = [f'Tool entries: {len(tools)}', '']
-                output_lines.extend(f'- {module.name} — {module.source_hint}' for module in tools[: args.limit])
+                output_lines.extend(format_tool_entry(module) for module in tools[: args.limit])
                 print('\n'.join(output_lines))
             return 0
         if args.command == 'route':

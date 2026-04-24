@@ -593,7 +593,7 @@ impl CliApp {
             return Ok(());
         }
         if !*reply_header_written {
-            writeln!(out, "🦐 Response")?;
+            writeln!(out, "✍️ Response")?;
             *reply_header_written = true;
         }
         let rendered = renderer.vertical_markdown_to_ansi(body);
@@ -668,7 +668,7 @@ impl CliApp {
         match self.config.output_format {
             OutputFormat::Text => {
                 if !summary.assistant_text.trim().is_empty() {
-                    writeln!(out, "🦐 Response")?;
+                    writeln!(out, "✍️ Response")?;
                     let rendered = self
                         .renderer
                         .vertical_markdown_to_ansi(summary.assistant_text.trim());

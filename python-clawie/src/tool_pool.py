@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .models import PortingModule
 from .permissions import ToolPermissionContext
-from .tools import get_tools
+from .tools import format_tool_entry, get_tools
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class ToolPool:
             f'Include MCP: {self.include_mcp}',
             f'Tool count: {len(self.tools)}',
         ]
-        lines.extend(f'- {tool.name} — {tool.source_hint}' for tool in self.tools[:15])
+        lines.extend(format_tool_entry(tool) for tool in self.tools[:15])
         return '\n'.join(lines)
 
 
