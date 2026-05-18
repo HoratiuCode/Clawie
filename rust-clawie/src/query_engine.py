@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -15,11 +16,39 @@ from .transcript import TranscriptStore
 
 @dataclass(frozen=True)
 class QueryEngineConfig:
-    max_turns: int = 8
-    max_budget_tokens: int = 2000
-    compact_after_turns: int = 12
+    max_turns: int = 64
+    max_budget_tokens: int = 12000
+    compact_after_turns: int = 48
     structured_output: bool = False
     structured_retry_limit: int = 2
+
+    @classmethod
+    def from_env(cls) -> 'QueryEngineConfig':
+        return cls(
+            max_turns=_env_int('CLAWIE_MAX_TURNS', cls.max_turns),
+            max_budget_tokens=_env_int('CLAWIE_MAX_BUDGET_TOKENS', cls.max_budget_tokens),
+            compact_after_turns=_env_int('CLAWIE_COMPACT_AFTER_TURNS', cls.compact_after_turns),
+            structured_output=_env_bool('CLAWIE_STRUCTURED_OUTPUT', cls.structured_output),
+            structured_retry_limit=_env_int('CLAWIE_STRUCTURED_RETRY_LIMIT', cls.structured_retry_limit),
+        )
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, value)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 @dataclass(frozen=True)
@@ -46,7 +75,7 @@ class QueryEnginePort:
 
     @classmethod
     def from_workspace(cls) -> 'QueryEnginePort':
-        return cls(manifest=build_port_manifest())
+        return cls(manifest=build_port_manifest(), config=QueryEngineConfig.from_env())
 
     @classmethod
     def from_saved_session(cls, session_id: str) -> 'QueryEnginePort':
@@ -58,6 +87,7 @@ class QueryEnginePort:
         )
         return cls(
             manifest=build_port_manifest(),
+            config=QueryEngineConfig.from_env(),
             session_id=stored.session_id,
             mutable_messages=list(stored.messages),
             total_usage=UsageSummary(stored.input_tokens, stored.output_tokens),

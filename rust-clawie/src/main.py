@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     loop_parser = subparsers.add_parser('turn-loop', help='run a small stateful turn loop for the mirrored runtime')
     loop_parser.add_argument('prompt')
     loop_parser.add_argument('--limit', type=int, default=5)
-    loop_parser.add_argument('--max-turns', type=int, default=3)
+    loop_parser.add_argument('--max-turns', type=int, default=12)
     loop_parser.add_argument('--structured-output', action='store_true')
 
     flush_parser = subparsers.add_parser('flush-transcript', help='persist and flush a temporary session transcript')
