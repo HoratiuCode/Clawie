@@ -41,7 +41,7 @@ pub fn prompt_prefix() -> &'static str {
 
 pub fn render_prompt_banner() -> String {
     let rows = [
-        "📁 Clawie Composer".to_string(),
+        "📁 Clawie v2".to_string(),
         format!("Prompt          {}", prompt_prefix()),
         "Tab             opens the slash menu".to_string(),
         "Shift+Enter     inserts a newline".to_string(),
@@ -703,7 +703,7 @@ mod tests {
     #[test]
     fn prompt_banner_surfaces_composer_shortcuts() {
         let banner = render_prompt_banner();
-        assert!(banner.contains("Clawie Composer"));
+        assert!(banner.contains("Clawie v2"));
         assert!(banner.contains("Tab"));
         assert!(banner.contains("Shift+Enter"));
     }
