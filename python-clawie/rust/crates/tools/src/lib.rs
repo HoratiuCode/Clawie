@@ -873,6 +873,10 @@ struct AgentOutput {
     description: String,
     #[serde(rename = "subagentType")]
     subagent_type: Option<String>,
+    #[serde(rename = "agentMode", skip_serializing_if = "Option::is_none")]
+    agent_mode: Option<String>,
+    #[serde(rename = "agentRole", skip_serializing_if = "Option::is_none")]
+    agent_role: Option<String>,
     model: Option<String>,
     status: String,
     #[serde(rename = "outputFile")]
@@ -895,6 +899,7 @@ struct AgentJob {
     prompt: String,
     system_prompt: Vec<String>,
     allowed_tools: BTreeSet<String>,
+    denied_tools: BTreeSet<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1502,6 +1507,166 @@ const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
 const DEFAULT_AGENT_SYSTEM_DATE: &str = "2026-03-31";
 const DEFAULT_AGENT_MAX_ITERATIONS: usize = 32;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AgentModeProfile {
+    name: &'static str,
+    aliases: &'static [&'static str],
+    summary: &'static str,
+    role: &'static str,
+    allowed_tools: &'static [&'static str],
+    denied_tools: &'static [&'static str],
+    prompt: &'static str,
+}
+
+const BUILD_AGENT_TOOLS: &[&str] = &[
+    "bash",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob_search",
+    "grep_search",
+    "WebFetch",
+    "WebSearch",
+    "TodoWrite",
+    "Skill",
+    "ToolSearch",
+    "NotebookEdit",
+    "Sleep",
+    "SendUserMessage",
+    "Config",
+    "StructuredOutput",
+    "REPL",
+    "PowerShell",
+];
+
+const PLAN_AGENT_TOOLS: &[&str] = &[
+    "read_file",
+    "glob_search",
+    "grep_search",
+    "WebFetch",
+    "WebSearch",
+    "ToolSearch",
+    "Skill",
+    "TodoWrite",
+    "StructuredOutput",
+    "SendUserMessage",
+];
+
+const EXPLORE_AGENT_TOOLS: &[&str] = &[
+    "read_file",
+    "glob_search",
+    "grep_search",
+    "WebFetch",
+    "WebSearch",
+    "ToolSearch",
+    "Skill",
+    "StructuredOutput",
+];
+
+const VERIFICATION_AGENT_TOOLS: &[&str] = &[
+    "bash",
+    "read_file",
+    "glob_search",
+    "grep_search",
+    "WebFetch",
+    "WebSearch",
+    "ToolSearch",
+    "TodoWrite",
+    "StructuredOutput",
+    "SendUserMessage",
+    "PowerShell",
+];
+
+const CLAW_GUIDE_AGENT_TOOLS: &[&str] = &[
+    "read_file",
+    "glob_search",
+    "grep_search",
+    "WebFetch",
+    "WebSearch",
+    "ToolSearch",
+    "Skill",
+    "StructuredOutput",
+    "SendUserMessage",
+];
+
+const STATUSLINE_AGENT_TOOLS: &[&str] = &[
+    "bash",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob_search",
+    "grep_search",
+    "ToolSearch",
+];
+
+const EDIT_TOOLS: &[&str] = &["write_file", "edit_file", "NotebookEdit", "Config"];
+
+const BUILTIN_AGENT_MODES: &[AgentModeProfile] = &[
+    AgentModeProfile {
+        name: "build",
+        aliases: &["buildagent"],
+        summary: "Default coding agent with workspace edit tools enabled.",
+        role: "primary",
+        allowed_tools: BUILD_AGENT_TOOLS,
+        denied_tools: &[],
+        prompt: "You are Clawie's build agent. Implement requested development work directly, use tools based on configured permissions, and verify meaningful changes before finishing.",
+    },
+    AgentModeProfile {
+        name: "plan",
+        aliases: &["planagent"],
+        summary: "Read-mostly planning agent. Edit tools are denied.",
+        role: "primary",
+        allowed_tools: PLAN_AGENT_TOOLS,
+        denied_tools: EDIT_TOOLS,
+        prompt: "You are Clawie's plan agent. Explore the codebase, reason about implementation steps, maintain a concise task list when useful, and do not edit workspace files.",
+    },
+    AgentModeProfile {
+        name: "general",
+        aliases: &["general-purpose", "generalpurpose", "generalpurposeagent", "subagent"],
+        summary: "General-purpose background subagent for multi-step delegated work.",
+        role: "subagent",
+        allowed_tools: BUILD_AGENT_TOOLS,
+        denied_tools: &["Agent"],
+        prompt: "You are Clawie's general subagent. Complete the delegated task independently, avoid asking the user questions, and return a concise handoff.",
+    },
+    AgentModeProfile {
+        name: "explore",
+        aliases: &["explorer", "exploreagent"],
+        summary: "Fast read-only codebase exploration agent.",
+        role: "subagent",
+        allowed_tools: EXPLORE_AGENT_TOOLS,
+        denied_tools: EDIT_TOOLS,
+        prompt: "You are Clawie's explore agent. Search and read the codebase quickly, report concrete file references and findings, and do not modify files.",
+    },
+    AgentModeProfile {
+        name: "verification",
+        aliases: &["verificationagent", "verify", "verifier"],
+        summary: "Verification subagent for commands, checks, and diagnostics without edits.",
+        role: "subagent",
+        allowed_tools: VERIFICATION_AGENT_TOOLS,
+        denied_tools: EDIT_TOOLS,
+        prompt: "You are Clawie's verification agent. Run relevant checks and inspect failures without editing files, then summarize the result.",
+    },
+    AgentModeProfile {
+        name: "claw-guide",
+        aliases: &["clawguide", "clawguideagent", "guide"],
+        summary: "Guide subagent for Clawie-specific usage and project guidance.",
+        role: "subagent",
+        allowed_tools: CLAW_GUIDE_AGENT_TOOLS,
+        denied_tools: EDIT_TOOLS,
+        prompt: "You are Clawie's guide agent. Use local guidance, skills, and read-only inspection to answer Clawie-specific questions without editing files.",
+    },
+    AgentModeProfile {
+        name: "statusline-setup",
+        aliases: &["statusline", "statuslinesetup"],
+        summary: "Setup subagent for statusline configuration tasks.",
+        role: "subagent",
+        allowed_tools: STATUSLINE_AGENT_TOOLS,
+        denied_tools: &[],
+        prompt: "You are Clawie's statusline setup agent. Configure statusline files for the delegated task and keep changes limited to that setup work.",
+    },
+];
+
 fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     execute_agent_with_spawn(input, spawn_agent_job)
 }
@@ -1522,7 +1687,7 @@ where
     std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
     let output_file = output_dir.join(format!("{agent_id}.md"));
     let manifest_file = output_dir.join(format!("{agent_id}.json"));
-    let normalized_subagent_type = normalize_subagent_type(input.subagent_type.as_deref());
+    let profile = resolve_agent_mode(input.subagent_type.as_deref());
     let model = resolve_agent_model(input.model.as_deref());
     let agent_name = input
         .name
@@ -1531,8 +1696,9 @@ where
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| slugify_agent_name(&input.description));
     let created_at = iso8601_now();
-    let system_prompt = build_agent_system_prompt(&normalized_subagent_type)?;
-    let allowed_tools = allowed_tools_for_subagent(&normalized_subagent_type);
+    let system_prompt = build_agent_system_prompt(profile)?;
+    let allowed_tools = allowed_tools_for_subagent(profile.name);
+    let denied_tools = denied_tools_for_agent_mode(profile.name);
 
     let output_contents = format!(
         "# Agent Task
@@ -1541,13 +1707,22 @@ where
 - name: {}
 - description: {}
 - subagent_type: {}
+- agent_mode: {}
+- agent_role: {}
 - created_at: {}
 
 ## Prompt
 
 {}
 ",
-        agent_id, agent_name, input.description, normalized_subagent_type, created_at, input.prompt
+        agent_id,
+        agent_name,
+        input.description,
+        profile.name,
+        profile.name,
+        profile.role,
+        created_at,
+        input.prompt
     );
     std::fs::write(&output_file, output_contents).map_err(|error| error.to_string())?;
 
@@ -1555,7 +1730,9 @@ where
         agent_id,
         name: agent_name,
         description: input.description,
-        subagent_type: Some(normalized_subagent_type),
+        subagent_type: Some(profile.name.to_string()),
+        agent_mode: Some(profile.name.to_string()),
+        agent_role: Some(profile.role.to_string()),
         model: Some(model),
         status: String::from("running"),
         output_file: output_file.display().to_string(),
@@ -1573,6 +1750,7 @@ where
         prompt: input.prompt,
         system_prompt,
         allowed_tools,
+        denied_tools,
     };
     if let Err(error) = spawn_fn(job) {
         let error = format!("failed to spawn sub-agent: {error}");
@@ -1634,12 +1812,12 @@ fn build_agent_runtime(
         Session::new(),
         api_client,
         tool_executor,
-        agent_permission_policy(),
+        agent_permission_policy(job.denied_tools.clone()),
         job.system_prompt.clone(),
     ))
 }
 
-fn build_agent_system_prompt(subagent_type: &str) -> Result<Vec<String>, String> {
+fn build_agent_system_prompt(profile: &AgentModeProfile) -> Result<Vec<String>, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let mut prompt = load_system_prompt(
         cwd,
@@ -1649,7 +1827,12 @@ fn build_agent_system_prompt(subagent_type: &str) -> Result<Vec<String>, String>
     )
     .map_err(|error| error.to_string())?;
     prompt.push(format!(
-        "You are a background sub-agent of type `{subagent_type}`. Work only on the delegated task, use only the tools available to you, do not ask the user questions, and finish with a concise result."
+        "Active Clawie agent mode: `{}` ({}) - {}",
+        profile.name, profile.role, profile.summary
+    ));
+    prompt.push(profile.prompt.to_string());
+    prompt.push(String::from(
+        "Use only the tools available to this mode. If a tool is denied, continue with safe alternatives and explain the limitation in the final result.",
     ));
     Ok(prompt)
 }
@@ -1663,91 +1846,29 @@ fn resolve_agent_model(model: Option<&str>) -> String {
 }
 
 fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
-    let tools = match subagent_type {
-        "Explore" => vec![
-            "read_file",
-            "glob_search",
-            "grep_search",
-            "WebFetch",
-            "WebSearch",
-            "ToolSearch",
-            "Skill",
-            "StructuredOutput",
-        ],
-        "Plan" => vec![
-            "read_file",
-            "glob_search",
-            "grep_search",
-            "WebFetch",
-            "WebSearch",
-            "ToolSearch",
-            "Skill",
-            "TodoWrite",
-            "StructuredOutput",
-            "SendUserMessage",
-        ],
-        "Verification" => vec![
-            "bash",
-            "read_file",
-            "glob_search",
-            "grep_search",
-            "WebFetch",
-            "WebSearch",
-            "ToolSearch",
-            "TodoWrite",
-            "StructuredOutput",
-            "SendUserMessage",
-            "PowerShell",
-        ],
-        "claw-guide" => vec![
-            "read_file",
-            "glob_search",
-            "grep_search",
-            "WebFetch",
-            "WebSearch",
-            "ToolSearch",
-            "Skill",
-            "StructuredOutput",
-            "SendUserMessage",
-        ],
-        "statusline-setup" => vec![
-            "bash",
-            "read_file",
-            "write_file",
-            "edit_file",
-            "glob_search",
-            "grep_search",
-            "ToolSearch",
-        ],
-        _ => vec![
-            "bash",
-            "read_file",
-            "write_file",
-            "edit_file",
-            "glob_search",
-            "grep_search",
-            "WebFetch",
-            "WebSearch",
-            "TodoWrite",
-            "Skill",
-            "ToolSearch",
-            "NotebookEdit",
-            "Sleep",
-            "SendUserMessage",
-            "Config",
-            "StructuredOutput",
-            "REPL",
-            "PowerShell",
-        ],
-    };
-    tools.into_iter().map(str::to_string).collect()
+    resolve_agent_mode(Some(subagent_type))
+        .allowed_tools
+        .iter()
+        .map(|tool| (*tool).to_string())
+        .collect()
 }
 
-fn agent_permission_policy() -> PermissionPolicy {
-    mvp_tool_specs().into_iter().fold(
+fn denied_tools_for_agent_mode(agent_mode: &str) -> BTreeSet<String> {
+    resolve_agent_mode(Some(agent_mode))
+        .denied_tools
+        .iter()
+        .map(|tool| (*tool).to_string())
+        .collect()
+}
+
+fn agent_permission_policy(denied_tools: BTreeSet<String>) -> PermissionPolicy {
+    let policy = mvp_tool_specs().into_iter().fold(
         PermissionPolicy::new(PermissionMode::DangerFullAccess),
         |policy, spec| policy.with_tool_requirement(spec.name, spec.required_permission),
-    )
+    );
+    denied_tools
+        .into_iter()
+        .fold(policy, |policy, tool| policy.with_denied_tool(tool))
 }
 
 fn write_agent_manifest(manifest: &AgentOutput) -> Result<(), String> {
@@ -2244,20 +2365,36 @@ fn slugify_agent_name(description: &str) -> String {
 fn normalize_subagent_type(subagent_type: Option<&str>) -> String {
     let trimmed = subagent_type.map(str::trim).unwrap_or_default();
     if trimmed.is_empty() {
-        return String::from("general-purpose");
+        return String::from("general");
     }
 
     match canonical_tool_token(trimmed).as_str() {
-        "general" | "generalpurpose" | "generalpurposeagent" => String::from("general-purpose"),
-        "explore" | "explorer" | "exploreagent" => String::from("Explore"),
-        "plan" | "planagent" => String::from("Plan"),
+        "build" | "buildagent" => String::from("build"),
+        "general" | "generalpurpose" | "generalpurposeagent" => String::from("general"),
+        "explore" | "explorer" | "exploreagent" => String::from("explore"),
+        "plan" | "planagent" => String::from("plan"),
         "verification" | "verificationagent" | "verify" | "verifier" => {
-            String::from("Verification")
+            String::from("verification")
         }
         "clawguide" | "clawguideagent" | "guide" => String::from("claw-guide"),
         "statusline" | "statuslinesetup" => String::from("statusline-setup"),
         _ => trimmed.to_string(),
     }
+}
+
+fn resolve_agent_mode(subagent_type: Option<&str>) -> &'static AgentModeProfile {
+    let normalized = normalize_subagent_type(subagent_type);
+    let canonical = canonical_tool_token(&normalized);
+    BUILTIN_AGENT_MODES
+        .iter()
+        .find(|profile| {
+            canonical_tool_token(profile.name) == canonical
+                || profile
+                    .aliases
+                    .iter()
+                    .any(|alias| canonical_tool_token(alias) == canonical)
+        })
+        .unwrap_or(&BUILTIN_AGENT_MODES[2])
 }
 
 fn iso8601_now() -> String {
@@ -3071,9 +3208,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        agent_permission_policy, allowed_tools_for_subagent, execute_agent_with_spawn,
-        execute_tool, final_assistant_text, mvp_tool_specs, persist_agent_terminal_state,
-        push_output_block, AgentInput, AgentJob, SubagentToolExecutor,
+        agent_permission_policy, allowed_tools_for_subagent, denied_tools_for_agent_mode,
+        execute_agent_with_spawn, execute_tool, final_assistant_text, mvp_tool_specs,
+        persist_agent_terminal_state, push_output_block, AgentInput, AgentJob,
+        SubagentToolExecutor,
     };
     use api::OutputContentBlock;
     use runtime::{ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, Session};
@@ -3550,7 +3688,9 @@ mod tests {
         std::env::remove_var("CLAW_AGENT_STORE");
 
         assert_eq!(manifest.name, "ship-audit");
-        assert_eq!(manifest.subagent_type.as_deref(), Some("Explore"));
+        assert_eq!(manifest.subagent_type.as_deref(), Some("explore"));
+        assert_eq!(manifest.agent_mode.as_deref(), Some("explore"));
+        assert_eq!(manifest.agent_role.as_deref(), Some("subagent"));
         assert_eq!(manifest.status, "running");
         assert!(!manifest.created_at.is_empty());
         assert!(manifest.started_at.is_some());
@@ -3560,7 +3700,8 @@ mod tests {
             std::fs::read_to_string(&manifest.manifest_file).expect("manifest file exists");
         assert!(contents.contains("Audit the branch"));
         assert!(contents.contains("Check tests and outstanding work."));
-        assert!(manifest_contents.contains("\"subagentType\": \"Explore\""));
+        assert!(manifest_contents.contains("\"subagentType\": \"explore\""));
+        assert!(manifest_contents.contains("\"agentMode\": \"explore\""));
         assert!(manifest_contents.contains("\"status\": \"running\""));
         let captured_job = captured
             .lock()
@@ -3570,6 +3711,7 @@ mod tests {
         assert_eq!(captured_job.prompt, "Check tests and outstanding work.");
         assert!(captured_job.allowed_tools.contains("read_file"));
         assert!(!captured_job.allowed_tools.contains("Agent"));
+        assert!(captured_job.denied_tools.contains("edit_file"));
 
         let normalized = execute_tool(
             "Agent",
@@ -3582,7 +3724,8 @@ mod tests {
         .expect("Agent should normalize built-in aliases");
         let normalized_output: serde_json::Value =
             serde_json::from_str(&normalized).expect("valid json");
-        assert_eq!(normalized_output["subagentType"], "Explore");
+        assert_eq!(normalized_output["subagentType"], "explore");
+        assert_eq!(normalized_output["agentMode"], "explore");
 
         let named = execute_tool(
             "Agent",
@@ -3711,6 +3854,10 @@ mod tests {
         assert!(verification.contains("bash"));
         assert!(verification.contains("PowerShell"));
         assert!(!verification.contains("write_file"));
+
+        let plan_denied = denied_tools_for_agent_mode("plan");
+        assert!(plan_denied.contains("edit_file"));
+        assert!(plan_denied.contains("write_file"));
     }
 
     #[derive(Debug)]
@@ -3761,7 +3908,7 @@ mod tests {
                 input_path: path.display().to_string(),
             },
             SubagentToolExecutor::new(BTreeSet::from([String::from("read_file")])),
-            agent_permission_policy(),
+            agent_permission_policy(BTreeSet::new()),
             vec![String::from("system prompt")],
         );
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PermissionMode {
@@ -50,6 +50,7 @@ pub enum PermissionOutcome {
 pub struct PermissionPolicy {
     active_mode: PermissionMode,
     tool_requirements: BTreeMap<String, PermissionMode>,
+    denied_tools: BTreeSet<String>,
 }
 
 impl PermissionPolicy {
@@ -58,6 +59,7 @@ impl PermissionPolicy {
         Self {
             active_mode,
             tool_requirements: BTreeMap::new(),
+            denied_tools: BTreeSet::new(),
         }
     }
 
@@ -69,6 +71,12 @@ impl PermissionPolicy {
     ) -> Self {
         self.tool_requirements
             .insert(tool_name.into(), required_mode);
+        self
+    }
+
+    #[must_use]
+    pub fn with_denied_tool(mut self, tool_name: impl Into<String>) -> Self {
+        self.denied_tools.insert(tool_name.into());
         self
     }
 
@@ -92,6 +100,12 @@ impl PermissionPolicy {
         input: &str,
         mut prompter: Option<&mut dyn PermissionPrompter>,
     ) -> PermissionOutcome {
+        if self.denied_tools.contains(tool_name) {
+            return PermissionOutcome::Deny {
+                reason: format!("tool '{tool_name}' is denied by the active agent mode"),
+            };
+        }
+
         let current_mode = self.active_mode();
         let required_mode = self.required_mode_for(tool_name);
         if current_mode == PermissionMode::Allow || current_mode >= required_mode {
@@ -227,6 +241,18 @@ mod tests {
         assert!(matches!(
             policy.authorize("bash", "echo hi", Some(&mut prompter)),
             PermissionOutcome::Deny { reason } if reason == "not now"
+        ));
+    }
+
+    #[test]
+    fn denied_tools_override_other_permissions() {
+        let policy = PermissionPolicy::new(PermissionMode::DangerFullAccess)
+            .with_tool_requirement("edit_file", PermissionMode::WorkspaceWrite)
+            .with_denied_tool("edit_file");
+
+        assert!(matches!(
+            policy.authorize("edit_file", "{}", None),
+            PermissionOutcome::Deny { reason } if reason.contains("denied by the active agent mode")
         ));
     }
 }

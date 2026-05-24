@@ -6,7 +6,9 @@ use crate::compact::{
 };
 use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{HookRunResult, HookRunner};
+use crate::overflow::{status as overflow_status, ContextWindow, OverflowStatus};
 use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
+use crate::revert::{checkpoint, revert_to_checkpoint, RevertResult, SessionCheckpoint};
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
 
@@ -265,6 +267,25 @@ where
     #[must_use]
     pub fn compact(&self, config: CompactionConfig) -> CompactionResult {
         compact_session(&self.session, config)
+    }
+
+    #[must_use]
+    pub fn checkpoint(&self) -> SessionCheckpoint {
+        checkpoint(&self.session)
+    }
+
+    #[must_use]
+    pub fn revert_to_checkpoint(&self, checkpoint: &SessionCheckpoint) -> RevertResult {
+        revert_to_checkpoint(&self.session, checkpoint)
+    }
+
+    #[must_use]
+    pub fn overflow_status(
+        &self,
+        window: ContextWindow,
+        config: CompactionConfig,
+    ) -> OverflowStatus {
+        overflow_status(&self.session, window, config)
     }
 
     #[must_use]

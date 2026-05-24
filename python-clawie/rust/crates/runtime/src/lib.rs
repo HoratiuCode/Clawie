@@ -10,17 +10,18 @@ mod mcp;
 mod mcp_client;
 mod mcp_stdio;
 mod oauth;
+mod overflow;
 mod permissions;
 mod prompt;
 mod remote;
+mod revert;
 pub mod sandbox;
 mod session;
+mod session_retry;
+mod structured_output;
+mod todo;
 mod usage;
 
-pub use lsp::{
-    FileDiagnostics, LspContextEnrichment, LspError, LspManager, LspServerConfig,
-    SymbolLocation, WorkspaceDiagnostics,
-};
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use compact::{
@@ -28,8 +29,8 @@ pub use compact::{
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
 pub use config::{
-    ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpManagedProxyServerConfig,
-    McpConfigCollection, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
+    ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
+    McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
     McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
     ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig,
     RuntimePluginConfig, ScopedMcpServerConfig, CLAW_SETTINGS_SCHEMA_NAME,
@@ -44,12 +45,16 @@ pub use file_ops::{
     WriteFileOutput,
 };
 pub use hooks::{HookEvent, HookRunResult, HookRunner};
+pub use lsp::{
+    FileDiagnostics, LspContextEnrichment, LspError, LspManager, LspServerConfig, SymbolLocation,
+    WorkspaceDiagnostics,
+};
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
     scoped_mcp_config_hash, unwrap_ccr_proxy_url,
 };
 pub use mcp_client::{
-    McpManagedProxyTransport, McpClientAuth, McpClientBootstrap, McpClientTransport,
+    McpClientAuth, McpClientBootstrap, McpClientTransport, McpManagedProxyTransport,
     McpRemoteTransport, McpSdkTransport, McpStdioTransport,
 };
 pub use mcp_stdio::{
@@ -67,6 +72,7 @@ pub use oauth::{
     OAuthCallbackParams, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     PkceChallengeMethod, PkceCodePair,
 };
+pub use overflow::{status as overflow_status, ContextWindow, OverflowStatus};
 pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
     PermissionPrompter, PermissionRequest,
@@ -80,7 +86,14 @@ pub use remote::{
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
+pub use revert::{
+    checkpoint as session_checkpoint, revert_to_checkpoint, revert_to_last_user_turn,
+    truncate_after_tool_use, RevertResult, SessionCheckpoint,
+};
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
+pub use session_retry::{is_retryable_error, RetryDecision, RetryPolicy};
+pub use structured_output::{extract_json_candidate, StructuredOutput, StructuredOutputSpec};
+pub use todo::{validate_todos, SessionTodo, SessionTodoList, TodoStatus};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
 };

@@ -483,6 +483,7 @@ pub struct PluginsCommandResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum DefinitionSource {
+    Builtin,
     ProjectCodex,
     ProjectClaw,
     UserCodexHome,
@@ -493,6 +494,7 @@ enum DefinitionSource {
 impl DefinitionSource {
     fn label(self) -> &'static str {
         match self {
+            Self::Builtin => "Built-in",
             Self::ProjectCodex => "Project (.codex)",
             Self::ProjectClaw => "Project (.claw)",
             Self::UserCodexHome => "User ($CODEX_HOME)",
@@ -508,9 +510,38 @@ struct AgentSummary {
     description: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    mode: Option<String>,
+    permissions: Option<String>,
     source: DefinitionSource,
     shadowed_by: Option<DefinitionSource>,
 }
+
+const BUILTIN_AGENT_SUMMARIES: &[(&str, &str, &str, &str)] = &[
+    (
+        "build",
+        "Default coding agent with workspace edit tools enabled",
+        "primary",
+        "workspace edits allowed",
+    ),
+    (
+        "plan",
+        "Read-mostly planning agent; edit tools are denied",
+        "primary",
+        "read/search/todo only",
+    ),
+    (
+        "general",
+        "General-purpose background subagent for delegated work",
+        "subagent",
+        "full workspace tools except nested Agent",
+    ),
+    (
+        "explore",
+        "Fast read-only codebase exploration agent",
+        "subagent",
+        "read/search/web only",
+    ),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SkillSummary {
@@ -1283,6 +1314,8 @@ fn load_agents_from_roots(
                 description: parse_toml_string(&contents, "description"),
                 model: parse_toml_string(&contents, "model"),
                 reasoning_effort: parse_toml_string(&contents, "model_reasoning_effort"),
+                mode: parse_toml_string(&contents, "mode"),
+                permissions: parse_toml_string(&contents, "permissions"),
                 source: *source,
                 shadowed_by: None,
             });
@@ -1300,7 +1333,33 @@ fn load_agents_from_roots(
         }
     }
 
+    for mut agent in builtin_agent_summaries() {
+        let key = agent.name.to_ascii_lowercase();
+        if let Some(existing) = active_sources.get(&key) {
+            agent.shadowed_by = Some(*existing);
+        } else {
+            active_sources.insert(key, agent.source);
+        }
+        agents.push(agent);
+    }
+
     Ok(agents)
+}
+
+fn builtin_agent_summaries() -> Vec<AgentSummary> {
+    BUILTIN_AGENT_SUMMARIES
+        .iter()
+        .map(|(name, description, mode, permissions)| AgentSummary {
+            name: (*name).to_string(),
+            description: Some((*description).to_string()),
+            model: None,
+            reasoning_effort: None,
+            mode: Some((*mode).to_string()),
+            permissions: Some((*permissions).to_string()),
+            source: DefinitionSource::Builtin,
+            shadowed_by: None,
+        })
+        .collect()
 }
 
 fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillSummary>> {
@@ -1465,6 +1524,7 @@ fn render_agents_report(agents: &[AgentSummary]) -> String {
     ];
 
     for source in [
+        DefinitionSource::Builtin,
         DefinitionSource::ProjectCodex,
         DefinitionSource::ProjectClaw,
         DefinitionSource::UserCodexHome,
@@ -1503,6 +1563,12 @@ fn agent_detail(agent: &AgentSummary) -> String {
     }
     if let Some(reasoning) = &agent.reasoning_effort {
         parts.push(reasoning.clone());
+    }
+    if let Some(mode) = &agent.mode {
+        parts.push(format!("mode={mode}"));
+    }
+    if let Some(permissions) = &agent.permissions {
+        parts.push(format!("permissions={permissions}"));
     }
     parts.join(" · ")
 }
@@ -2187,7 +2253,10 @@ mod tests {
             render_agents_report(&load_agents_from_roots(&roots).expect("agent roots should load"));
 
         assert!(report.contains("Agents"));
-        assert!(report.contains("2 active agents"));
+        assert!(report.contains("6 active agents"));
+        assert!(report.contains("Built-in:"));
+        assert!(report.contains("build · Default coding agent"));
+        assert!(report.contains("plan · Read-mostly planning agent"));
         assert!(report.contains("Project (.codex):"));
         assert!(report.contains("planner · Project planner · gpt-5.4 · medium"));
         assert!(report.contains("User (~/.codex):"));
