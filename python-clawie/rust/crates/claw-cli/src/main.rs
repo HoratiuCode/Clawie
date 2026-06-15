@@ -2,7 +2,7 @@ mod init;
 mod input;
 mod render;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
@@ -997,6 +997,77 @@ fn run_resume_command(
                 message: Some(handle_skills_slash_command(args.as_deref(), &cwd)?),
             })
         }
+        SlashCommand::Artifacts => {
+            let session_id = session_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let store = RustArtifactStore::new(&session_id)?;
+            let artifacts = store.list_artifacts();
+            let mut message = "Artifacts\n".to_string();
+            if artifacts.is_empty() {
+                message.push_str("  • no artifacts in this session\n");
+                message.push_str("  • use /artifact-create <name> to create one\n");
+            } else {
+                message.push_str(&format!("  • total: {}\n", artifacts.len()));
+                for art in artifacts {
+                    let facing = if art.metadata.user_facing { "📄" } else { "🔧" };
+                    message.push_str(&format!(
+                        "  • {} `{}` — {} ({} bytes)\n",
+                        facing,
+                        art.name,
+                        art.metadata.summary,
+                        fs::read_to_string(&art.path).unwrap_or_default().len()
+                    ));
+                }
+            }
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+            })
+        }
+        SlashCommand::ArtifactCreate { name } => {
+            let session_id = session_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let mut store = RustArtifactStore::new(&session_id)?;
+            let message = match name {
+                Some(art_name) => {
+                    if store.get_by_name(&art_name).is_some() {
+                        format!("  • artifact '{}' already exists — use a different name", art_name)
+                    } else {
+                        let content = format!("# {art_name}\n\nManual artifact creation.");
+                        store.create(&art_name, &content, "Created via CLI")?;
+                        format!("  • created artifact: {}", art_name)
+                    }
+                }
+                None => "usage: /artifact-create <name>".to_string(),
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(format!("Artifact Create\n{}", message)),
+            })
+        }
+        SlashCommand::ArtifactView { name } => {
+            let session_id = session_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let store = RustArtifactStore::new(&session_id)?;
+            let message = match name {
+                Some(art_name) => {
+                    if let Some(art) = store.get_by_name(&art_name) {
+                        let content = fs::read_to_string(&art.path).unwrap_or_default();
+                        format!(
+                            "Artifact View\n  • name: {}\n  • summary: {}\n  • user_facing: {}\n\n{}",
+                            art.name,
+                            art.metadata.summary,
+                            art.metadata.user_facing,
+                            content
+                        )
+                    } else {
+                        format!("Artifact View\n  • artifact '{}' not found", art_name)
+                    }
+                }
+                None => "usage: /artifact-view <name>".to_string(),
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+            })
+        }
         SlashCommand::Bughunter { .. }
         | SlashCommand::Branch { .. }
         | SlashCommand::Worktree { .. }
@@ -1261,6 +1332,68 @@ impl LiveCli {
             SlashCommand::Model { model } => self.set_model(model)?,
             SlashCommand::Permissions { mode } => self.set_permissions(mode)?,
             SlashCommand::Clear { confirm } => self.clear_session(confirm)?,
+            SlashCommand::Artifacts => {
+                let store = RustArtifactStore::new(&self.session.id)?;
+                let artifacts = store.list_artifacts();
+                println!("Artifacts");
+                if artifacts.is_empty() {
+                    println!("  • no artifacts in this session");
+                    println!("  • use /artifact-create <name> to create one");
+                } else {
+                    println!("  • total: {}", artifacts.len());
+                    for art in artifacts {
+                        let facing = if art.metadata.user_facing { "📄" } else { "🔧" };
+                        println!(
+                            "  • {} `{}` — {} ({} bytes)",
+                            facing,
+                            art.name,
+                            art.metadata.summary,
+                            fs::read_to_string(&art.path).unwrap_or_default().len()
+                        );
+                    }
+                }
+                false
+            }
+            SlashCommand::ArtifactCreate { name } => {
+                let mut store = RustArtifactStore::new(&self.session.id)?;
+                println!("Artifact Create");
+                match name {
+                    Some(art_name) => {
+                        if store.get_by_name(&art_name).is_some() {
+                            println!("  • artifact '{}' already exists — use a different name", art_name);
+                        } else {
+                            let content = format!("# {art_name}\n\nManual artifact creation.");
+                            store.create(&art_name, &content, "Created via CLI")?;
+                            println!("  • created artifact: {}", art_name);
+                        }
+                    }
+                    None => {
+                        println!("usage: /artifact-create <name>");
+                    }
+                }
+                false
+            }
+            SlashCommand::ArtifactView { name } => {
+                let store = RustArtifactStore::new(&self.session.id)?;
+                println!("Artifact View");
+                match name {
+                    Some(art_name) => {
+                        if let Some(art) = store.get_by_name(&art_name) {
+                            println!("  • name: {}", art.name);
+                            println!("  • summary: {}", art.metadata.summary);
+                            println!("  • user_facing: {}", art.metadata.user_facing);
+                            let content = fs::read_to_string(&art.path).unwrap_or_default();
+                            println!("\n{}", content);
+                        } else {
+                            println!("  • artifact '{}' not found", art_name);
+                        }
+                    }
+                    None => {
+                        println!("usage: /artifact-view <name>");
+                    }
+                }
+                false
+            }
             SlashCommand::Cost => {
                 self.print_cost();
                 false
@@ -3887,6 +4020,117 @@ fn print_help() {
     let _ = print_help_to(&mut io::stdout());
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+struct RustArtifactMetadata {
+    summary: String,
+    #[serde(default = "default_true")]
+    user_facing: bool,
+    #[serde(default)]
+    request_feedback: bool,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+struct RustArtifactIndexEntry {
+    artifact_id: String,
+    name: String,
+    metadata: RustArtifactMetadata,
+    path: String,
+}
+
+struct RustArtifactStore {
+    session_dir: PathBuf,
+    index_path: PathBuf,
+    index: HashMap<String, RustArtifactIndexEntry>,
+}
+
+impl RustArtifactStore {
+    fn new(session_id: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let base_dir = claw_home_dir()?.join("artifacts");
+        let session_dir = base_dir.join(session_id);
+        fs::create_dir_all(&session_dir)?;
+        let index_path = session_dir.join("_index.json");
+        let mut index = HashMap::new();
+        if index_path.exists() {
+            let content = fs::read_to_string(&index_path)?;
+            if !content.trim().is_empty() {
+                index = serde_json::from_str(&content)?;
+            }
+        }
+        Ok(Self {
+            session_dir,
+            index_path,
+            index,
+        })
+    }
+
+    fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let content = serde_json::to_string_pretty(&self.index)?;
+        fs::write(&self.index_path, content)?;
+        Ok(())
+    }
+
+    fn create(&mut self, name: &str, content: &str, summary: &str) -> Result<RustArtifactIndexEntry, Box<dyn std::error::Error>> {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let artifact_id = format!("artifact-{millis}");
+        let artifact_path = self.session_dir.join(name);
+        
+        if let Some(parent) = artifact_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&artifact_path, content)?;
+
+        let now_str = format!("{millis}");
+        let metadata = RustArtifactMetadata {
+            summary: summary.to_string(),
+            user_facing: true,
+            request_feedback: false,
+            created_at: now_str.clone(),
+            updated_at: now_str,
+            tags: Vec::new(),
+        };
+
+        let entry = RustArtifactIndexEntry {
+            artifact_id: artifact_id.clone(),
+            name: name.to_string(),
+            metadata,
+            path: artifact_path.to_string_lossy().to_string(),
+        };
+
+        self.index.insert(artifact_id, entry.clone());
+        self.save()?;
+        Ok(entry)
+    }
+
+    fn list_artifacts(&self) -> Vec<RustArtifactIndexEntry> {
+        self.index.values().cloned().collect()
+    }
+
+    fn get_by_name(&self, name: &str) -> Option<RustArtifactIndexEntry> {
+        self.index.values().find(|e| e.name == name).cloned()
+    }
+}
+
+fn claw_home_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Some(val) = env::var_os("CLAW_CONFIG_HOME") {
+        return Ok(PathBuf::from(val));
+    }
+    let cwd = env::current_dir()?;
+    Ok(cwd.join(".claw"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3899,13 +4143,15 @@ mod tests {
         render_repl_help, resolve_model_alias, response_to_events, resume_supported_slash_commands,
         status_context, CliAction, CliOutputFormat, InternalPromptProgressEvent,
         InternalPromptProgressState, SlashCommand, StatusUsage, DEFAULT_MODEL,
+        run_resume_command,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{PluginTool, PluginToolDefinition, PluginToolPermission};
-    use runtime::{AssistantEvent, ContentBlock, ConversationMessage, MessageRole, PermissionMode};
+    use runtime::{AssistantEvent, ContentBlock, ConversationMessage, MessageRole, PermissionMode, Session};
     use serde_json::json;
+    use std::fs;
     use std::path::PathBuf;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tools::GlobalToolRegistry;
 
     fn registry_with_plugin_tool() -> GlobalToolRegistry {
@@ -3930,6 +4176,75 @@ mod tests {
             None,
         )])
         .expect("plugin tool registry should build")
+    }
+
+    fn temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("claw-cli-tests-{nanos}"))
+    }
+
+    #[test]
+    fn test_artifact_resume_commands() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("create root");
+        let session_path = root.join("session.json");
+        let session = Session {
+            version: 1,
+            messages: Vec::new(),
+        };
+        let session_json = serde_json::to_string(&session).expect("serde session");
+        fs::write(&session_path, session_json).expect("session should save");
+
+        let old_config_home = std::env::var("CLAW_CONFIG_HOME");
+        std::env::set_var("CLAW_CONFIG_HOME", &root);
+
+        // 1. Initially artifacts should be empty
+        let outcome = run_resume_command(&session_path, &session, &SlashCommand::Artifacts)
+            .expect("resume artifacts should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("no artifacts in this session"));
+
+        // 2. Create an artifact
+        let outcome = run_resume_command(
+            &session_path,
+            &session,
+            &SlashCommand::ArtifactCreate {
+                name: Some("test_art.md".to_string()),
+            },
+        )
+        .expect("resume artifact-create should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("created artifact: test_art.md"));
+
+        // 3. View the artifact
+        let outcome = run_resume_command(
+            &session_path,
+            &session,
+            &SlashCommand::ArtifactView {
+                name: Some("test_art.md".to_string()),
+            },
+        )
+        .expect("resume artifact-view should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("name: test_art.md"));
+        assert!(message.contains("Manual artifact creation."));
+
+        // 4. List artifacts again
+        let outcome = run_resume_command(&session_path, &session, &SlashCommand::Artifacts)
+            .expect("resume artifacts should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("total: 1"));
+        assert!(message.contains("test_art.md"));
+
+        if let Ok(val) = old_config_home {
+            std::env::set_var("CLAW_CONFIG_HOME", val);
+        } else {
+            std::env::remove_var("CLAW_CONFIG_HOME");
+        }
+        fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 
     #[test]
@@ -4251,7 +4566,7 @@ mod tests {
             names,
             vec![
                 "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
-                "version", "export", "agents", "skills",
+                "version", "export", "agents", "skills", "artifacts", "artifact-create", "artifact-view",
             ]
         );
     }

@@ -1028,7 +1028,10 @@ mod tests {
         assert_eq!(payload["messages"][1]["role"], json!("user"));
         assert_eq!(payload["messages"][2]["role"], json!("tool"));
         assert_eq!(payload["tools"][0]["type"], json!("function"));
-        assert_eq!(payload["tools"][0]["function"]["parameters"]["properties"], json!({}));
+        assert_eq!(
+            payload["tools"][0]["function"]["parameters"]["properties"],
+            json!({})
+        );
         assert_eq!(payload["tool_choice"], json!("auto"));
     }
 

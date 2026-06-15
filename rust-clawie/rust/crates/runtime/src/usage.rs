@@ -172,9 +172,18 @@ impl TokenUsage {
     }
 
     #[must_use]
-    pub fn alert_level_for_model(self, model: Option<&str>, yellow_threshold: f64, red_threshold: f64) -> UsageAlertLevel {
-        let pricing = model.and_then(pricing_for_model).unwrap_or_else(ModelPricing::default_sonnet_tier);
-        let cost = self.estimate_cost_usd_with_pricing(pricing).total_cost_usd();
+    pub fn alert_level_for_model(
+        self,
+        model: Option<&str>,
+        yellow_threshold: f64,
+        red_threshold: f64,
+    ) -> UsageAlertLevel {
+        let pricing = model
+            .and_then(pricing_for_model)
+            .unwrap_or_else(ModelPricing::default_sonnet_tier);
+        let cost = self
+            .estimate_cost_usd_with_pricing(pricing)
+            .total_cost_usd();
         if cost >= red_threshold {
             UsageAlertLevel::Red
         } else if cost >= yellow_threshold {

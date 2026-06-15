@@ -1,5 +1,6 @@
 use std::fmt::Write as FmtWrite;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use crossterm::cursor::{MoveToColumn, RestorePosition, SavePosition};
@@ -11,6 +12,75 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+
+static ACTIVE_TERMINAL_THEME: AtomicU8 = AtomicU8::new(TerminalTheme::Emoji as u8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalTheme {
+    Emoji = 0,
+    Chrome = 1,
+    Classic = 2,
+}
+
+impl TerminalTheme {
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "clawie1" | "emoji" | "default" => Some(Self::Emoji),
+            "chrome" | "black-white" | "black-and-white" | "bw" => Some(Self::Chrome),
+            "classic" | "red" => Some(Self::Classic),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Emoji => "clawie1",
+            Self::Chrome => "chrome",
+            Self::Classic => "classic",
+        }
+    }
+
+    #[must_use]
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Emoji => "red accent with emoji status markers",
+            Self::Chrome => "black and white with emoji status markers",
+            Self::Classic => "red accent without emoji status markers",
+        }
+    }
+
+    #[must_use]
+    pub fn emojis_enabled(self) -> bool {
+        matches!(self, Self::Emoji | Self::Chrome)
+    }
+
+    #[must_use]
+    pub fn banner_color(self) -> Color {
+        match self {
+            Self::Emoji | Self::Classic => Color::Red,
+            Self::Chrome => Color::Grey,
+        }
+    }
+
+    fn from_storage(value: u8) -> Self {
+        match value {
+            1 => Self::Chrome,
+            2 => Self::Classic,
+            _ => Self::Emoji,
+        }
+    }
+}
+
+#[must_use]
+pub fn active_terminal_theme() -> TerminalTheme {
+    TerminalTheme::from_storage(ACTIVE_TERMINAL_THEME.load(Ordering::Relaxed))
+}
+
+pub fn set_active_terminal_theme(theme: TerminalTheme) {
+    ACTIVE_TERMINAL_THEME.store(theme as u8, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorTheme {
@@ -29,18 +99,40 @@ pub struct ColorTheme {
 
 impl Default for ColorTheme {
     fn default() -> Self {
-        Self {
-            heading: Color::Cyan,
-            emphasis: Color::Magenta,
-            strong: Color::Yellow,
-            inline_code: Color::Green,
-            link: Color::Blue,
-            quote: Color::DarkGrey,
-            table_border: Color::DarkCyan,
-            code_block_border: Color::DarkGrey,
-            spinner_active: Color::White,
-            spinner_done: Color::Green,
-            spinner_failed: Color::Red,
+        Self::for_terminal_theme(TerminalTheme::Emoji)
+    }
+}
+
+impl ColorTheme {
+    #[must_use]
+    pub fn for_terminal_theme(theme: TerminalTheme) -> Self {
+        match theme {
+            TerminalTheme::Emoji | TerminalTheme::Classic => Self {
+                heading: Color::Red,
+                emphasis: Color::Magenta,
+                strong: Color::Yellow,
+                inline_code: Color::Green,
+                link: Color::Blue,
+                quote: Color::DarkGrey,
+                table_border: Color::DarkRed,
+                code_block_border: Color::DarkGrey,
+                spinner_active: Color::White,
+                spinner_done: Color::Green,
+                spinner_failed: Color::Red,
+            },
+            TerminalTheme::Chrome => Self {
+                heading: Color::White,
+                emphasis: Color::Grey,
+                strong: Color::White,
+                inline_code: Color::Grey,
+                link: Color::White,
+                quote: Color::DarkGrey,
+                table_border: Color::Grey,
+                code_block_border: Color::DarkGrey,
+                spinner_active: Color::White,
+                spinner_done: Color::White,
+                spinner_failed: Color::Grey,
+            },
         }
     }
 }
@@ -195,6 +287,11 @@ impl RenderState {
     fn style_text(&self, text: &str, theme: &ColorTheme) -> String {
         let mut style = text.stylize();
 
+        let is_phase = text.trim_start().starts_with("Phase ");
+        if is_phase {
+            style = style.bold().cyan();
+        }
+
         if matches!(self.heading_level, Some(1 | 2)) || self.strong > 0 {
             style = style.bold();
         }
@@ -202,7 +299,9 @@ impl RenderState {
             style = style.italic();
         }
 
-        if let Some(level) = self.heading_level {
+        if is_phase {
+            // keep bold cyan
+        } else if let Some(level) = self.heading_level {
             style = match level {
                 1 => style.with(theme.heading),
                 2 => style.white(),
@@ -242,6 +341,7 @@ impl RenderState {
 pub struct TerminalRenderer {
     syntax_set: SyntaxSet,
     syntax_theme: Theme,
+    terminal_theme: TerminalTheme,
     color_theme: ColorTheme,
 }
 
@@ -254,10 +354,12 @@ impl Default for TerminalRenderer {
             .themes
             .remove("base16-ocean.dark")
             .unwrap_or_default();
+        let terminal_theme = active_terminal_theme();
         Self {
             syntax_set,
             syntax_theme,
-            color_theme: ColorTheme::default(),
+            terminal_theme,
+            color_theme: ColorTheme::for_terminal_theme(terminal_theme),
         }
     }
 }
@@ -271,6 +373,11 @@ impl TerminalRenderer {
     #[must_use]
     pub fn color_theme(&self) -> &ColorTheme {
         &self.color_theme
+    }
+
+    #[must_use]
+    pub fn terminal_theme(&self) -> TerminalTheme {
+        self.terminal_theme
     }
 
     #[must_use]
@@ -353,7 +460,9 @@ impl TerminalRenderer {
                     CodeBlockKind::Fenced(lang) => lang.to_string(),
                 };
                 code_buffer.clear();
-                self.start_code_block(code_language, output);
+                if *code_language != "diff" {
+                    self.start_code_block(code_language, output);
+                }
             }
             Event::End(TagEnd::CodeBlock) => {
                 self.finish_code_block(code_buffer, code_language, output);
@@ -381,7 +490,15 @@ impl TerminalRenderer {
                 state.append_raw(output, &format!("[{reference}]"));
             }
             Event::TaskListMarker(done) => {
-                state.append_raw(output, if done { "[x] " } else { "[ ] " });
+                let marker = if done {
+                    "\x1b[32m✔\x1b[0m "
+                } else {
+                    "\x1b[33m●\x1b[0m "
+                };
+                if output.ends_with("• ") {
+                    output.truncate(output.len() - "• ".len());
+                }
+                state.append_raw(output, marker);
             }
             Event::InlineMath(math) | Event::DisplayMath(math) => {
                 state.append_raw(output, &math);
@@ -502,13 +619,70 @@ impl TerminalRenderer {
     }
 
     fn finish_code_block(&self, code_buffer: &str, code_language: &str, output: &mut String) {
-        output.push_str(&self.highlight_code(code_buffer, code_language));
-        let _ = write!(
-            output,
+        if code_language == "diff" {
+            output.push_str(&self.render_pretty_diff(code_buffer));
+        } else {
+            output.push_str(&self.highlight_code(code_buffer, code_language));
+            let _ = write!(
+                output,
+                "{}",
+                "╰─".bold().with(self.color_theme.code_block_border)
+            );
+            output.push_str("\n\n");
+        }
+    }
+
+    fn render_pretty_diff(&self, diff: &str) -> String {
+        let mut rendered = String::new();
+        let border_color = self.color_theme.code_block_border;
+        let _ = writeln!(
+            &mut rendered,
             "{}",
-            "╰─".bold().with(self.color_theme.code_block_border)
+            "┌── Code Modifications ──────────────────────────────────────"
+                .bold()
+                .with(border_color)
         );
-        output.push_str("\n\n");
+
+        for line in diff.lines() {
+            if line.starts_with('+') {
+                let _ = writeln!(
+                    &mut rendered,
+                    "{}\x1b[38;5;70m{}\x1b[0m",
+                    "│ ".bold().with(border_color),
+                    line.trim_end()
+                );
+            } else if line.starts_with('-') {
+                let _ = writeln!(
+                    &mut rendered,
+                    "{}\x1b[38;5;203m{}\x1b[0m",
+                    "│ ".bold().with(border_color),
+                    line.trim_end()
+                );
+            } else if line.starts_with("@@") {
+                let _ = writeln!(
+                    &mut rendered,
+                    "{}\x1b[36m{}\x1b[0m",
+                    "│ ".bold().with(border_color),
+                    line.trim_end()
+                );
+            } else {
+                let _ = writeln!(
+                    &mut rendered,
+                    "{}{}",
+                    "│ ".bold().with(border_color),
+                    line.trim_end()
+                );
+            }
+        }
+
+        let _ = writeln!(
+            &mut rendered,
+            "{}",
+            "└────────────────────────────────────────────────────────────"
+                .bold()
+                .with(border_color)
+        );
+        rendered
     }
 
     fn push_text(
@@ -738,7 +912,11 @@ fn split_into_sentences(text: &str) -> Vec<String> {
         if matches!(ch, '.' | '!' | '?') {
             let next_non_space = chars.clone().find(|c| !c.is_whitespace());
             let should_split = next_non_space
-                .map(|next| next.is_uppercase() || next.is_ascii_digit() || matches!(next, '"' | '\'' | '`' | '(' | '['))
+                .map(|next| {
+                    next.is_uppercase()
+                        || next.is_ascii_digit()
+                        || matches!(next, '"' | '\'' | '`' | '(' | '[')
+                })
                 .unwrap_or(true);
             if should_split {
                 let sentence = current.trim();
@@ -762,8 +940,10 @@ fn split_list_item(line: &str) -> Option<(String, String, String)> {
     let indent_len = line.len().saturating_sub(line.trim_start().len());
     let trimmed = &line[indent_len..];
 
-    let marker_len = if matches!(trimmed.as_bytes().first().copied(), Some(b'-' | b'*' | b'+'))
-        && trimmed.as_bytes().get(1) == Some(&b' ')
+    let marker_len = if matches!(
+        trimmed.as_bytes().first().copied(),
+        Some(b'-' | b'*' | b'+')
+    ) && trimmed.as_bytes().get(1) == Some(&b' ')
     {
         2
     } else {
@@ -775,11 +955,7 @@ fn split_list_item(line: &str) -> Option<(String, String, String)> {
             }
             break;
         }
-        if digits > 0
-            && trimmed[digits..]
-                .strip_prefix(". ")
-                .is_some()
-        {
+        if digits > 0 && trimmed[digits..].strip_prefix(". ").is_some() {
             digits + 2
         } else {
             return None;
@@ -905,7 +1081,8 @@ fn strip_ansi(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_ansi, MarkdownStreamState, Spinner, TerminalRenderer};
+    use super::{strip_ansi, MarkdownStreamState, Spinner, TerminalRenderer, TerminalTheme};
+    use crossterm::style::Color;
 
     #[test]
     fn renders_markdown_with_styling_and_lists() {
@@ -964,9 +1141,13 @@ mod tests {
         );
         let plain_text = strip_ansi(&markdown_output);
 
-        assert!(plain_text.lines().any(|line| line.contains("Open and view the file")));
+        assert!(plain_text
+            .lines()
+            .any(|line| line.contains("Open and view the file")));
         assert!(plain_text.lines().any(|line| line.contains("contents")));
-        assert!(plain_text.lines().any(|line| line.contains("Edit or replace text in the")));
+        assert!(plain_text
+            .lines()
+            .any(|line| line.contains("Edit or replace text in the")));
         assert!(plain_text.lines().any(|line| line.contains("file")));
     }
 
@@ -978,8 +1159,12 @@ mod tests {
         );
         let plain_text = strip_ansi(&markdown_output);
 
-        assert!(plain_text.lines().any(|line| line.starts_with("• Just to confirm")));
-        assert!(plain_text.lines().any(|line| line.contains("Please specify")));
+        assert!(plain_text
+            .lines()
+            .any(|line| line.starts_with("• Just to confirm")));
+        assert!(plain_text
+            .lines()
+            .any(|line| line.contains("Please specify")));
     }
 
     #[test]
@@ -1031,5 +1216,38 @@ mod tests {
 
         let output = String::from_utf8_lossy(&out);
         assert!(output.contains("Working"));
+    }
+
+    #[test]
+    fn chrome_banner_color_is_grey() {
+        assert_eq!(TerminalTheme::Chrome.banner_color(), Color::Grey);
+    }
+
+    #[test]
+    fn renders_pretty_diff_blocks() {
+        let terminal_renderer = TerminalRenderer::new();
+        let markdown_output = terminal_renderer.markdown_to_ansi(
+            "```diff\n- old_code();\n+ new_code();\n@@ hunk @@\ncontext_line\n```"
+        );
+        let plain_text = strip_ansi(&markdown_output);
+
+        assert!(plain_text.contains("Code Modifications"));
+        assert!(plain_text.contains("- old_code();"));
+        assert!(plain_text.contains("+ new_code();"));
+        assert!(plain_text.contains("@@ hunk @@"));
+        assert!(plain_text.contains("context_line"));
+    }
+
+    #[test]
+    fn renders_pretty_checklists_and_phases() {
+        let terminal_renderer = TerminalRenderer::new();
+        let markdown_output = terminal_renderer.render_markdown(
+            "Phase 1: Planning\n- [x] Task one\n- [ ] Task two"
+        );
+        let plain_text = strip_ansi(&markdown_output);
+
+        assert!(plain_text.contains("Phase 1: Planning"));
+        assert!(plain_text.contains("✔ Task one"));
+        assert!(plain_text.contains("● Task two"));
     }
 }

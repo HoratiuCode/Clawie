@@ -1,0 +1,18 @@
+{
+  "session_id": "60793391d5df46bbbd7c93f9cab40604",
+  "messages": [
+    "review MCP tool"
+  ],
+  "input_tokens": 3,
+  "output_tokens": 11,
+  "memory_journal": [
+    "Prompt: review MCP tool",
+    "Commands: none",
+    "Tools: none",
+    "Permission denials: 0"
+  ],
+  "code_references": [
+    "python-clawie/src/query_engine.py",
+    "python-clawie/src/session_store.py"
+  ]
+}

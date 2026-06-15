@@ -16,7 +16,7 @@ use rustyline::hint::Hinter;
 use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
 use rustyline::{
-    Cmd, CompletionType, Config, ConditionalEventHandler, Context, EditMode, Editor, Event,
+    Cmd, CompletionType, ConditionalEventHandler, Config, Context, EditMode, Editor, Event,
     EventContext, EventHandler, Helper, KeyCode, KeyEvent, Modifiers,
 };
 
@@ -39,20 +39,40 @@ pub fn prompt_prefix() -> &'static str {
     "📁 clawie › "
 }
 
+/// Renders a compact one-line status bar shown just above the input prompt.
+/// Displays the active model name and the interrupt shortcut.
+#[must_use]
+pub fn render_input_status_bar(model: &str) -> String {
+    format!(
+        "\x1b[2m  model: {}  ·  Ctrl+C / Esc to interrupt\x1b[0m",
+        model
+    )
+}
+
 pub fn render_prompt_banner() -> String {
     let rows = [
         "📁 Clawie v2".to_string(),
-        format!("Prompt          {}", prompt_prefix()),
-        "Tab             opens the slash menu".to_string(),
-        "Shift+Enter     inserts a newline".to_string(),
-        "Ctrl+J          inserts a newline".to_string(),
+        format!("Prompt              {}", prompt_prefix()),
+        "Tab                 opens the slash menu".to_string(),
+        "Shift+Enter         inserts a newline".to_string(),
+        "Ctrl+J              inserts a newline".to_string(),
     ];
-    let width = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0);
+    let width = rows
+        .iter()
+        .map(|row| row.chars().count())
+        .max()
+        .unwrap_or(0);
     let border = "─".repeat(width + 2);
 
     let mut lines = Vec::with_capacity(rows.len() + 2);
     lines.push(format!("╭{}╮", border));
-    lines.extend(rows.into_iter().map(|row| format!("│ {:<width$} │", row, width = width)));
+    for row in rows {
+        if row.starts_with('─') {
+            lines.push(format!("├{}┤", "─".repeat(width + 2)));
+        } else {
+            lines.push(format!("│ {:<width$} │", row, width = width));
+        }
+    }
     lines.push(format!("╰{}╯", border));
     lines.join("\n")
 }
@@ -104,6 +124,14 @@ impl Completer for SlashCommandHelper {
 
 impl Hinter for SlashCommandHelper {
     type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        if pos == line.len() && line.trim().eq_ignore_ascii_case("plan") {
+            return Some("\nCreate a plan?".to_string());
+        }
+
+        None
+    }
 }
 
 impl Highlighter for SlashCommandHelper {
@@ -124,7 +152,13 @@ impl Helper for SlashCommandHelper {}
 struct SlashMenuEventHandler;
 
 impl ConditionalEventHandler for SlashMenuEventHandler {
-    fn handle(&self, evt: &Event, _n: rustyline::RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+    fn handle(
+        &self,
+        evt: &Event,
+        _n: rustyline::RepeatCount,
+        _positive: bool,
+        ctx: &EventContext,
+    ) -> Option<Cmd> {
         debug_assert_eq!(*evt, Event::from(KeyEvent::from('/')));
         if ctx.line().is_empty() && ctx.pos() == 0 {
             SLASH_MENU_REQUESTED.store(true, Ordering::Relaxed);
@@ -145,7 +179,9 @@ impl ConditionalEventHandler for SlashTabMenuEventHandler {
         _positive: bool,
         ctx: &EventContext,
     ) -> Option<Cmd> {
-        if (ctx.line().is_empty() && ctx.pos() == 0) || slash_command_prefix(ctx.line(), ctx.pos()).is_some() {
+        if (ctx.line().is_empty() && ctx.pos() == 0)
+            || slash_command_prefix(ctx.line(), ctx.pos()).is_some()
+        {
             SLASH_MENU_REQUESTED.store(true, Ordering::Relaxed);
             Some(Cmd::Interrupt)
         } else {
@@ -156,6 +192,7 @@ impl ConditionalEventHandler for SlashTabMenuEventHandler {
 
 pub struct LineEditor {
     prompt: String,
+    model: String,
     editor: Editor<SlashCommandHelper, DefaultHistory>,
 }
 
@@ -182,8 +219,14 @@ impl LineEditor {
 
         Self {
             prompt: prompt.into(),
+            model: String::new(),
             editor,
         }
+    }
+
+    /// Set the active model name to display in the per-prompt status bar.
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.model = model.into();
     }
 
     pub fn push_history(&mut self, entry: impl Into<String>) {
@@ -200,39 +243,67 @@ impl LineEditor {
             helper.set_completions(completions);
         }
     }
-
     pub fn read_line(&mut self) -> io::Result<ReadOutcome> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return self.read_line_fallback();
         }
 
-        SLASH_MENU_REQUESTED.store(false, Ordering::Relaxed);
-        if let Some(helper) = self.editor.helper_mut() {
-            helper.reset_current_line();
-        }
+        let mut initial_text = String::new();
+        loop {
+            // Build a three-line prompt: branding on first line, status bar on second, input cursor prompt on third.
+            let full_prompt = if self.model.is_empty() {
+                self.prompt.clone()
+            } else {
+                format!(
+                    "{}\n{}\n› ",
+                    self.prompt.trim_end(),
+                    render_input_status_bar(&self.model)
+                )
+            };
 
-        match self.editor.readline(&self.prompt) {
-            Ok(line) => Ok(ReadOutcome::Submit(line)),
-            Err(ReadlineError::Interrupted) => {
-                if SLASH_MENU_REQUESTED.swap(false, Ordering::Relaxed) {
-                    return self.open_slash_command_picker();
-                }
-                let has_input = !self.current_line().is_empty();
-                self.finish_interrupted_read()?;
-                if has_input {
-                    Ok(ReadOutcome::Cancel)
-                } else {
-                    Ok(ReadOutcome::Exit)
-                }
+            SLASH_MENU_REQUESTED.store(false, Ordering::Relaxed);
+            if let Some(helper) = self.editor.helper_mut() {
+                helper.reset_current_line();
             }
-            Err(ReadlineError::Eof) => {
-                self.finish_interrupted_read()?;
-                Ok(ReadOutcome::Exit)
+
+            let readline_res = if initial_text.is_empty() {
+                self.editor.readline(&full_prompt)
+            } else {
+                self.editor.readline_with_initial(&full_prompt, (&initial_text, ""))
+            };
+
+            match readline_res {
+                Ok(line) => return Ok(ReadOutcome::Submit(line)),
+                Err(ReadlineError::Interrupted) => {
+                    if SLASH_MENU_REQUESTED.swap(false, Ordering::Relaxed) {
+                        match self.open_slash_command_picker()? {
+                            ReadOutcome::Submit(selection) => {
+                                if selection.starts_with("/model") || selection.starts_with("/theme") {
+                                    return Ok(ReadOutcome::Submit(selection));
+                                } else {
+                                    initial_text = format!("{selection} ");
+                                    continue;
+                                }
+                            }
+                            other => return Ok(other),
+                        }
+                    }
+                    let has_input = !self.current_line().is_empty();
+                    self.finish_interrupted_read()?;
+                    if has_input {
+                        return Ok(ReadOutcome::Cancel);
+                    } else {
+                        return Ok(ReadOutcome::Exit);
+                    }
+                }
+                Err(ReadlineError::Eof) => {
+                    self.finish_interrupted_read()?;
+                    return Ok(ReadOutcome::Exit);
+                }
+                Err(error) => return Err(io::Error::other(error)),
             }
-            Err(error) => Err(io::Error::other(error)),
         }
     }
-
     fn current_line(&self) -> String {
         self.editor
             .helper()
@@ -276,6 +347,9 @@ impl LineEditor {
         if prefix.starts_with("/model") {
             return self.open_model_picker(&prefix);
         }
+        if prefix.starts_with("/theme") {
+            return self.open_theme_picker(&prefix);
+        }
 
         let items = commands
             .into_iter()
@@ -291,12 +365,23 @@ impl LineEditor {
         if selection == "/model" {
             return self.open_model_picker("/model");
         }
+        if selection == "/theme" {
+            return self.open_theme_picker("/theme");
+        }
 
         Ok(ReadOutcome::Submit(selection))
     }
 
     fn open_model_picker(&self, prefix: &str) -> io::Result<ReadOutcome> {
         let Some(selection) = self.pick_slash_menu(self.model_menu_items(prefix))? else {
+            return Ok(ReadOutcome::Cancel);
+        };
+
+        Ok(ReadOutcome::Submit(selection))
+    }
+
+    fn open_theme_picker(&self, prefix: &str) -> io::Result<ReadOutcome> {
+        let Some(selection) = self.pick_slash_menu(self.theme_menu_items(prefix))? else {
             return Ok(ReadOutcome::Cancel);
         };
 
@@ -313,16 +398,26 @@ impl LineEditor {
             let mut offset = 0usize;
             let window_size = 8usize;
             let mut previous_lines = 0usize;
-            let title = if items.first().is_some_and(|item| item.value.starts_with("/model")) {
+            let is_model_picker = items
+                .first()
+                .is_some_and(|item| item.value.starts_with("/model"));
+            let is_theme_picker = items
+                .first()
+                .is_some_and(|item| item.value.starts_with("/theme"));
+            let title = if is_model_picker {
                 "🔎 Model Picker"
+            } else if is_theme_picker {
+                "🎨 Theme Picker"
             } else {
                 "🌶 Slash Menu"
             };
             loop {
                 let visible_end = items.len().min(offset + window_size);
                 let visible = &items[offset..visible_end];
-                let subtitle = if title == "🔎 Model Picker" {
+                let subtitle = if is_model_picker {
                     "Choose a model and press Enter"
+                } else if is_theme_picker {
+                    "Choose a theme and press Enter"
                 } else {
                     "Type a slash command and press Enter"
                 };
@@ -342,11 +437,7 @@ impl LineEditor {
                 if previous_lines > 0 {
                     execute!(stdout, MoveUp(previous_lines as u16))?;
                 }
-                execute!(
-                    stdout,
-                    MoveToColumn(0),
-                    Clear(ClearType::FromCursorDown)
-                )?;
+                execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
 
                 execute!(
                     stdout,
@@ -364,14 +455,23 @@ impl LineEditor {
                     let is_selected = actual_index == selected;
                     execute!(stdout, Print("│ "))?;
                     if is_selected {
-                        execute!(stdout, SetForegroundColor(Color::Green), Print("●"), ResetColor)?;
+                        execute!(
+                            stdout,
+                            SetForegroundColor(Color::Green),
+                            Print("●"),
+                            ResetColor
+                        )?;
                     } else {
                         execute!(stdout, Print(" "))?;
                     }
                     execute!(
                         stdout,
                         Print(" "),
-                        Print(format!("{:<width$}", item.label, width = inner_width.saturating_sub(2))),
+                        Print(format!(
+                            "{:<width$}",
+                            item.label,
+                            width = inner_width.saturating_sub(2)
+                        )),
                         Print(" │\r\n")
                     )?;
                 }
@@ -491,6 +591,49 @@ impl LineEditor {
             })
             .collect()
     }
+
+    fn theme_menu_items(&self, prefix: &str) -> Vec<SlashMenuItem> {
+        let Some(helper) = self.editor.helper() else {
+            return Vec::new();
+        };
+
+        let normalized_prefix = if prefix.trim() == "/theme" {
+            "/theme "
+        } else {
+            prefix
+        };
+
+        let mut seen = BTreeSet::new();
+        helper
+            .completions
+            .iter()
+            .filter(|candidate| candidate.starts_with("/theme "))
+            .filter(|candidate| {
+                normalized_prefix == "/theme " || candidate.starts_with(normalized_prefix)
+            })
+            .filter_map(|candidate| {
+                let theme = candidate.trim_start_matches("/theme ").trim();
+                if theme.is_empty() || !seen.insert(theme.to_string()) {
+                    return None;
+                }
+
+                Some(SlashMenuItem {
+                    label: format_theme_picker_label(theme),
+                    value: candidate.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+fn format_theme_picker_label(theme: &str) -> String {
+    match theme {
+        "clawie1" => "clawie1  red + emoji".to_string(),
+        "emoji" => "clawie1  red + emoji".to_string(),
+        "chrome" => "chrome   black/white + emoji".to_string(),
+        "classic" => "classic  red + no emoji".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn slash_command_prefix(line: &str, pos: usize) -> Option<&str> {
@@ -532,11 +675,13 @@ fn format_model_picker_label(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_model_picker_label, prompt_prefix, render_prompt_banner, slash_command_prefix,
-        LineEditor, SlashCommandHelper, SlashMenuItem,
+        format_model_picker_label, format_theme_picker_label, prompt_prefix,
+        render_input_status_bar, render_prompt_banner, slash_command_prefix, LineEditor,
+        SlashCommandHelper, SlashMenuItem,
     };
     use rustyline::completion::Completer;
     use rustyline::highlight::Highlighter;
+    use rustyline::hint::Hinter;
     use rustyline::history::{DefaultHistory, History};
     use rustyline::Context;
 
@@ -597,6 +742,20 @@ mod tests {
             .expect("completion should work");
 
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn hints_create_plan_for_plain_plan_input() {
+        let helper = SlashCommandHelper::new(Vec::new());
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        assert_eq!(
+            helper.hint("plan", 4, &ctx),
+            Some("\nCreate a plan?".to_string())
+        );
+        assert_eq!(helper.hint("/plan", 5, &ctx), None);
+        assert_eq!(helper.hint("planning", 8, &ctx), None);
     }
 
     #[test]
@@ -691,7 +850,46 @@ mod tests {
         );
         assert_eq!(format_model_picker_label("gpt-4.1"), "OpenAI     gpt-4.1");
         assert_eq!(format_model_picker_label("grok-3"), "xAI        grok-3");
-        assert_eq!(format_model_picker_label("custom-model"), "Custom     custom-model");
+        assert_eq!(
+            format_model_picker_label("custom-model"),
+            "Custom     custom-model"
+        );
+    }
+
+    #[test]
+    fn theme_picker_labels_describe_designs() {
+        assert_eq!(format_theme_picker_label("clawie1"), "clawie1  red + emoji");
+        assert_eq!(
+            format_theme_picker_label("chrome"),
+            "chrome   black/white + emoji"
+        );
+        assert_eq!(
+            format_theme_picker_label("classic"),
+            "classic  red + no emoji"
+        );
+    }
+
+    #[test]
+    fn theme_menu_items_offer_direct_theme_selection() {
+        let editor = LineEditor::new(
+            "> ",
+            vec![
+                "/theme".to_string(),
+                "/theme clawie1".to_string(),
+                "/theme chrome".to_string(),
+                "/theme classic".to_string(),
+            ],
+        );
+
+        let items = editor.theme_menu_items("/theme");
+        let values = items
+            .iter()
+            .map(|item| item.value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec!["/theme clawie1", "/theme chrome", "/theme classic"]
+        );
     }
 
     #[test]
@@ -706,5 +904,15 @@ mod tests {
         assert!(banner.contains("Clawie v2"));
         assert!(banner.contains("Tab"));
         assert!(banner.contains("Shift+Enter"));
+        assert!(!banner.contains("Keyboard Shortcuts HUD"));
+        assert!(!banner.contains("Session Cost"));
+    }
+
+    #[test]
+    fn input_status_bar_includes_model_and_interrupt_hint() {
+        let bar = render_input_status_bar("claude-3-5-sonnet");
+        assert!(bar.contains("claude-3-5-sonnet"));
+        assert!(bar.contains("Ctrl+C"));
+        assert!(bar.contains("Esc"));
     }
 }

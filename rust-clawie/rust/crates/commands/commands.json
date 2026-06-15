@@ -1,0 +1,1163 @@
+[
+  {
+    "name": "help",
+    "aliases": [],
+    "summary": "Show available slash commands",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "status",
+    "aliases": [],
+    "summary": "Show current session status",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "sandbox",
+    "aliases": [],
+    "summary": "Show sandbox isolation status",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "compact",
+    "aliases": [],
+    "summary": "Compact local session history",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "model",
+    "aliases": [],
+    "summary": "Show or switch the active model",
+    "argument_hint": "[model]",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "permissions",
+    "aliases": [],
+    "summary": "Show or switch the active permission mode",
+    "argument_hint": "[read-only|workspace-write|danger-full-access]",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "experimental",
+    "aliases": [
+      "experiment"
+    ],
+    "summary": "Manage experimental uninterrupted agent mode",
+    "argument_hint": "[status|on|off]",
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "clear",
+    "aliases": [],
+    "summary": "Start a fresh local session",
+    "argument_hint": "[--confirm]",
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "cost",
+    "aliases": [],
+    "summary": "Show cumulative token usage for this session",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "resume",
+    "aliases": [],
+    "summary": "Load a saved session into the REPL",
+    "argument_hint": "<session-path>",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "config",
+    "aliases": [],
+    "summary": "Inspect Claude config files or merged sections",
+    "argument_hint": "[env|hooks|model|provider|plugins]",
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "mcp",
+    "aliases": [],
+    "summary": "Inspect configured MCP servers",
+    "argument_hint": "[list|show <server>|help]",
+    "resume_supported": true,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "memory",
+    "aliases": [],
+    "summary": "Inspect loaded Claude instruction memory files",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "init",
+    "aliases": [],
+    "summary": "Create a starter CLAUDE.md for this repo",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "webui",
+    "aliases": [],
+    "summary": "Open the local coding workspace in a browser",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "diff",
+    "aliases": [],
+    "summary": "Show git diff for current workspace changes",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "version",
+    "aliases": [],
+    "summary": "Show CLI version and build information",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "bughunter",
+    "aliases": [],
+    "summary": "Inspect the codebase for likely bugs",
+    "argument_hint": "[scope]",
+    "resume_supported": false,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "commit",
+    "aliases": [],
+    "summary": "Generate a commit message and create a git commit",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "pr",
+    "aliases": [],
+    "summary": "Draft or create a pull request from the conversation",
+    "argument_hint": "[context]",
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "issue",
+    "aliases": [],
+    "summary": "Draft or create a GitHub issue from the conversation",
+    "argument_hint": "[context]",
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "ultraplan",
+    "aliases": [],
+    "summary": "Run a deep planning prompt with multi-step reasoning",
+    "argument_hint": "[task]",
+    "resume_supported": false,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "teleport",
+    "aliases": [],
+    "summary": "Jump to a file or symbol by searching the workspace",
+    "argument_hint": "<symbol-or-path>",
+    "resume_supported": false,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "debug-tool-call",
+    "aliases": [],
+    "summary": "Replay the last tool call with debug details",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "export",
+    "aliases": [],
+    "summary": "Export the current conversation to a file",
+    "argument_hint": "[file]",
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "session",
+    "aliases": [],
+    "summary": "List, switch, or fork managed local sessions",
+    "argument_hint": "[list|switch <session-id>|fork [branch-name]]",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "plugin",
+    "aliases": [
+      "plugins",
+      "marketplace"
+    ],
+    "summary": "Manage Clawie plugins",
+    "argument_hint": "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]",
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "agents",
+    "aliases": [],
+    "summary": "List configured agents",
+    "argument_hint": "[list|help]",
+    "resume_supported": true,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "skills",
+    "aliases": [
+      "skill"
+    ],
+    "summary": "List, install, or create reusable skills",
+    "argument_hint": "[list|install <path>|add <name> :: <instructions>|help]",
+    "resume_supported": true,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "doctor",
+    "aliases": [],
+    "summary": "Diagnose setup issues and environment health",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "login",
+    "aliases": [],
+    "summary": "Log in to the service",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "logout",
+    "aliases": [],
+    "summary": "Log out of the current session",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "plan",
+    "aliases": [],
+    "summary": "Toggle or inspect planning mode",
+    "argument_hint": "[on|off]",
+    "resume_supported": true,
+    "category": "Communication & control"
+  },
+  {
+    "name": "review",
+    "aliases": [],
+    "summary": "Run a code review on current changes",
+    "argument_hint": "[scope]",
+    "resume_supported": false,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "tasks",
+    "aliases": [],
+    "summary": "List and manage background tasks",
+    "argument_hint": "[list|get <id>|stop <id>]",
+    "resume_supported": true,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "theme",
+    "aliases": [],
+    "summary": "Switch between clawie1, chrome, and classic terminal designs",
+    "argument_hint": "[clawie1|chrome|classic]",
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "vim",
+    "aliases": [],
+    "summary": "Toggle vim keybinding mode",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "voice",
+    "aliases": [],
+    "summary": "Toggle voice input mode",
+    "argument_hint": "[on|off]",
+    "resume_supported": false,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "upgrade",
+    "aliases": [],
+    "summary": "Check for and install CLI updates",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Communication & control"
+  },
+  {
+    "name": "usage",
+    "aliases": [],
+    "summary": "Show detailed API usage statistics",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "stats",
+    "aliases": [],
+    "summary": "Show workspace and session statistics",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "rename",
+    "aliases": [],
+    "summary": "Rename the current session",
+    "argument_hint": "<name>",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "copy",
+    "aliases": [],
+    "summary": "Copy conversation or output to clipboard",
+    "argument_hint": "[last|all|code]",
+    "resume_supported": true,
+    "category": "Communication & control"
+  },
+  {
+    "name": "share",
+    "aliases": [],
+    "summary": "Share the current conversation",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Communication & control"
+  },
+  {
+    "name": "feedback",
+    "aliases": [],
+    "summary": "Submit feedback about the current session",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Communication & control"
+  },
+  {
+    "name": "hooks",
+    "aliases": [],
+    "summary": "List and manage lifecycle hooks",
+    "argument_hint": "[list|run <hook>]",
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "files",
+    "aliases": [],
+    "summary": "List files in the current context window",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "context",
+    "aliases": [],
+    "summary": "Inspect or manage the conversation context",
+    "argument_hint": "[show|clear]",
+    "resume_supported": true,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "color",
+    "aliases": [],
+    "summary": "Configure terminal color settings",
+    "argument_hint": "[scheme]",
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "effort",
+    "aliases": [],
+    "summary": "Set the effort level for responses",
+    "argument_hint": "[low|medium|high]",
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "fast",
+    "aliases": [],
+    "summary": "Toggle fast/concise response mode",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "exit",
+    "aliases": [],
+    "summary": "Exit the REPL session",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Communication & control"
+  },
+  {
+    "name": "branch",
+    "aliases": [],
+    "summary": "Create or switch git branches",
+    "argument_hint": "[name]",
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "rewind",
+    "aliases": [],
+    "summary": "Rewind the conversation to a previous state",
+    "argument_hint": "[steps]",
+    "resume_supported": false,
+    "category": "Communication & control"
+  },
+  {
+    "name": "summary",
+    "aliases": [],
+    "summary": "Generate a summary of the conversation",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Communication & control"
+  },
+  {
+    "name": "desktop",
+    "aliases": [],
+    "summary": "Open or manage the desktop app integration",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "ide",
+    "aliases": [],
+    "summary": "Open or configure IDE integration",
+    "argument_hint": "[vscode|cursor]",
+    "resume_supported": false,
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "tag",
+    "aliases": [],
+    "summary": "Tag the current conversation point",
+    "argument_hint": "[label]",
+    "resume_supported": true,
+    "category": "Communication & control"
+  },
+  {
+    "name": "brief",
+    "aliases": [],
+    "summary": "Toggle brief output mode",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "advisor",
+    "aliases": [],
+    "summary": "Toggle advisor mode for guidance-only responses",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "stickers",
+    "aliases": [],
+    "summary": "Browse and manage sticker packs",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "insights",
+    "aliases": [],
+    "summary": "Show AI-generated insights about the session",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "thinkback",
+    "aliases": [],
+    "summary": "Replay the thinking process of the last response",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Communication & control"
+  },
+  {
+    "name": "release-notes",
+    "aliases": [],
+    "summary": "Generate release notes from recent changes",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "security-review",
+    "aliases": [],
+    "summary": "Run a security review on the codebase",
+    "argument_hint": "[scope]",
+    "resume_supported": false,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "keybindings",
+    "aliases": [],
+    "summary": "Show or configure keyboard shortcuts",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "privacy-settings",
+    "aliases": [],
+    "summary": "View or modify privacy settings",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "output-style",
+    "aliases": [],
+    "summary": "Switch output formatting style",
+    "argument_hint": "[style]",
+    "resume_supported": true,
+    "category": "Appearance & input"
+  },
+  {
+    "name": "add-dir",
+    "aliases": [],
+    "summary": "Add an additional directory to the context",
+    "argument_hint": "<path>",
+    "resume_supported": false,
+    "category": "Workspace & git"
+  },
+  {
+    "name": "allowed-tools",
+    "aliases": [],
+    "summary": "Show or modify the allowed tools list",
+    "argument_hint": "[add|remove|list] [tool]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "api-key",
+    "aliases": [],
+    "summary": "Show or set the Anthropic API key",
+    "argument_hint": "[key]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "undo",
+    "aliases": [],
+    "summary": "Undo the last file write or edit",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "stop",
+    "aliases": [],
+    "summary": "Stop the current generation",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "retry",
+    "aliases": [],
+    "summary": "Retry the last failed message",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "paste",
+    "aliases": [],
+    "summary": "Paste clipboard content as input",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "screenshot",
+    "aliases": [],
+    "summary": "Take a screenshot and add to conversation",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "image",
+    "aliases": [],
+    "summary": "Add an image file to the conversation",
+    "argument_hint": "<path>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "terminal-setup",
+    "aliases": [],
+    "summary": "Configure terminal integration settings",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "search",
+    "aliases": [],
+    "summary": "Search files in the workspace",
+    "argument_hint": "<query>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "listen",
+    "aliases": [],
+    "summary": "Listen for voice input",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "speak",
+    "aliases": [],
+    "summary": "Read the last response aloud",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "language",
+    "aliases": [],
+    "summary": "Set the interface language",
+    "argument_hint": "[language]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "profile",
+    "aliases": [],
+    "summary": "Show or switch user profile",
+    "argument_hint": "[name]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "max-tokens",
+    "aliases": [],
+    "summary": "Show or set the max output tokens",
+    "argument_hint": "[count]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "temperature",
+    "aliases": [],
+    "summary": "Show or set the sampling temperature",
+    "argument_hint": "[value]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "system-prompt",
+    "aliases": [],
+    "summary": "Show the active system prompt",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "tool-details",
+    "aliases": [],
+    "summary": "Show detailed info about a specific tool",
+    "argument_hint": "<tool-name>",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "format",
+    "aliases": [],
+    "summary": "Format the last response in a different style",
+    "argument_hint": "[markdown|plain|json]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "pin",
+    "aliases": [],
+    "summary": "Pin a message to persist across compaction",
+    "argument_hint": "[message-index]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "unpin",
+    "aliases": [],
+    "summary": "Unpin a previously pinned message",
+    "argument_hint": "[message-index]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "bookmarks",
+    "aliases": [],
+    "summary": "List or manage conversation bookmarks",
+    "argument_hint": "[add|remove|list]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "workspace",
+    "aliases": [
+      "cwd"
+    ],
+    "summary": "Show or change the working directory",
+    "argument_hint": "[path]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "history",
+    "aliases": [],
+    "summary": "Show conversation history summary",
+    "argument_hint": "[count]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "tokens",
+    "aliases": [],
+    "summary": "Show token count for the current conversation",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "cache",
+    "aliases": [],
+    "summary": "Show prompt cache statistics",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "providers",
+    "aliases": [],
+    "summary": "List available model providers",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "notifications",
+    "aliases": [],
+    "summary": "Show or configure notification settings",
+    "argument_hint": "[on|off|status]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "changelog",
+    "aliases": [],
+    "summary": "Show recent changes to the codebase",
+    "argument_hint": "[count]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "test",
+    "aliases": [],
+    "summary": "Run tests for the current project",
+    "argument_hint": "[filter]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "lint",
+    "aliases": [],
+    "summary": "Run linting for the current project",
+    "argument_hint": "[filter]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "build",
+    "aliases": [],
+    "summary": "Build the current project",
+    "argument_hint": "[target]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "run",
+    "aliases": [],
+    "summary": "Run a command in the project context",
+    "argument_hint": "<command>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "git",
+    "aliases": [],
+    "summary": "Run a git command in the workspace",
+    "argument_hint": "<subcommand>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "stash",
+    "aliases": [],
+    "summary": "Stash or unstash workspace changes",
+    "argument_hint": "[pop|list|apply]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "blame",
+    "aliases": [],
+    "summary": "Show git blame for a file",
+    "argument_hint": "<file> [line]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "log",
+    "aliases": [],
+    "summary": "Show git log for the workspace",
+    "argument_hint": "[count]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "cron",
+    "aliases": [],
+    "summary": "Manage scheduled tasks",
+    "argument_hint": "[list|add|remove]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "team",
+    "aliases": [],
+    "summary": "Manage agent teams",
+    "argument_hint": "[list|create|delete]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "benchmark",
+    "aliases": [],
+    "summary": "Run performance benchmarks",
+    "argument_hint": "[suite]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "migrate",
+    "aliases": [],
+    "summary": "Run pending data migrations",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "reset",
+    "aliases": [],
+    "summary": "Reset configuration to defaults",
+    "argument_hint": "[section]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "telemetry",
+    "aliases": [],
+    "summary": "Show or configure telemetry settings",
+    "argument_hint": "[on|off|status]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "env",
+    "aliases": [],
+    "summary": "Show environment variables visible to tools",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "project",
+    "aliases": [],
+    "summary": "Show project detection info",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "templates",
+    "aliases": [],
+    "summary": "List or apply prompt templates",
+    "argument_hint": "[list|apply <name>]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "explain",
+    "aliases": [],
+    "summary": "Explain a file or code snippet",
+    "argument_hint": "<path> [line-range]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "refactor",
+    "aliases": [],
+    "summary": "Suggest refactoring for a file or function",
+    "argument_hint": "<path> [scope]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "docs",
+    "aliases": [],
+    "summary": "Generate or show documentation",
+    "argument_hint": "[path]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "fix",
+    "aliases": [],
+    "summary": "Fix errors in a file or project",
+    "argument_hint": "[path]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "perf",
+    "aliases": [],
+    "summary": "Analyze performance of a function or file",
+    "argument_hint": "<path>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "chat",
+    "aliases": [],
+    "summary": "Switch to free-form chat mode",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "focus",
+    "aliases": [],
+    "summary": "Focus context on specific files or directories",
+    "argument_hint": "<path> [path...]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "unfocus",
+    "aliases": [],
+    "summary": "Remove focus from files or directories",
+    "argument_hint": "[path...]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "web",
+    "aliases": [],
+    "summary": "Fetch and summarize a web page",
+    "argument_hint": "<url>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "map",
+    "aliases": [],
+    "summary": "Show a visual map of the codebase structure",
+    "argument_hint": "[depth]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "symbols",
+    "aliases": [],
+    "summary": "List symbols (functions, classes, etc.) in a file",
+    "argument_hint": "<path>",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "references",
+    "aliases": [],
+    "summary": "Find all references to a symbol",
+    "argument_hint": "<symbol>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "definition",
+    "aliases": [],
+    "summary": "Go to the definition of a symbol",
+    "argument_hint": "<symbol>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "hover",
+    "aliases": [],
+    "summary": "Show hover information for a symbol",
+    "argument_hint": "<symbol>",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "diagnostics",
+    "aliases": [],
+    "summary": "Show LSP diagnostics for a file",
+    "argument_hint": "[path]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "autofix",
+    "aliases": [],
+    "summary": "Auto-fix all fixable diagnostics",
+    "argument_hint": "[path]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "multi",
+    "aliases": [],
+    "summary": "Execute multiple slash commands in sequence",
+    "argument_hint": "<commands>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "macro",
+    "aliases": [],
+    "summary": "Record or replay command macros",
+    "argument_hint": "[record|stop|play <name>]",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "alias",
+    "aliases": [],
+    "summary": "Create a command alias",
+    "argument_hint": "<name> <command>",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "parallel",
+    "aliases": [],
+    "summary": "Run commands in parallel subagents",
+    "argument_hint": "<count> <prompt>",
+    "resume_supported": false,
+    "category": "Other"
+  },
+  {
+    "name": "agent",
+    "aliases": [],
+    "summary": "Manage sub-agents and spawned sessions",
+    "argument_hint": "[list|spawn|kill]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "subagent",
+    "aliases": [],
+    "summary": "Control active subagent execution",
+    "argument_hint": "[list|steer <target> <msg>|kill <id>]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "reasoning",
+    "aliases": [],
+    "summary": "Toggle extended reasoning mode",
+    "argument_hint": "[on|off|stream]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "budget",
+    "aliases": [],
+    "summary": "Show or set token budget limits",
+    "argument_hint": "[show|set <limit>]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "rate-limit",
+    "aliases": [],
+    "summary": "Configure API rate limiting",
+    "argument_hint": "[status|set <rpm>]",
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "metrics",
+    "aliases": [],
+    "summary": "Show performance and usage metrics",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Other"
+  },
+  {
+    "name": "artifacts",
+    "aliases": [],
+    "summary": "List artifacts generated in this session",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "artifact-create",
+    "aliases": [],
+    "summary": "Create a new artifact manually",
+    "argument_hint": "<name>",
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "artifact-view",
+    "aliases": [],
+    "summary": "View the contents of a specific artifact",
+    "argument_hint": "<name>",
+    "resume_supported": true,
+    "category": "Session & visibility"
+  }
+]

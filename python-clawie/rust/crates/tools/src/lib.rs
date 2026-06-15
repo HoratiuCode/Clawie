@@ -3590,6 +3590,17 @@ mod tests {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = temp_path("skills-home");
+        let skill_dir = home.join(".agents").join("skills").join("help");
+        fs::create_dir_all(&skill_dir).expect("skill dir should exist");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "# help\n\nGuide on using oh-my-codex plugin\n",
+        )
+        .expect("skill file should exist");
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+
         let result = execute_tool(
             "Skill",
             &json!({
@@ -3624,6 +3635,13 @@ mod tests {
             .as_str()
             .expect("path")
             .ends_with("/help/SKILL.md"));
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]

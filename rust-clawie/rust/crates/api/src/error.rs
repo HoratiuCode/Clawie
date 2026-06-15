@@ -30,6 +30,10 @@ pub enum ApiError {
         attempt: u32,
         base_delay: Duration,
     },
+    UnsupportedProviderApi {
+        provider: &'static str,
+        api: &'static str,
+    },
 }
 
 impl ApiError {
@@ -54,7 +58,8 @@ impl ApiError {
             | Self::Io(_)
             | Self::Json(_)
             | Self::InvalidSseFrame(_)
-            | Self::BackoffOverflow { .. } => false,
+            | Self::BackoffOverflow { .. }
+            | Self::UnsupportedProviderApi { .. } => false,
         }
     }
 }
@@ -104,6 +109,9 @@ impl Display for ApiError {
                 f,
                 "retry backoff overflowed on attempt {attempt} with base delay {base_delay:?}"
             ),
+            Self::UnsupportedProviderApi { provider, api } => {
+                write!(f, "provider {provider} does not support the {api} API")
+            }
         }
     }
 }

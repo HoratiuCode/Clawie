@@ -4,6 +4,7 @@
 //! MCP plumbing, tool-facing file operations, and the core conversation loop
 //! that drives interactive and one-shot turns.
 
+pub mod agent;
 mod bash;
 pub mod bash_validation;
 mod bootstrap;
@@ -42,6 +43,11 @@ pub mod trust_resolver;
 mod usage;
 pub mod worker_boot;
 
+pub use agent::{
+    permission_mode_from_resolved, AgentDefinition, AgentMode, AgentModel, AgentRegistry,
+    RuntimeAgentMetadata, RuntimeAgentPath, RuntimeAgentRegistry, RuntimeAgentRegistryError,
+    RuntimeAgentState,
+};
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use compact::{
@@ -52,9 +58,9 @@ pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
     McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
     McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
-    ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig,
-    RuntimePermissionRuleConfig, RuntimePluginConfig, ScopedMcpServerConfig,
-    CLAW_SETTINGS_SCHEMA_NAME,
+    ResolvedPermissionMode, RuntimeAgentConfig, RuntimeAgentDefinitionConfig, RuntimeConfig,
+    RuntimeFeatureConfig, RuntimeHookConfig, RuntimePermissionRuleConfig, RuntimePluginConfig,
+    ScopedMcpServerConfig, CLAW_SETTINGS_SCHEMA_NAME,
 };
 pub use conversation::{
     auto_compaction_threshold_from_env, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,

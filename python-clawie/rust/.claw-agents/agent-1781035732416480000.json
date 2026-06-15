@@ -1,0 +1,16 @@
+{
+  "agentId": "agent-1781035732416480000",
+  "name": "verify-the-branch",
+  "description": "Verify the branch",
+  "subagentType": "explore",
+  "agentMode": "explore",
+  "agentRole": "subagent",
+  "model": "claude-opus-4-6",
+  "status": "failed",
+  "outputFile": "/Users/horatiubudai/ceo/ShrimpAI/Clawie-full/Clawie/python-clawie/rust/.claw-agents/agent-1781035732416480000.md",
+  "manifestFile": "/Users/horatiubudai/ceo/ShrimpAI/Clawie-full/Clawie/python-clawie/rust/.claw-agents/agent-1781035732416480000.json",
+  "createdAt": "1781035732",
+  "startedAt": "1781035732",
+  "completedAt": "1781035732",
+  "error": "missing Claw credentials; export ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before calling the Claw API"
+}

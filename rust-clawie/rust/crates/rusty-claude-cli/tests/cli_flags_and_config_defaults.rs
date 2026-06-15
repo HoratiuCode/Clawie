@@ -167,8 +167,7 @@ fn provider_preference_selects_default_model_from_config() {
     fs::create_dir_all(temp_dir.join(".claw")).expect("project config dir should exist");
     fs::create_dir_all(&config_home).expect("home config dir should exist");
 
-    fs::write(temp_dir.join(".claw.json"), r#"{"provider":"grok"}"#)
-        .expect("write project config");
+    fs::write(temp_dir.join(".claw.json"), r#"{"provider":"grok"}"#).expect("write project config");
 
     let output = command_in(&temp_dir)
         .env("CLAW_CONFIG_HOME", &config_home)

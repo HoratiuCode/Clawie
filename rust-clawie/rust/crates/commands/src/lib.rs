@@ -49,990 +49,7 @@ pub struct SlashCommandSpec {
     pub resume_supported: bool,
 }
 
-const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
-    SlashCommandSpec {
-        name: "help",
-        aliases: &[],
-        summary: "Show available slash commands",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "status",
-        aliases: &[],
-        summary: "Show current session status",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "sandbox",
-        aliases: &[],
-        summary: "Show sandbox isolation status",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "compact",
-        aliases: &[],
-        summary: "Compact local session history",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "model",
-        aliases: &[],
-        summary: "Show or switch the active model",
-        argument_hint: Some("[model]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "permissions",
-        aliases: &[],
-        summary: "Show or switch the active permission mode",
-        argument_hint: Some("[read-only|workspace-write|danger-full-access]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "experimental",
-        aliases: &["experiment"],
-        summary: "Manage experimental uninterrupted agent mode",
-        argument_hint: Some("[status|on|off]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "clear",
-        aliases: &[],
-        summary: "Start a fresh local session",
-        argument_hint: Some("[--confirm]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "cost",
-        aliases: &[],
-        summary: "Show cumulative token usage for this session",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "resume",
-        aliases: &[],
-        summary: "Load a saved session into the REPL",
-        argument_hint: Some("<session-path>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "config",
-        aliases: &[],
-        summary: "Inspect Claude config files or merged sections",
-        argument_hint: Some("[env|hooks|model|provider|plugins]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "mcp",
-        aliases: &[],
-        summary: "Inspect configured MCP servers",
-        argument_hint: Some("[list|show <server>|help]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "memory",
-        aliases: &[],
-        summary: "Inspect loaded Claude instruction memory files",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "init",
-        aliases: &[],
-        summary: "Create a starter CLAUDE.md for this repo",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "diff",
-        aliases: &[],
-        summary: "Show git diff for current workspace changes",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "version",
-        aliases: &[],
-        summary: "Show CLI version and build information",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "bughunter",
-        aliases: &[],
-        summary: "Inspect the codebase for likely bugs",
-        argument_hint: Some("[scope]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "commit",
-        aliases: &[],
-        summary: "Generate a commit message and create a git commit",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "pr",
-        aliases: &[],
-        summary: "Draft or create a pull request from the conversation",
-        argument_hint: Some("[context]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "issue",
-        aliases: &[],
-        summary: "Draft or create a GitHub issue from the conversation",
-        argument_hint: Some("[context]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "ultraplan",
-        aliases: &[],
-        summary: "Run a deep planning prompt with multi-step reasoning",
-        argument_hint: Some("[task]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "teleport",
-        aliases: &[],
-        summary: "Jump to a file or symbol by searching the workspace",
-        argument_hint: Some("<symbol-or-path>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "debug-tool-call",
-        aliases: &[],
-        summary: "Replay the last tool call with debug details",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "export",
-        aliases: &[],
-        summary: "Export the current conversation to a file",
-        argument_hint: Some("[file]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "session",
-        aliases: &[],
-        summary: "List, switch, or fork managed local sessions",
-        argument_hint: Some("[list|switch <session-id>|fork [branch-name]]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "plugin",
-        aliases: &["plugins", "marketplace"],
-        summary: "Manage Clawie plugins",
-        argument_hint: Some(
-            "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]",
-        ),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "agents",
-        aliases: &[],
-        summary: "List configured agents",
-        argument_hint: Some("[list|help]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "skills",
-        aliases: &["skill"],
-        summary: "List, install, or create reusable skills",
-        argument_hint: Some("[list|install <path>|add <name> :: <instructions>|help]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "doctor",
-        aliases: &[],
-        summary: "Diagnose setup issues and environment health",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "login",
-        aliases: &[],
-        summary: "Log in to the service",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "logout",
-        aliases: &[],
-        summary: "Log out of the current session",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "plan",
-        aliases: &[],
-        summary: "Toggle or inspect planning mode",
-        argument_hint: Some("[on|off]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "review",
-        aliases: &[],
-        summary: "Run a code review on current changes",
-        argument_hint: Some("[scope]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "tasks",
-        aliases: &[],
-        summary: "List and manage background tasks",
-        argument_hint: Some("[list|get <id>|stop <id>]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "theme",
-        aliases: &[],
-        summary: "Switch the terminal color theme",
-        argument_hint: Some("[theme-name]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "vim",
-        aliases: &[],
-        summary: "Toggle vim keybinding mode",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "voice",
-        aliases: &[],
-        summary: "Toggle voice input mode",
-        argument_hint: Some("[on|off]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "upgrade",
-        aliases: &[],
-        summary: "Check for and install CLI updates",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "usage",
-        aliases: &[],
-        summary: "Show detailed API usage statistics",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "stats",
-        aliases: &[],
-        summary: "Show workspace and session statistics",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "rename",
-        aliases: &[],
-        summary: "Rename the current session",
-        argument_hint: Some("<name>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "copy",
-        aliases: &[],
-        summary: "Copy conversation or output to clipboard",
-        argument_hint: Some("[last|all|code]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "share",
-        aliases: &[],
-        summary: "Share the current conversation",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "feedback",
-        aliases: &[],
-        summary: "Submit feedback about the current session",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "hooks",
-        aliases: &[],
-        summary: "List and manage lifecycle hooks",
-        argument_hint: Some("[list|run <hook>]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "files",
-        aliases: &[],
-        summary: "List files in the current context window",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "context",
-        aliases: &[],
-        summary: "Inspect or manage the conversation context",
-        argument_hint: Some("[show|clear]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "color",
-        aliases: &[],
-        summary: "Configure terminal color settings",
-        argument_hint: Some("[scheme]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "effort",
-        aliases: &[],
-        summary: "Set the effort level for responses",
-        argument_hint: Some("[low|medium|high]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "fast",
-        aliases: &[],
-        summary: "Toggle fast/concise response mode",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "exit",
-        aliases: &[],
-        summary: "Exit the REPL session",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "branch",
-        aliases: &[],
-        summary: "Create or switch git branches",
-        argument_hint: Some("[name]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "rewind",
-        aliases: &[],
-        summary: "Rewind the conversation to a previous state",
-        argument_hint: Some("[steps]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "summary",
-        aliases: &[],
-        summary: "Generate a summary of the conversation",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "desktop",
-        aliases: &[],
-        summary: "Open or manage the desktop app integration",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "ide",
-        aliases: &[],
-        summary: "Open or configure IDE integration",
-        argument_hint: Some("[vscode|cursor]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "tag",
-        aliases: &[],
-        summary: "Tag the current conversation point",
-        argument_hint: Some("[label]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "brief",
-        aliases: &[],
-        summary: "Toggle brief output mode",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "advisor",
-        aliases: &[],
-        summary: "Toggle advisor mode for guidance-only responses",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "stickers",
-        aliases: &[],
-        summary: "Browse and manage sticker packs",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "insights",
-        aliases: &[],
-        summary: "Show AI-generated insights about the session",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "thinkback",
-        aliases: &[],
-        summary: "Replay the thinking process of the last response",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "release-notes",
-        aliases: &[],
-        summary: "Generate release notes from recent changes",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "security-review",
-        aliases: &[],
-        summary: "Run a security review on the codebase",
-        argument_hint: Some("[scope]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "keybindings",
-        aliases: &[],
-        summary: "Show or configure keyboard shortcuts",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "privacy-settings",
-        aliases: &[],
-        summary: "View or modify privacy settings",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "output-style",
-        aliases: &[],
-        summary: "Switch output formatting style",
-        argument_hint: Some("[style]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "add-dir",
-        aliases: &[],
-        summary: "Add an additional directory to the context",
-        argument_hint: Some("<path>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "allowed-tools",
-        aliases: &[],
-        summary: "Show or modify the allowed tools list",
-        argument_hint: Some("[add|remove|list] [tool]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "api-key",
-        aliases: &[],
-        summary: "Show or set the Anthropic API key",
-        argument_hint: Some("[key]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "undo",
-        aliases: &[],
-        summary: "Undo the last file write or edit",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "stop",
-        aliases: &[],
-        summary: "Stop the current generation",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "retry",
-        aliases: &[],
-        summary: "Retry the last failed message",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "paste",
-        aliases: &[],
-        summary: "Paste clipboard content as input",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "screenshot",
-        aliases: &[],
-        summary: "Take a screenshot and add to conversation",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "image",
-        aliases: &[],
-        summary: "Add an image file to the conversation",
-        argument_hint: Some("<path>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "terminal-setup",
-        aliases: &[],
-        summary: "Configure terminal integration settings",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "search",
-        aliases: &[],
-        summary: "Search files in the workspace",
-        argument_hint: Some("<query>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "listen",
-        aliases: &[],
-        summary: "Listen for voice input",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "speak",
-        aliases: &[],
-        summary: "Read the last response aloud",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "language",
-        aliases: &[],
-        summary: "Set the interface language",
-        argument_hint: Some("[language]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "profile",
-        aliases: &[],
-        summary: "Show or switch user profile",
-        argument_hint: Some("[name]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "max-tokens",
-        aliases: &[],
-        summary: "Show or set the max output tokens",
-        argument_hint: Some("[count]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "temperature",
-        aliases: &[],
-        summary: "Show or set the sampling temperature",
-        argument_hint: Some("[value]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "system-prompt",
-        aliases: &[],
-        summary: "Show the active system prompt",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "tool-details",
-        aliases: &[],
-        summary: "Show detailed info about a specific tool",
-        argument_hint: Some("<tool-name>"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "format",
-        aliases: &[],
-        summary: "Format the last response in a different style",
-        argument_hint: Some("[markdown|plain|json]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "pin",
-        aliases: &[],
-        summary: "Pin a message to persist across compaction",
-        argument_hint: Some("[message-index]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "unpin",
-        aliases: &[],
-        summary: "Unpin a previously pinned message",
-        argument_hint: Some("[message-index]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "bookmarks",
-        aliases: &[],
-        summary: "List or manage conversation bookmarks",
-        argument_hint: Some("[add|remove|list]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "workspace",
-        aliases: &["cwd"],
-        summary: "Show or change the working directory",
-        argument_hint: Some("[path]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "history",
-        aliases: &[],
-        summary: "Show conversation history summary",
-        argument_hint: Some("[count]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "tokens",
-        aliases: &[],
-        summary: "Show token count for the current conversation",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "cache",
-        aliases: &[],
-        summary: "Show prompt cache statistics",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "providers",
-        aliases: &[],
-        summary: "List available model providers",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "notifications",
-        aliases: &[],
-        summary: "Show or configure notification settings",
-        argument_hint: Some("[on|off|status]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "changelog",
-        aliases: &[],
-        summary: "Show recent changes to the codebase",
-        argument_hint: Some("[count]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "test",
-        aliases: &[],
-        summary: "Run tests for the current project",
-        argument_hint: Some("[filter]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "lint",
-        aliases: &[],
-        summary: "Run linting for the current project",
-        argument_hint: Some("[filter]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "build",
-        aliases: &[],
-        summary: "Build the current project",
-        argument_hint: Some("[target]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "run",
-        aliases: &[],
-        summary: "Run a command in the project context",
-        argument_hint: Some("<command>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "git",
-        aliases: &[],
-        summary: "Run a git command in the workspace",
-        argument_hint: Some("<subcommand>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "stash",
-        aliases: &[],
-        summary: "Stash or unstash workspace changes",
-        argument_hint: Some("[pop|list|apply]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "blame",
-        aliases: &[],
-        summary: "Show git blame for a file",
-        argument_hint: Some("<file> [line]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "log",
-        aliases: &[],
-        summary: "Show git log for the workspace",
-        argument_hint: Some("[count]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "cron",
-        aliases: &[],
-        summary: "Manage scheduled tasks",
-        argument_hint: Some("[list|add|remove]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "team",
-        aliases: &[],
-        summary: "Manage agent teams",
-        argument_hint: Some("[list|create|delete]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "benchmark",
-        aliases: &[],
-        summary: "Run performance benchmarks",
-        argument_hint: Some("[suite]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "migrate",
-        aliases: &[],
-        summary: "Run pending data migrations",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "reset",
-        aliases: &[],
-        summary: "Reset configuration to defaults",
-        argument_hint: Some("[section]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "telemetry",
-        aliases: &[],
-        summary: "Show or configure telemetry settings",
-        argument_hint: Some("[on|off|status]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "env",
-        aliases: &[],
-        summary: "Show environment variables visible to tools",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "project",
-        aliases: &[],
-        summary: "Show project detection info",
-        argument_hint: None,
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "templates",
-        aliases: &[],
-        summary: "List or apply prompt templates",
-        argument_hint: Some("[list|apply <name>]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "explain",
-        aliases: &[],
-        summary: "Explain a file or code snippet",
-        argument_hint: Some("<path> [line-range]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "refactor",
-        aliases: &[],
-        summary: "Suggest refactoring for a file or function",
-        argument_hint: Some("<path> [scope]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "docs",
-        aliases: &[],
-        summary: "Generate or show documentation",
-        argument_hint: Some("[path]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "fix",
-        aliases: &[],
-        summary: "Fix errors in a file or project",
-        argument_hint: Some("[path]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "perf",
-        aliases: &[],
-        summary: "Analyze performance of a function or file",
-        argument_hint: Some("<path>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "chat",
-        aliases: &[],
-        summary: "Switch to free-form chat mode",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "focus",
-        aliases: &[],
-        summary: "Focus context on specific files or directories",
-        argument_hint: Some("<path> [path...]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "unfocus",
-        aliases: &[],
-        summary: "Remove focus from files or directories",
-        argument_hint: Some("[path...]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "web",
-        aliases: &[],
-        summary: "Fetch and summarize a web page",
-        argument_hint: Some("<url>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "map",
-        aliases: &[],
-        summary: "Show a visual map of the codebase structure",
-        argument_hint: Some("[depth]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "symbols",
-        aliases: &[],
-        summary: "List symbols (functions, classes, etc.) in a file",
-        argument_hint: Some("<path>"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "references",
-        aliases: &[],
-        summary: "Find all references to a symbol",
-        argument_hint: Some("<symbol>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "definition",
-        aliases: &[],
-        summary: "Go to the definition of a symbol",
-        argument_hint: Some("<symbol>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "hover",
-        aliases: &[],
-        summary: "Show hover information for a symbol",
-        argument_hint: Some("<symbol>"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "diagnostics",
-        aliases: &[],
-        summary: "Show LSP diagnostics for a file",
-        argument_hint: Some("[path]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "autofix",
-        aliases: &[],
-        summary: "Auto-fix all fixable diagnostics",
-        argument_hint: Some("[path]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "multi",
-        aliases: &[],
-        summary: "Execute multiple slash commands in sequence",
-        argument_hint: Some("<commands>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "macro",
-        aliases: &[],
-        summary: "Record or replay command macros",
-        argument_hint: Some("[record|stop|play <name>]"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "alias",
-        aliases: &[],
-        summary: "Create a command alias",
-        argument_hint: Some("<name> <command>"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "parallel",
-        aliases: &[],
-        summary: "Run commands in parallel subagents",
-        argument_hint: Some("<count> <prompt>"),
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "agent",
-        aliases: &[],
-        summary: "Manage sub-agents and spawned sessions",
-        argument_hint: Some("[list|spawn|kill]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "subagent",
-        aliases: &[],
-        summary: "Control active subagent execution",
-        argument_hint: Some("[list|steer <target> <msg>|kill <id>]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "reasoning",
-        aliases: &[],
-        summary: "Toggle extended reasoning mode",
-        argument_hint: Some("[on|off|stream]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "budget",
-        aliases: &[],
-        summary: "Show or set token budget limits",
-        argument_hint: Some("[show|set <limit>]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "rate-limit",
-        aliases: &[],
-        summary: "Configure API rate limiting",
-        argument_hint: Some("[status|set <rpm>]"),
-        resume_supported: true,
-    },
-    SlashCommandSpec {
-        name: "metrics",
-        aliases: &[],
-        summary: "Show performance and usage metrics",
-        argument_hint: None,
-        resume_supported: true,
-    },
-];
+include!(concat!(env!("OUT_DIR"), "/slash_commands.rs"));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommand {
@@ -1070,6 +87,13 @@ pub enum SlashCommand {
     Clear {
         confirm: bool,
     },
+    Artifacts,
+    ArtifactCreate {
+        name: Option<String>,
+    },
+    ArtifactView {
+        name: Option<String>,
+    },
     Cost,
     Resume {
         session_path: Option<String>,
@@ -1084,6 +108,7 @@ pub enum SlashCommand {
     Chat,
     Memory,
     Init,
+    WebUi,
     Diff,
     Version,
     Export {
@@ -1281,6 +306,16 @@ pub fn validate_slash_command_input(
             validate_no_args(command, &args)?;
             SlashCommand::Cost
         }
+        "artifacts" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Artifacts
+        }
+        "artifact-create" => SlashCommand::ArtifactCreate {
+            name: optional_single_arg(command, &args, "<name>")?,
+        },
+        "artifact-view" => SlashCommand::ArtifactView {
+            name: optional_single_arg(command, &args, "<name>")?,
+        },
         "resume" => SlashCommand::Resume {
             session_path: Some(require_remainder(command, remainder, "<session-path>")?),
         },
@@ -1299,6 +334,10 @@ pub fn validate_slash_command_input(
         "init" => {
             validate_no_args(command, &args)?;
             SlashCommand::Init
+        }
+        "webui" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::WebUi
         }
         "diff" => {
             validate_no_args(command, &args)?;
@@ -1408,7 +447,9 @@ pub fn validate_slash_command_input(
         "plan" => SlashCommand::Plan { mode: remainder },
         "review" => SlashCommand::Review { scope: remainder },
         "tasks" => SlashCommand::Tasks { args: remainder },
-        "theme" => SlashCommand::Theme { name: remainder },
+        "theme" => SlashCommand::Theme {
+            name: parse_theme_name(&args)?,
+        },
         "voice" => SlashCommand::Voice { mode: remainder },
         "usage" => SlashCommand::Usage { scope: remainder },
         "rename" => SlashCommand::Rename { name: remainder },
@@ -1490,9 +531,7 @@ fn parse_experimental_mode(args: &[&str]) -> Result<Option<String>, SlashCommand
             return Ok(Some(mode));
         }
         return Err(command_error(
-            &format!(
-                "Unsupported /experimental mode '{mode}'. Use status, on, or off."
-            ),
+            &format!("Unsupported /experimental mode '{mode}'. Use status, on, or off."),
             "experimental",
             "/experimental [status|on|off]",
         ));
@@ -1528,6 +567,22 @@ fn parse_config_section(args: &[&str]) -> Result<Option<String>, SlashCommandPar
             ),
             "config",
             "/config [env|hooks|model|provider|plugins]",
+        ));
+    }
+
+    Ok(None)
+}
+
+fn parse_theme_name(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
+    let theme = optional_single_arg("theme", args, "[clawie1|chrome|classic]")?;
+    if let Some(theme) = theme {
+        if matches!(theme.as_str(), "clawie1" | "emoji" | "chrome" | "classic") {
+            return Ok(Some(theme));
+        }
+        return Err(command_error(
+            &format!("Unsupported /theme design '{theme}'. Use clawie1, chrome, or classic."),
+            "theme",
+            "/theme [clawie1|chrome|classic]",
         ));
     }
 
@@ -1828,30 +883,6 @@ pub fn resume_supported_slash_commands() -> Vec<&'static SlashCommandSpec> {
         .collect()
 }
 
-fn slash_command_category(name: &str) -> &'static str {
-    match name {
-        "help" | "status" | "sandbox" | "providers" | "model" | "permissions" | "experimental" | "cost"
-        | "resume" | "session" | "version" | "login" | "logout" | "usage" | "stats"
-        | "rename" | "privacy-settings" => {
-            "Session & visibility"
-        }
-        "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
-        | "export" | "plugin" | "branch" | "add-dir" | "files" | "hooks" | "release-notes" => {
-            "Workspace & git"
-        }
-        "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" | "context" | "tasks"
-        | "doctor" | "ide" | "desktop" => "Discovery & debugging",
-        "bughunter" | "ultraplan" | "review" | "security-review" | "advisor" | "insights" => {
-            "Analysis & automation"
-        }
-        "theme" | "vim" | "voice" | "color" | "effort" | "fast" | "brief" | "output-style"
-        | "keybindings" | "stickers" => "Appearance & input",
-        "copy" | "share" | "feedback" | "summary" | "tag" | "thinkback" | "plan" | "exit"
-        | "upgrade" | "rewind" => "Communication & control",
-        _ => "Other",
-    }
-}
-
 fn format_slash_command_help_line(spec: &SlashCommandSpec) -> String {
     let name = slash_command_usage(spec);
     let alias_suffix = if spec.aliases.is_empty() {
@@ -1962,6 +993,7 @@ pub fn render_slash_command_help() -> String {
         "Workspace & git",
         "Discovery & debugging",
         "Analysis & automation",
+        "Appearance & input",
     ];
 
     for category in categories {
@@ -2239,7 +1271,11 @@ pub fn handle_skills_slash_command(args: Option<&str>, cwd: &Path) -> std::io::R
             }
             match parse_inline_skill_definition(target) {
                 Some(definition) => {
-                    let created = create_skill(&definition.name, definition.description.as_deref(), &definition.body)?;
+                    let created = create_skill(
+                        &definition.name,
+                        definition.description.as_deref(),
+                        &definition.body,
+                    )?;
                     Ok(render_skill_create_report(&created))
                 }
                 None => {
@@ -2517,7 +1553,10 @@ fn create_skill_into(
     Ok(CreatedSkill {
         invocation_name: invocation_name.clone(),
         display_name: invocation_name,
-        description: description.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
+        description: description
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
         registry_root: registry_root.to_path_buf(),
         installed_path,
     })
@@ -3417,6 +2456,7 @@ pub fn handle_slash_command(
         | SlashCommand::Chat
         | SlashCommand::Memory
         | SlashCommand::Init
+        | SlashCommand::WebUi
         | SlashCommand::Diff
         | SlashCommand::Version
         | SlashCommand::Export { .. }
@@ -3464,6 +2504,9 @@ pub fn handle_slash_command(
         | SlashCommand::Tag { .. }
         | SlashCommand::OutputStyle { .. }
         | SlashCommand::AddDir { .. }
+        | SlashCommand::Artifacts
+        | SlashCommand::ArtifactCreate { .. }
+        | SlashCommand::ArtifactView { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -3711,6 +2754,7 @@ mod tests {
             Ok(Some(SlashCommand::Memory))
         );
         assert_eq!(SlashCommand::parse("/init"), Ok(Some(SlashCommand::Init)));
+        assert_eq!(SlashCommand::parse("/webui"), Ok(Some(SlashCommand::WebUi)));
         assert_eq!(SlashCommand::parse("/diff"), Ok(Some(SlashCommand::Diff)));
         assert_eq!(
             SlashCommand::parse("/version"),
@@ -3812,9 +2856,7 @@ mod tests {
     #[test]
     fn rejects_invalid_experimental_argument_values() {
         let error = parse_error_message("/experimental maybe");
-        assert!(error.contains(
-            "Unsupported /experimental mode 'maybe'. Use status, on, or off."
-        ));
+        assert!(error.contains("Unsupported /experimental mode 'maybe'. Use status, on, or off."));
         assert!(error.contains("  Usage            /experimental [status|on|off]"));
     }
 
@@ -3912,6 +2954,7 @@ mod tests {
         assert!(help.contains("/mcp [list|show <server>|help]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
+        assert!(help.contains("/webui"));
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
@@ -3923,8 +2966,8 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|add <name> :: <instructions>|help]"));
-        assert_eq!(slash_command_specs().len(), 140);
-        assert!(resume_supported_slash_commands().len() >= 39);
+        assert_eq!(slash_command_specs().len(), 144);
+        assert!(resume_supported_slash_commands().len() >= 42);
     }
 
     #[test]
@@ -4237,7 +3280,7 @@ mod tests {
 
         let skills_help =
             super::handle_skills_slash_command(Some("--help"), &cwd).expect("skills help");
-        assert!(skills_help.contains("Usage            /skills [list|install <path>|help]"));
+        assert!(skills_help.contains("Usage            /skill [list|install <path>|add <path>|add <name> :: <instructions>|help]"));
         assert!(skills_help.contains("Install root     $CODEX_HOME/skills or ~/.codex/skills"));
         assert!(skills_help.contains("legacy /commands"));
 
@@ -4441,7 +3484,11 @@ mod tests {
         .expect("inline skill add should succeed");
 
         assert!(report.contains("saved researcher"));
-        assert!(install_root.join("skills").join("researcher").join("SKILL.md").is_file());
+        assert!(install_root
+            .join("skills")
+            .join("researcher")
+            .join("SKILL.md")
+            .is_file());
 
         match previous_codex_home {
             Some(value) => std::env::set_var("CODEX_HOME", value),
@@ -4453,8 +3500,7 @@ mod tests {
 
     #[test]
     fn normalizes_dragged_skill_paths() {
-        let normalized =
-            super::normalize_skill_source_argument("\"/tmp/My\\ Skill.md\"");
+        let normalized = super::normalize_skill_source_argument("\"/tmp/My\\ Skill.md\"");
         assert_eq!(normalized, "/tmp/My Skill.md");
     }
 

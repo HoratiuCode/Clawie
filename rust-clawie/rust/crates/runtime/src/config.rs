@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::agent::AgentMode;
 use crate::json::JsonValue;
 use crate::sandbox::{FilesystemIsolationMode, SandboxConfig};
 
@@ -57,6 +58,7 @@ pub struct RuntimeFeatureConfig {
     plugins: RuntimePluginConfig,
     mcp: McpConfigCollection,
     oauth: Option<OAuthConfig>,
+    agents: RuntimeAgentConfig,
     model: Option<String>,
     provider: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
@@ -78,6 +80,28 @@ pub struct RuntimePermissionRuleConfig {
     allow: Vec<String>,
     deny: Vec<String>,
     ask: Vec<String>,
+}
+
+/// Agent-role configuration merged from runtime settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeAgentConfig {
+    default_agent: Option<String>,
+    agents: BTreeMap<String, RuntimeAgentDefinitionConfig>,
+}
+
+/// User-defined or overridden agent-role definition.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeAgentDefinitionConfig {
+    description: Option<String>,
+    mode: Option<AgentMode>,
+    prompt: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    permission_mode: Option<ResolvedPermissionMode>,
+    permission_rules: RuntimePermissionRuleConfig,
+    hidden: Option<bool>,
+    native: Option<bool>,
+    steps: Option<u32>,
 }
 
 /// Collection of configured MCP servers after scope-aware merging.
@@ -280,6 +304,7 @@ impl ConfigLoader {
                 servers: mcp_servers,
             },
             oauth: parse_optional_oauth_config(&merged_value, "merged settings.oauth")?,
+            agents: parse_optional_agent_config(&merged_value)?,
             model: parse_optional_model(&merged_value),
             provider: parse_optional_provider(&merged_value)?,
             permission_mode: parse_optional_permission_mode(&merged_value)?,
@@ -351,6 +376,11 @@ impl RuntimeConfig {
     }
 
     #[must_use]
+    pub fn agents(&self) -> &RuntimeAgentConfig {
+        &self.feature_config.agents
+    }
+
+    #[must_use]
     pub fn model(&self) -> Option<&str> {
         self.feature_config.model.as_deref()
     }
@@ -407,6 +437,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn oauth(&self) -> Option<&OAuthConfig> {
         self.oauth.as_ref()
+    }
+
+    #[must_use]
+    pub fn agents(&self) -> &RuntimeAgentConfig {
+        &self.agents
     }
 
     #[must_use]
@@ -548,6 +583,81 @@ impl RuntimePermissionRuleConfig {
     #[must_use]
     pub fn ask(&self) -> &[String] {
         &self.ask
+    }
+}
+
+impl RuntimeAgentConfig {
+    #[must_use]
+    pub fn new(
+        default_agent: Option<String>,
+        agents: BTreeMap<String, RuntimeAgentDefinitionConfig>,
+    ) -> Self {
+        Self {
+            default_agent,
+            agents,
+        }
+    }
+
+    #[must_use]
+    pub fn default_agent(&self) -> Option<&str> {
+        self.default_agent.as_deref()
+    }
+
+    #[must_use]
+    pub fn agents(&self) -> &BTreeMap<String, RuntimeAgentDefinitionConfig> {
+        &self.agents
+    }
+}
+
+impl RuntimeAgentDefinitionConfig {
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    #[must_use]
+    pub fn mode(&self) -> Option<AgentMode> {
+        self.mode
+    }
+
+    #[must_use]
+    pub fn prompt(&self) -> Option<&str> {
+        self.prompt.as_deref()
+    }
+
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    #[must_use]
+    pub fn provider(&self) -> Option<&str> {
+        self.provider.as_deref()
+    }
+
+    #[must_use]
+    pub fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
+        self.permission_mode
+    }
+
+    #[must_use]
+    pub fn permission_rules(&self) -> &RuntimePermissionRuleConfig {
+        &self.permission_rules
+    }
+
+    #[must_use]
+    pub fn hidden(&self) -> Option<bool> {
+        self.hidden
+    }
+
+    #[must_use]
+    pub fn native(&self) -> Option<bool> {
+        self.native
+    }
+
+    #[must_use]
+    pub fn steps(&self) -> Option<u32> {
+        self.steps
     }
 }
 
@@ -749,6 +859,92 @@ fn parse_optional_plugin_config(root: &JsonValue) -> Result<RuntimePluginConfig,
     config.bundled_root =
         optional_string(plugins, "bundledRoot", "merged settings.plugins")?.map(str::to_string);
     Ok(config)
+}
+
+fn parse_optional_agent_config(root: &JsonValue) -> Result<RuntimeAgentConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeAgentConfig::default());
+    };
+
+    let default_agent = object
+        .get("defaultAgent")
+        .or_else(|| object.get("default_agent"))
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned);
+
+    let Some(agents_value) = object.get("agents").or_else(|| object.get("agent")) else {
+        return Ok(RuntimeAgentConfig::new(default_agent, BTreeMap::new()));
+    };
+    let agents_object = expect_object(agents_value, "merged settings.agents")?;
+    let mut agents = BTreeMap::new();
+    for (name, value) in agents_object {
+        let context = format!("merged settings.agents.{name}");
+        agents.insert(
+            name.clone(),
+            parse_agent_definition_config(value, &context)?,
+        );
+    }
+    Ok(RuntimeAgentConfig::new(default_agent, agents))
+}
+
+fn parse_agent_definition_config(
+    value: &JsonValue,
+    context: &str,
+) -> Result<RuntimeAgentDefinitionConfig, ConfigError> {
+    let object = expect_object(value, context)?;
+    let permission_rules = if let Some(permissions) = object.get("permissions") {
+        let permissions = expect_object(permissions, &format!("{context}.permissions"))?;
+        RuntimePermissionRuleConfig {
+            allow: optional_string_array(permissions, "allow", context)?.unwrap_or_default(),
+            deny: optional_string_array(permissions, "deny", context)?.unwrap_or_default(),
+            ask: optional_string_array(permissions, "ask", context)?.unwrap_or_default(),
+        }
+    } else {
+        RuntimePermissionRuleConfig::default()
+    };
+    let permission_mode = optional_string(object, "permissionMode", context)?
+        .map(|mode| parse_permission_mode_label(mode, &format!("{context}.permissionMode")))
+        .transpose()?;
+    let provider = optional_string(object, "provider", context)?
+        .map(|value| normalize_provider_label(value, &format!("{context}.provider")))
+        .transpose()?;
+
+    Ok(RuntimeAgentDefinitionConfig {
+        description: optional_string(object, "description", context)?.map(str::to_string),
+        mode: optional_string(object, "mode", context)?
+            .map(parse_agent_mode_label)
+            .transpose()?,
+        prompt: optional_string(object, "prompt", context)?.map(str::to_string),
+        model: optional_string(object, "model", context)?.map(str::to_string),
+        provider,
+        permission_mode,
+        permission_rules,
+        hidden: optional_bool(object, "hidden", context)?,
+        native: optional_bool(object, "native", context)?,
+        steps: optional_u32(object, "steps", context)?,
+    })
+}
+
+fn parse_agent_mode_label(value: &str) -> Result<AgentMode, ConfigError> {
+    match value {
+        "primary" => Ok(AgentMode::Primary),
+        "subagent" => Ok(AgentMode::Subagent),
+        "all" => Ok(AgentMode::All),
+        other => Err(ConfigError::Parse(format!(
+            "agent.mode: unsupported agent mode {other}"
+        ))),
+    }
+}
+
+fn normalize_provider_label(value: &str, context: &str) -> Result<String, ConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" => Ok("anthropic".to_string()),
+        "xai" | "grok" => Ok("xai".to_string()),
+        "openai" | "gpt" => Ok("openai".to_string()),
+        other => Err(ConfigError::Parse(format!(
+            "{context}: unsupported provider {other}"
+        ))),
+    }
 }
 
 fn parse_optional_permission_mode(
@@ -991,6 +1187,27 @@ fn optional_u16(
     }
 }
 
+fn optional_u32(
+    object: &BTreeMap<String, JsonValue>,
+    key: &str,
+    context: &str,
+) -> Result<Option<u32>, ConfigError> {
+    match object.get(key) {
+        Some(value) => {
+            let Some(number) = value.as_i64() else {
+                return Err(ConfigError::Parse(format!(
+                    "{context}: field {key} must be a non-negative integer"
+                )));
+            };
+            let number = u32::try_from(number).map_err(|_| {
+                ConfigError::Parse(format!("{context}: field {key} is out of range"))
+            })?;
+            Ok(Some(number))
+        }
+        None => Ok(None),
+    }
+}
+
 fn optional_u64(
     object: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -1123,6 +1340,7 @@ mod tests {
         McpServerConfig, McpTransport, ResolvedPermissionMode, RuntimeHookConfig,
         RuntimePluginConfig, CLAW_SETTINGS_SCHEMA_NAME,
     };
+    use crate::agent::AgentMode;
     use crate::json::JsonValue;
     use crate::sandbox::FilesystemIsolationMode;
     use std::fs;
@@ -1497,6 +1715,64 @@ mod tests {
             Some("plugin-cache/installed.json")
         );
         assert_eq!(loaded.plugins().bundled_root(), Some("./bundled-plugins"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_agent_config() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "defaultAgent": "explore",
+              "agents": {
+                "explore": {
+                  "description": "Custom explorer",
+                  "mode": "subagent",
+                  "prompt": "Search thoroughly.",
+                  "permissionMode": "plan",
+                  "permissions": {
+                    "allow": ["Read", "Grep"],
+                    "deny": ["Edit"],
+                    "ask": ["Bash"]
+                  },
+                  "hidden": false,
+                  "native": true,
+                  "steps": 4
+                }
+              }
+            }"#,
+        )
+        .expect("write agent settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        let agents = loaded.agents();
+        assert_eq!(agents.default_agent(), Some("explore"));
+        let explore = agents.agents().get("explore").expect("explore agent");
+        assert_eq!(explore.description(), Some("Custom explorer"));
+        assert_eq!(explore.mode(), Some(AgentMode::Subagent));
+        assert_eq!(explore.prompt(), Some("Search thoroughly."));
+        assert_eq!(
+            explore.permission_mode(),
+            Some(ResolvedPermissionMode::ReadOnly)
+        );
+        assert_eq!(
+            explore.permission_rules().allow(),
+            &["Read".to_string(), "Grep".to_string()]
+        );
+        assert_eq!(explore.permission_rules().deny(), &["Edit".to_string()]);
+        assert_eq!(explore.permission_rules().ask(), &["Bash".to_string()]);
+        assert_eq!(explore.hidden(), Some(false));
+        assert_eq!(explore.native(), Some(true));
+        assert_eq!(explore.steps(), Some(4));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

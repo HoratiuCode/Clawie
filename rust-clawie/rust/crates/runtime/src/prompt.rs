@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::agent::AgentRegistry;
 use crate::config::{ConfigError, ConfigLoader, RuntimeConfig};
 
 /// Errors raised while assembling the final system prompt.
@@ -418,10 +419,12 @@ pub fn load_system_prompt(
     let cwd = cwd.into();
     let project_context = ProjectContext::discover_with_git(&cwd, current_date.into())?;
     let config = ConfigLoader::default_for(&cwd).load()?;
+    let agents = AgentRegistry::from_runtime_config(&config);
     Ok(SystemPromptBuilder::new()
         .with_os(os_name, os_version)
         .with_project_context(project_context)
         .with_runtime_config(config)
+        .append_section(agents.render_prompt_section())
         .build())
 }
 
@@ -733,6 +736,8 @@ mod tests {
 
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));
+        assert!(prompt.contains("# Agent roles"));
+        assert!(prompt.contains("Default agent: build"));
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 

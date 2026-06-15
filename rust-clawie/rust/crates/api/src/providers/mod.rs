@@ -32,6 +32,62 @@ pub enum ProviderKind {
     OpenAi,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderApi {
+    Messages,
+    ChatCompletions,
+    Responses,
+    ResponsesWebSocket,
+}
+
+impl ProviderApi {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Messages => "messages",
+            Self::ChatCompletions => "chat_completions",
+            Self::Responses => "responses",
+            Self::ResponsesWebSocket => "responses_websocket",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderDefinition {
+    pub kind: ProviderKind,
+    pub name: &'static str,
+    pub default_api: ProviderApi,
+    pub apis: &'static [ProviderApi],
+}
+
+const ANTHROPIC_APIS: &[ProviderApi] = &[ProviderApi::Messages];
+const OPENAI_COMPAT_APIS: &[ProviderApi] = &[
+    ProviderApi::Responses,
+    ProviderApi::ResponsesWebSocket,
+    ProviderApi::ChatCompletions,
+];
+
+pub const ANTHROPIC_PROVIDER_DEFINITION: ProviderDefinition = ProviderDefinition {
+    kind: ProviderKind::Anthropic,
+    name: "Anthropic",
+    default_api: ProviderApi::Messages,
+    apis: ANTHROPIC_APIS,
+};
+
+pub const XAI_PROVIDER_DEFINITION: ProviderDefinition = ProviderDefinition {
+    kind: ProviderKind::Xai,
+    name: "xAI",
+    default_api: ProviderApi::Responses,
+    apis: OPENAI_COMPAT_APIS,
+};
+
+pub const OPENAI_PROVIDER_DEFINITION: ProviderDefinition = ProviderDefinition {
+    kind: ProviderKind::OpenAi,
+    name: "OpenAI",
+    default_api: ProviderApi::Responses,
+    apis: OPENAI_COMPAT_APIS,
+};
+
 pub const PROVIDER_PREFERENCE_ENV: &str = "CLAW_PROVIDER";
 pub const LEGACY_PROVIDER_PREFERENCE_ENV: &str = "CLAW_PROVIDER_PREFERENCE";
 
@@ -211,6 +267,23 @@ pub const fn default_model_for_provider(provider: ProviderKind) -> &'static str 
 }
 
 #[must_use]
+pub const fn definition_for_provider(provider: ProviderKind) -> ProviderDefinition {
+    match provider {
+        ProviderKind::Anthropic => ANTHROPIC_PROVIDER_DEFINITION,
+        ProviderKind::Xai => XAI_PROVIDER_DEFINITION,
+        ProviderKind::OpenAi => OPENAI_PROVIDER_DEFINITION,
+    }
+}
+
+#[must_use]
+pub fn provider_supports_api(provider: ProviderKind, api: ProviderApi) -> bool {
+    definition_for_provider(provider)
+        .apis
+        .iter()
+        .any(|candidate| *candidate == api)
+}
+
+#[must_use]
 pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(metadata) = metadata_for_model(model) {
         return metadata.provider;
@@ -231,6 +304,11 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
 }
 
 #[must_use]
+pub fn definition_for_model(model: &str) -> ProviderDefinition {
+    definition_for_provider(detect_provider_kind(model))
+}
+
+#[must_use]
 pub fn max_tokens_for_model(model: &str) -> u32 {
     let canonical = resolve_model_alias(model);
     if canonical.starts_with("gpt-") || canonical.starts_with("openai/") {
@@ -247,8 +325,9 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_model_for_provider, detect_provider_kind, max_tokens_for_model,
-        parse_provider_preference, resolve_model_alias, ProviderKind,
+        default_model_for_provider, definition_for_model, definition_for_provider,
+        detect_provider_kind, max_tokens_for_model, parse_provider_preference,
+        provider_supports_api, resolve_model_alias, ProviderApi, ProviderKind,
     };
 
     #[test]
@@ -269,7 +348,10 @@ mod tests {
 
     #[test]
     fn parses_provider_preferences_and_defaults() {
-        assert_eq!(parse_provider_preference("claude"), Some(ProviderKind::Anthropic));
+        assert_eq!(
+            parse_provider_preference("claude"),
+            Some(ProviderKind::Anthropic)
+        );
         assert_eq!(parse_provider_preference("gpt"), Some(ProviderKind::OpenAi));
         assert_eq!(parse_provider_preference("grok"), Some(ProviderKind::Xai));
         assert_eq!(
@@ -278,6 +360,24 @@ mod tests {
         );
         assert_eq!(default_model_for_provider(ProviderKind::OpenAi), "gpt-4.1");
         assert_eq!(default_model_for_provider(ProviderKind::Xai), "grok-3");
+    }
+
+    #[test]
+    fn exposes_provider_definitions_and_supported_apis() {
+        let anthropic = definition_for_provider(ProviderKind::Anthropic);
+        assert_eq!(anthropic.default_api, ProviderApi::Messages);
+        assert!(provider_supports_api(
+            ProviderKind::OpenAi,
+            ProviderApi::ResponsesWebSocket
+        ));
+        assert!(!provider_supports_api(
+            ProviderKind::Anthropic,
+            ProviderApi::Responses
+        ));
+
+        let grok = definition_for_model("grok");
+        assert_eq!(grok.kind, ProviderKind::Xai);
+        assert_eq!(grok.default_api, ProviderApi::Responses);
     }
 
     #[test]

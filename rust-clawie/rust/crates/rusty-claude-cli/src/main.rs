@@ -9,8 +9,9 @@
 mod init;
 mod input;
 mod render;
+mod webui;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -22,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
     default_model_for_provider, metadata_for_model, parse_provider_preference,
@@ -38,12 +39,15 @@ use commands::{
     slash_command_specs, validate_slash_command_input, SlashCommand,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
+use crossterm::style::Stylize;
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
-use render::{Spinner, TerminalRenderer};
+use render::{
+    active_terminal_theme, set_active_terminal_theme, Spinner, TerminalRenderer, TerminalTheme,
+};
 use runtime::{
     clear_oauth_credentials, format_usd, generate_pkce_pair, generate_state, load_system_prompt,
-    parse_oauth_callback_request_target, pricing_for_model, resolve_sandbox_status,
+    parse_oauth_callback_request_target, pricing_for_model, read_file, resolve_sandbox_status,
     save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
     ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
     McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
@@ -88,6 +92,7 @@ const CLI_OPTION_SUGGESTIONS: &[&str] = &[
     "--model",
     "--output-format",
     "--permission-mode",
+    "--theme",
     "--dangerously-skip-permissions",
     "--allowedTools",
     "--allowed-tools",
@@ -136,6 +141,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Sandbox => print_sandbox_status_snapshot()?,
         CliAction::Providers => print_providers_report(),
         CliAction::Experimental { mode } => print_experimental_report(mode.as_deref())?,
+        CliAction::Theme { name } => print_theme_report(name.as_deref())?,
         CliAction::Prompt {
             prompt,
             model,
@@ -187,6 +193,9 @@ enum CliAction {
     Providers,
     Experimental {
         mode: Option<String>,
+    },
+    Theme {
+        name: Option<String>,
     },
     Prompt {
         prompt: String,
@@ -271,12 +280,23 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 permission_mode_override = Some(parse_permission_mode_arg(value)?);
                 index += 2;
             }
+            "--theme" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --theme".to_string())?;
+                set_active_terminal_theme(parse_terminal_theme_arg(value)?);
+                index += 2;
+            }
             flag if flag.starts_with("--output-format=") => {
                 output_format = CliOutputFormat::parse(&flag[16..])?;
                 index += 1;
             }
             flag if flag.starts_with("--permission-mode=") => {
                 permission_mode_override = Some(parse_permission_mode_arg(&flag[18..])?);
+                index += 1;
+            }
+            flag if flag.starts_with("--theme=") => {
+                set_active_terminal_theme(parse_terminal_theme_arg(&flag[8..])?);
                 index += 1;
             }
             "--dangerously-skip-permissions" => {
@@ -358,8 +378,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     if rest.first().map(String::as_str) == Some("--resume") {
         return parse_resume_args(&rest[1..]);
     }
-    if let Some(action) = parse_single_word_command_alias(&rest, &model, permission_mode_override)
-    {
+    if let Some(action) = parse_single_word_command_alias(&rest, &model, permission_mode_override) {
         return action;
     }
 
@@ -497,6 +516,7 @@ fn parse_direct_slash_cli_action(
         Ok(Some(SlashCommand::Sandbox)) => Ok(CliAction::Sandbox),
         Ok(Some(SlashCommand::Providers)) => Ok(CliAction::Providers),
         Ok(Some(SlashCommand::Experimental { mode })) => Ok(CliAction::Experimental { mode }),
+        Ok(Some(SlashCommand::Theme { name })) => Ok(CliAction::Theme { name }),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
@@ -662,6 +682,11 @@ fn parse_permission_mode_arg(value: &str) -> Result<PermissionMode, String> {
             )
         })
         .map(permission_mode_from_label)
+}
+
+fn parse_terminal_theme_arg(value: &str) -> Result<TerminalTheme, String> {
+    TerminalTheme::parse(value)
+        .ok_or_else(|| format!("unsupported theme '{value}'. Use clawie1, chrome, or classic."))
 }
 
 fn permission_mode_from_label(mode: &str) -> PermissionMode {
@@ -1403,6 +1428,56 @@ fn format_permissions_switch_report(previous: &str, next: &str) -> String {
     )
 }
 
+fn format_theme_report(theme: TerminalTheme) -> String {
+    let themes = [
+        TerminalTheme::Emoji,
+        TerminalTheme::Chrome,
+        TerminalTheme::Classic,
+    ]
+    .into_iter()
+    .map(|candidate| {
+        let marker = if candidate == theme {
+            "● current"
+        } else {
+            "○ available"
+        };
+        format!(
+            "  {:<10} {:<11} {}",
+            candidate.as_str(),
+            marker,
+            candidate.description()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    format!(
+        "Theme
+  Active design    {theme}
+
+Designs
+{themes}
+
+Usage
+  Inspect current theme with /theme
+  Switch themes with /theme <clawie1|chrome|classic>",
+        theme = theme.as_str()
+    )
+}
+
+fn format_theme_switch_report(previous: TerminalTheme, next: TerminalTheme) -> String {
+    format!(
+        "Theme updated
+  Result           design switched
+  Previous theme   {previous}
+  Active theme     {next}
+  Applies to       new output in this session
+  Usage            /theme to inspect current theme",
+        previous = previous.as_str(),
+        next = next.as_str()
+    )
+}
+
 fn format_experimental_report(enabled: bool, mode: &str) -> String {
     let state = if enabled { "enabled" } else { "disabled" };
     let behavior = if enabled {
@@ -1460,8 +1535,32 @@ fn print_experimental_report(mode: Option<&str>) -> Result<(), Box<dyn std::erro
     };
     println!(
         "{}",
-        format_experimental_report(enabled, if enabled { "danger-full-access" } else { "workspace-write" })
+        format_experimental_report(
+            enabled,
+            if enabled {
+                "danger-full-access"
+            } else {
+                "workspace-write"
+            }
+        )
     );
+    Ok(())
+}
+
+fn print_theme_report(name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    match name {
+        Some(name) => {
+            let next = parse_terminal_theme_arg(name)?;
+            let previous = active_terminal_theme();
+            set_active_terminal_theme(next);
+            if previous == next {
+                println!("{}", format_theme_report(next));
+            } else {
+                println!("{}", format_theme_switch_report(previous, next));
+            }
+        }
+        None => println!("{}", format_theme_report(active_terminal_theme())),
+    }
     Ok(())
 }
 
@@ -1817,8 +1916,96 @@ fn run_resume_command(
                 message: Some(handle_skills_slash_command(args.as_deref(), &cwd)?),
             })
         }
+        SlashCommand::Theme { name } => {
+            let message = match name {
+                Some(name) => {
+                    let next = parse_terminal_theme_arg(name)?;
+                    let previous = active_terminal_theme();
+                    set_active_terminal_theme(next);
+                    if previous == next {
+                        format_theme_report(next)
+                    } else {
+                        format_theme_switch_report(previous, next)
+                    }
+                }
+                None => format_theme_report(active_terminal_theme()),
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+            })
+        }
+        SlashCommand::Artifacts => {
+            let store = RustArtifactStore::new(&session.session_id)?;
+            let artifacts = store.list_artifacts();
+            let mut message = "Artifacts\n".to_string();
+            if artifacts.is_empty() {
+                message.push_str("  • no artifacts in this session\n");
+                message.push_str("  • use /artifact-create <name> to create one\n");
+            } else {
+                message.push_str(&format!("  • total: {}\n", artifacts.len()));
+                for art in artifacts {
+                    let facing = if art.metadata.user_facing { "📄" } else { "🔧" };
+                    message.push_str(&format!(
+                        "  • {} `{}` — {} ({} bytes)\n",
+                        facing,
+                        art.name,
+                        art.metadata.summary,
+                        fs::read_to_string(&art.path).unwrap_or_default().len()
+                    ));
+                }
+            }
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+            })
+        }
+        SlashCommand::ArtifactCreate { name } => {
+            let mut store = RustArtifactStore::new(&session.session_id)?;
+            let message = match name {
+                Some(art_name) => {
+                    if store.get_by_name(&art_name).is_some() {
+                        format!("  • artifact '{}' already exists — use a different name", art_name)
+                    } else {
+                        let content = format!("# {art_name}\n\nManual artifact creation.");
+                        store.create(&art_name, &content, "Created via CLI")?;
+                        format!("  • created artifact: {}", art_name)
+                    }
+                }
+                None => "usage: /artifact-create <name>".to_string(),
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(format!("Artifact Create\n{}", message)),
+            })
+        }
+        SlashCommand::ArtifactView { name } => {
+            let store = RustArtifactStore::new(&session.session_id)?;
+            let message = match name {
+                Some(art_name) => {
+                    if let Some(art) = store.get_by_name(&art_name) {
+                        let content = fs::read_to_string(&art.path).unwrap_or_default();
+                        format!(
+                            "Artifact View\n  • name: {}\n  • summary: {}\n  • user_facing: {}\n\n{}",
+                            art.name,
+                            art.metadata.summary,
+                            art.metadata.user_facing,
+                            content
+                        )
+                    } else {
+                        format!("Artifact View\n  • artifact '{}' not found", art_name)
+                    }
+                }
+                None => "usage: /artifact-view <name>".to_string(),
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+            })
+        }
         SlashCommand::Unknown(name) => Err(format_unknown_slash_command(name).into()),
-        SlashCommand::Bughunter { .. }
+        SlashCommand::WebUi
+        | SlashCommand::Bughunter { .. }
         | SlashCommand::Commit { .. }
         | SlashCommand::Pr { .. }
         | SlashCommand::Issue { .. }
@@ -1855,7 +2042,6 @@ fn run_resume_command(
         | SlashCommand::Plan { .. }
         | SlashCommand::Review { .. }
         | SlashCommand::Tasks { .. }
-        | SlashCommand::Theme { .. }
         | SlashCommand::Voice { .. }
         | SlashCommand::Usage { .. }
         | SlashCommand::Rename { .. }
@@ -1883,6 +2069,7 @@ fn run_repl(
         input::prompt_prefix(),
         cli.repl_completion_candidates().unwrap_or_default(),
     );
+    editor.set_model(&cli.model);
     println!("{}", cli.startup_banner());
 
     loop {
@@ -2106,37 +2293,38 @@ impl RuntimeMcpState {
             .into_iter()
             .filter(|server_name| !failed_server_names.contains(server_name))
             .collect::<Vec<_>>();
-        let failed_servers = discovery
-            .failed_servers
-            .iter()
-            .map(|failure| runtime::McpFailedServer {
-                server_name: failure.server_name.clone(),
-                phase: runtime::McpLifecyclePhase::ToolDiscovery,
-                error: runtime::McpErrorSurface::new(
-                    runtime::McpLifecyclePhase::ToolDiscovery,
-                    Some(failure.server_name.clone()),
-                    failure.error.clone(),
-                    std::collections::BTreeMap::new(),
-                    true,
-                ),
-            })
-            .chain(discovery.unsupported_servers.iter().map(|server| {
-                runtime::McpFailedServer {
-                    server_name: server.server_name.clone(),
-                    phase: runtime::McpLifecyclePhase::ServerRegistration,
+        let failed_servers =
+            discovery
+                .failed_servers
+                .iter()
+                .map(|failure| runtime::McpFailedServer {
+                    server_name: failure.server_name.clone(),
+                    phase: runtime::McpLifecyclePhase::ToolDiscovery,
                     error: runtime::McpErrorSurface::new(
-                        runtime::McpLifecyclePhase::ServerRegistration,
-                        Some(server.server_name.clone()),
-                        server.reason.clone(),
-                        std::collections::BTreeMap::from([(
-                            "transport".to_string(),
-                            format!("{:?}", server.transport).to_ascii_lowercase(),
-                        )]),
-                        false,
+                        runtime::McpLifecyclePhase::ToolDiscovery,
+                        Some(failure.server_name.clone()),
+                        failure.error.clone(),
+                        std::collections::BTreeMap::new(),
+                        true,
                     ),
-                }
-            }))
-            .collect::<Vec<_>>();
+                })
+                .chain(discovery.unsupported_servers.iter().map(|server| {
+                    runtime::McpFailedServer {
+                        server_name: server.server_name.clone(),
+                        phase: runtime::McpLifecyclePhase::ServerRegistration,
+                        error: runtime::McpErrorSurface::new(
+                            runtime::McpLifecyclePhase::ServerRegistration,
+                            Some(server.server_name.clone()),
+                            server.reason.clone(),
+                            std::collections::BTreeMap::from([(
+                                "transport".to_string(),
+                                format!("{:?}", server.transport).to_ascii_lowercase(),
+                            )]),
+                            false,
+                        ),
+                    }
+                }))
+                .collect::<Vec<_>>();
         let degraded_report = (!failed_servers.is_empty()).then(|| {
             runtime::McpDegradedReport::new(
                 working_servers,
@@ -2293,17 +2481,13 @@ fn mcp_runtime_tool_definition(tool: &runtime::ManagedMcpTool) -> RuntimeToolDef
                 .clone()
                 .unwrap_or_else(|| format!("Invoke MCP tool `{}`.", tool.qualified_name)),
         ),
-        input_schema: tool
-            .tool
-            .input_schema
-            .clone()
-            .unwrap_or_else(|| {
-                json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": true
-                })
-            }),
+        input_schema: tool.tool.input_schema.clone().unwrap_or_else(|| {
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            })
+        }),
         required_permission: permission_mode_for_mcp_tool(&tool.tool),
     }
 }
@@ -2404,7 +2588,9 @@ impl HookAbortMonitor {
                                     if key.kind == KeyEventKind::Press
                                         && (matches!(key.code, KeyCode::Esc)
                                             || (matches!(key.code, KeyCode::Char('c'))
-                                                && key.modifiers.contains(KeyModifiers::CONTROL))) =>
+                                                && key
+                                                    .modifiers
+                                                    .contains(KeyModifiers::CONTROL))) =>
                                 {
                                     abort_signal.abort();
                                     let _ = disable_raw_mode();
@@ -2473,6 +2659,345 @@ impl HookAbortMonitor {
     }
 }
 
+const FILE_MENTION_MAX_VISITED: usize = 20_000;
+const FILE_MENTION_MAX_MATCHES: usize = 5;
+const FILE_MENTION_PREVIEW_LINES: usize = 160;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileMentionMatch {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileMentionResolution {
+    mention: String,
+    matches: Vec<FileMentionMatch>,
+}
+
+fn expand_file_mentions_for_prompt(input: &str) -> String {
+    let mentions = extract_file_mentions(input);
+    if mentions.is_empty() {
+        return input.to_string();
+    }
+
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = env::var_os("HOME").map(PathBuf::from);
+    expand_file_mentions_with_roots(input, &cwd, home.as_deref())
+}
+
+fn expand_file_mentions_with_roots(input: &str, cwd: &Path, home: Option<&Path>) -> String {
+    let mentions = extract_file_mentions(input);
+    if mentions.is_empty() {
+        return input.to_string();
+    }
+
+    let roots = file_mention_search_roots(cwd, home);
+    let resolutions = mentions
+        .iter()
+        .map(|mention| resolve_file_mention(mention, cwd, &roots))
+        .collect::<Vec<_>>();
+    let mention_context = render_file_mention_context(&resolutions);
+    if mention_context.is_empty() {
+        input.to_string()
+    } else {
+        format!("{input}\n\n{mention_context}")
+    }
+}
+
+fn extract_file_mentions(input: &str) -> Vec<String> {
+    let mut mentions = Vec::new();
+    let mut seen = HashSet::new();
+    let chars = input.char_indices().collect::<Vec<_>>();
+    let mut index = 0;
+
+    while index < chars.len() {
+        let (byte_index, ch) = chars[index];
+        if ch != '@' {
+            index += 1;
+            continue;
+        }
+        if byte_index > 0
+            && input[..byte_index]
+                .chars()
+                .next_back()
+                .is_some_and(|prev| !prev.is_whitespace())
+        {
+            index += 1;
+            continue;
+        }
+
+        let mut cursor = index + 1;
+        while cursor < chars.len() && chars[cursor].1.is_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= chars.len() {
+            break;
+        }
+
+        let mention = if matches!(chars[cursor].1, '"' | '\'') {
+            let quote = chars[cursor].1;
+            cursor += 1;
+            let start = cursor;
+            while cursor < chars.len() && chars[cursor].1 != quote {
+                cursor += 1;
+            }
+            let end_byte = chars
+                .get(cursor)
+                .map_or(input.len(), |(end_byte, _)| *end_byte);
+            let start_byte = chars
+                .get(start)
+                .map_or(input.len(), |(start_byte, _)| *start_byte);
+            index = cursor.saturating_add(1);
+            input[start_byte..end_byte].trim().to_string()
+        } else {
+            let start = cursor;
+            while cursor < chars.len() && !chars[cursor].1.is_whitespace() {
+                cursor += 1;
+            }
+            let start_byte = chars
+                .get(start)
+                .map_or(input.len(), |(start_byte, _)| *start_byte);
+            let end_byte = chars
+                .get(cursor)
+                .map_or(input.len(), |(end_byte, _)| *end_byte);
+            index = cursor;
+            trim_mention_token(&input[start_byte..end_byte])
+        };
+
+        if !mention.is_empty() && seen.insert(mention.clone()) {
+            mentions.push(mention);
+        }
+    }
+
+    mentions
+}
+
+fn trim_mention_token(token: &str) -> String {
+    token
+        .trim()
+        .trim_end_matches(|ch: char| matches!(ch, ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}'))
+        .to_string()
+}
+
+fn file_mention_search_roots(cwd: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    push_unique_existing_root(&mut roots, cwd);
+    if let Some(home) = home {
+        for child in ["Documents", "Desktop", "Downloads"] {
+            push_unique_existing_root(&mut roots, &home.join(child));
+        }
+    }
+    roots
+}
+
+fn push_unique_existing_root(roots: &mut Vec<PathBuf>, root: &Path) {
+    let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if canonical.exists() && !roots.iter().any(|existing| existing == &canonical) {
+        roots.push(canonical);
+    }
+}
+
+fn resolve_file_mention(mention: &str, cwd: &Path, roots: &[PathBuf]) -> FileMentionResolution {
+    let mut matches = Vec::new();
+    let exact_path = Path::new(mention);
+    let exact_candidate = if exact_path.is_absolute() {
+        exact_path.to_path_buf()
+    } else {
+        cwd.join(exact_path)
+    };
+    if exact_candidate.is_file() {
+        matches.push(FileMentionMatch {
+            path: fs::canonicalize(&exact_candidate).unwrap_or(exact_candidate),
+        });
+    } else {
+        matches.extend(search_file_mention_matches(mention, roots));
+    }
+
+    FileMentionResolution {
+        mention: mention.to_string(),
+        matches,
+    }
+}
+
+fn search_file_mention_matches(mention: &str, roots: &[PathBuf]) -> Vec<FileMentionMatch> {
+    let query = normalize_mention_query(mention);
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    let mut visited = 0usize;
+
+    for root in roots {
+        let mut stack = vec![root.clone()];
+        while let Some(path) = stack.pop() {
+            if visited >= FILE_MENTION_MAX_VISITED {
+                break;
+            }
+            visited += 1;
+
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.is_dir() {
+                if should_skip_file_mention_dir(&path) {
+                    continue;
+                }
+                let Ok(entries) = fs::read_dir(&path) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    stack.push(entry.path());
+                }
+                continue;
+            }
+            if !metadata.is_file() {
+                continue;
+            }
+
+            let score = score_file_mention_match(&path, &query, mention);
+            if score == usize::MAX {
+                continue;
+            }
+            let canonical = fs::canonicalize(&path).unwrap_or(path);
+            if seen.insert(canonical.clone()) {
+                candidates.push((score, canonical));
+            }
+        }
+    }
+
+    candidates.sort_by(|(left_score, left_path), (right_score, right_path)| {
+        left_score.cmp(right_score).then_with(|| {
+            left_path
+                .to_string_lossy()
+                .cmp(&right_path.to_string_lossy())
+        })
+    });
+    candidates
+        .into_iter()
+        .take(FILE_MENTION_MAX_MATCHES)
+        .map(|(_, path)| FileMentionMatch { path })
+        .collect()
+}
+
+fn normalize_mention_query(value: &str) -> String {
+    value.trim().trim_start_matches("./").to_ascii_lowercase()
+}
+
+fn should_skip_file_mention_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    matches!(
+        name,
+        ".git"
+            | ".hg"
+            | ".svn"
+            | "target"
+            | "node_modules"
+            | ".next"
+            | "dist"
+            | "build"
+            | ".clawd-agents"
+            | ".claw"
+            | ".codex"
+    )
+}
+
+fn score_file_mention_match(path: &Path, query: &str, original: &str) -> usize {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let file_stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let path_text = path.to_string_lossy().to_ascii_lowercase();
+    let query_has_separator = original.contains('/') || original.contains('\\');
+
+    if file_name == query {
+        0
+    } else if file_stem == query {
+        1
+    } else if query_has_separator && path_text.ends_with(query) {
+        2
+    } else if file_name.contains(query) {
+        3 + file_name.len().saturating_sub(query.len())
+    } else if path_text.contains(query) {
+        10_000 + path_text.len().saturating_sub(query.len())
+    } else {
+        usize::MAX
+    }
+}
+
+fn render_file_mention_context(resolutions: &[FileMentionResolution]) -> String {
+    let mut sections = Vec::new();
+    for resolution in resolutions {
+        if resolution.matches.is_empty() {
+            sections.push(format!(
+                "- @{}: no matching local file was found in the workspace, Documents, Desktop, or Downloads.",
+                resolution.mention
+            ));
+            continue;
+        }
+
+        let primary = &resolution.matches[0].path;
+        let mut section = format!(
+            "- @{} resolved to `{}`",
+            resolution.mention,
+            primary.display()
+        );
+        match read_file(
+            primary.to_string_lossy().as_ref(),
+            Some(0),
+            Some(FILE_MENTION_PREVIEW_LINES),
+        ) {
+            Ok(output) => {
+                section.push_str(&format!(
+                    "\n\n```text\n{}\n```",
+                    output.file.content.trim_end()
+                ));
+                if output.file.total_lines > output.file.num_lines {
+                    section.push_str(&format!(
+                        "\n\n[Showing lines {}-{} of {}.]",
+                        output.file.start_line,
+                        output
+                            .file
+                            .start_line
+                            .saturating_add(output.file.num_lines.saturating_sub(1)),
+                        output.file.total_lines
+                    ));
+                }
+            }
+            Err(error) => {
+                section.push_str(&format!("\n\n[Could not read file preview: {error}.]"));
+            }
+        }
+        if resolution.matches.len() > 1 {
+            let alternatives = resolution.matches[1..]
+                .iter()
+                .map(|candidate| format!("`{}`", candidate.path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            section.push_str(&format!("\n\nOther matches: {alternatives}"));
+        }
+        sections.push(section);
+    }
+
+    if sections.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<local_file_mentions>\nThe user referenced local files with @mentions. Use this context as user-provided file context.\n\n{}\n</local_file_mentions>",
+            sections.join("\n\n")
+        )
+    }
+}
+
 impl LiveCli {
     fn new(
         model: String,
@@ -2520,10 +3045,12 @@ impl LiveCli {
             || "unknown".to_string(),
             |context| context.git_summary.headline(),
         );
+        let theme = active_terminal_theme();
         let rows = vec![
             "~, clawie".to_string(),
             format!("Model            {}", self.model),
             format!("Permissions      {}", self.permission_mode.as_str()),
+            format!("Theme            {}", theme.as_str()),
             format!("Branch           {}", git_branch),
             format!("Workspace        {}", workspace),
             format!("Directory        {}", cwd),
@@ -2536,14 +3063,18 @@ impl LiveCli {
             .collect::<Vec<_>>()
             .join("\n");
         let bottom_border = format!("└{}┘", "─".repeat(box_width + 2));
-        format!(
-            "\x1b[31m\
- ██████╗██╗      █████╗ ██╗    ██╗██╗███████╗\n\
+        let logo = format!(
+            "{}",
+            " ██████╗██╗      █████╗ ██╗    ██╗██╗███████╗\n\
 ██╔════╝██║     ██╔══██╗██║    ██║██║██╔════╝\n\
 ██║     ██║     ███████║██║ █╗ ██║██║█████╗  \n\
 ██║     ██║     ██╔══██║██║███╗██║██║██╔══╝  \n\
 ╚██████╗███████╗██║  ██║╚███╔███╔╝██║███████╗\n\
- ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝╚══════╝\x1b[0m\n\n\
+ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝╚══════╝"
+                .with(theme.banner_color())
+        );
+        format!(
+            "{logo}\n\n\
 {top_border}\n\
 {middle}\n\
 {bottom_border}\n\n\
@@ -2593,20 +3124,28 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
-        let spinner_theme = *TerminalRenderer::new().color_theme();
+        let renderer = TerminalRenderer::new();
+        let terminal_theme = renderer.terminal_theme();
+        let spinner_theme = *renderer.color_theme();
+        let thinking_label = if terminal_theme.emojis_enabled() {
+            "Thinking... · Esc to interrupt"
+        } else {
+            "Thinking... Esc to interrupt"
+        };
         let thinking_done = Arc::new(AtomicBool::new(false));
         let thinking_done_for_thread = Arc::clone(&thinking_done);
         let spinner_handle = thread::spawn(move || -> io::Result<()> {
             let mut spinner = Spinner::new();
             let mut stdout = io::stdout();
             while !thinking_done_for_thread.load(Ordering::Relaxed) {
-                spinner.tick("Thinking... · Esc to interrupt", &spinner_theme, &mut stdout)?;
+                spinner.tick(thinking_label, &spinner_theme, &mut stdout)?;
                 thread::sleep(Duration::from_millis(250));
             }
             Ok(())
         });
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
-        let result = runtime.run_turn(input, Some(&mut permission_prompter));
+        let expanded_input = expand_file_mentions_for_prompt(input);
+        let result = runtime.run_turn(&expanded_input, Some(&mut permission_prompter));
         hook_abort_monitor.stop();
         thinking_done.store(true, Ordering::Relaxed);
         match spinner_handle.join() {
@@ -2624,11 +3163,12 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
-                spinner.finish(
-                    "✨ Done",
-                    &spinner_theme,
-                    &mut stdout,
-                )?;
+                let done_label = if terminal_theme.emojis_enabled() {
+                    "✨ Done"
+                } else {
+                    "Done"
+                };
+                spinner.finish(done_label, &spinner_theme, &mut stdout)?;
                 println!();
                 if let Some(event) = summary.auto_compaction {
                     println!(
@@ -2637,7 +3177,8 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
                     );
                 }
                 let visible_reply = final_assistant_text_or_fallback(input, &summary);
-                if !visible_reply.trim().is_empty() && final_assistant_text(&summary).trim().is_empty()
+                if !visible_reply.trim().is_empty()
+                    && final_assistant_text(&summary).trim().is_empty()
                 {
                     write_structured_reply(
                         &mut stdout,
@@ -2654,11 +3195,12 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
             }
             Err(error) => {
                 runtime.shutdown_plugins()?;
-                spinner.fail(
-                    "❌ Request failed",
-                    &spinner_theme,
-                    &mut stdout,
-                )?;
+                let failed_label = if terminal_theme.emojis_enabled() {
+                    "❌ Request failed"
+                } else {
+                    "Request failed"
+                };
+                spinner.fail(failed_label, &spinner_theme, &mut stdout)?;
                 writeln!(&mut stdout, "{}", error)?;
                 Ok(())
             }
@@ -2679,7 +3221,8 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
     fn run_prompt_json(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(false)?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
-        let result = runtime.run_turn(input, Some(&mut permission_prompter));
+        let expanded_input = expand_file_mentions_for_prompt(input);
+        let result = runtime.run_turn(&expanded_input, Some(&mut permission_prompter));
         hook_abort_monitor.stop();
         let summary = result?;
         let message = final_assistant_text_or_fallback(input, &summary);
@@ -2773,6 +3316,68 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
             SlashCommand::Permissions { mode } => self.set_permissions(mode)?,
             SlashCommand::Experimental { mode } => self.set_experimental(mode)?,
             SlashCommand::Clear { confirm } => self.clear_session(confirm)?,
+            SlashCommand::Artifacts => {
+                let store = RustArtifactStore::new(&self.session.id)?;
+                let artifacts = store.list_artifacts();
+                println!("Artifacts");
+                if artifacts.is_empty() {
+                    println!("  • no artifacts in this session");
+                    println!("  • use /artifact-create <name> to create one");
+                } else {
+                    println!("  • total: {}", artifacts.len());
+                    for art in artifacts {
+                        let facing = if art.metadata.user_facing { "📄" } else { "🔧" };
+                        println!(
+                            "  • {} `{}` — {} ({} bytes)",
+                            facing,
+                            art.name,
+                            art.metadata.summary,
+                            fs::read_to_string(&art.path).unwrap_or_default().len()
+                        );
+                    }
+                }
+                false
+            }
+            SlashCommand::ArtifactCreate { name } => {
+                let mut store = RustArtifactStore::new(&self.session.id)?;
+                println!("Artifact Create");
+                match name {
+                    Some(art_name) => {
+                        if store.get_by_name(&art_name).is_some() {
+                            println!("  • artifact '{}' already exists — use a different name", art_name);
+                        } else {
+                            let content = format!("# {art_name}\n\nManual artifact creation.");
+                            store.create(&art_name, &content, "Created via CLI")?;
+                            println!("  • created artifact: {}", art_name);
+                        }
+                    }
+                    None => {
+                        println!("usage: /artifact-create <name>");
+                    }
+                }
+                false
+            }
+            SlashCommand::ArtifactView { name } => {
+                let store = RustArtifactStore::new(&self.session.id)?;
+                println!("Artifact View");
+                match name {
+                    Some(art_name) => {
+                        if let Some(art) = store.get_by_name(&art_name) {
+                            println!("  • name: {}", art.name);
+                            println!("  • summary: {}", art.metadata.summary);
+                            println!("  • user_facing: {}", art.metadata.user_facing);
+                            let content = fs::read_to_string(&art.path).unwrap_or_default();
+                            println!("\n{}", content);
+                        } else {
+                            println!("  • artifact '{}' not found", art_name);
+                        }
+                    }
+                    None => {
+                        println!("usage: /artifact-view <name>");
+                    }
+                }
+                false
+            }
             SlashCommand::Cost => {
                 self.print_cost();
                 false
@@ -2807,6 +3412,14 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
                 run_init()?;
                 false
             }
+            SlashCommand::WebUi => {
+                let (url, output_dir) = webui::launch()?;
+                println!(
+                    "Web UI opened\n  URL              {url}\n  Saved files      {}",
+                    output_dir.display()
+                );
+                false
+            }
             SlashCommand::Diff => {
                 Self::print_diff()?;
                 false
@@ -2837,6 +3450,7 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
                 self.copy_to_clipboard(target.as_deref())?;
                 false
             }
+            SlashCommand::Theme { name } => self.set_theme(name)?,
             SlashCommand::Doctor
             | SlashCommand::Login
             | SlashCommand::Logout
@@ -2862,7 +3476,6 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
             | SlashCommand::Plan { .. }
             | SlashCommand::Review { .. }
             | SlashCommand::Tasks { .. }
-            | SlashCommand::Theme { .. }
             | SlashCommand::Voice { .. }
             | SlashCommand::Usage { .. }
             | SlashCommand::Rename { .. }
@@ -2891,10 +3504,7 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
         Ok(())
     }
 
-    fn copy_to_clipboard(
-        &self,
-        target: Option<&str>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn copy_to_clipboard(&self, target: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         let target = target.unwrap_or("last").trim().to_ascii_lowercase();
         let payload = match target.as_str() {
             "" | "last" => latest_assistant_reply(self.runtime.session()),
@@ -3034,6 +3644,24 @@ Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m f
             format_permissions_switch_report(&previous, normalized)
         );
         Ok(true)
+    }
+
+    fn set_theme(&mut self, name: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
+        let Some(name) = name else {
+            println!("{}", format_theme_report(active_terminal_theme()));
+            return Ok(false);
+        };
+
+        let next = parse_terminal_theme_arg(&name)?;
+        let previous = active_terminal_theme();
+        if previous == next {
+            println!("{}", format_theme_report(next));
+            return Ok(false);
+        }
+
+        set_active_terminal_theme(next);
+        println!("{}", format_theme_switch_report(previous, next));
+        Ok(false)
     }
 
     fn set_experimental(
@@ -5050,7 +5678,8 @@ impl AnthropicRuntimeClient {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             runtime: tokio::runtime::Runtime::new()?,
-            client: ProviderClient::from_model(&model)?.with_prompt_cache(PromptCache::new(session_id)),
+            client: ProviderClient::from_model(&model)?
+                .with_prompt_cache(PromptCache::new(session_id)),
             model,
             enable_tools,
             emit_output,
@@ -5253,7 +5882,12 @@ fn write_structured_reply(
         return Ok(());
     }
     if !*reply_header_written {
-        writeln!(out, "✍️ Response")?;
+        let label = if renderer.terminal_theme().emojis_enabled() {
+            "✍️ Response"
+        } else {
+            "Response"
+        };
+        writeln!(out, "{label}")?;
         *reply_header_written = true;
     }
     let rendered = renderer.vertical_markdown_to_ansi(body);
@@ -5273,8 +5907,7 @@ fn greeting_fallback(input: &str) -> Option<String> {
     let normalized = input.trim().to_ascii_lowercase();
     let is_greeting = matches!(
         normalized.as_str(),
-        "hi"
-            | "hello"
+        "hi" | "hello"
             | "hey"
             | "yo"
             | "salut"
@@ -5472,6 +6105,10 @@ fn slash_command_completion_candidates_with_sessions(
         "/permissions read-only",
         "/permissions workspace-write",
         "/permissions danger-full-access",
+        "/theme ",
+        "/theme clawie1",
+        "/theme chrome",
+        "/theme classic",
         "/experimental ",
         "/experimental status",
         "/experimental on",
@@ -5535,7 +6172,11 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
                 .get("content")
                 .and_then(|value| value.as_str())
                 .map_or(0, |content| content.lines().count());
-            ("\x1b[1;32m✏\x1b[0m", "write", format!("{path} • {lines} lines"))
+            (
+                "\x1b[1;32m✏\x1b[0m",
+                "write",
+                format!("{path} • {lines} lines"),
+            )
         }
         "edit_file" | "Edit" => {
             let path = extract_tool_path(&parsed);
@@ -5552,15 +6193,31 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
             let preview = format_patch_preview(old_value, new_value)
                 .unwrap_or_default()
                 .replace('\n', " ");
-            ("\x1b[1;33m📝\x1b[0m", "edit", if preview.is_empty() {
-                path
-            } else {
-                format!("{path} • {preview}")
-            })
+            (
+                "\x1b[1;33m📝\x1b[0m",
+                "edit",
+                if preview.is_empty() {
+                    path
+                } else {
+                    format!("{path} • {preview}")
+                },
+            )
         }
-        "glob_search" | "Glob" => ("\x1b[1;35m🔎\x1b[0m", "glob", describe_tool_progress(name, input)),
-        "grep_search" | "Grep" => ("\x1b[1;35m🔎\x1b[0m", "grep", describe_tool_progress(name, input)),
-        "web_search" | "WebSearch" => ("\x1b[1;34m🌐\x1b[0m", "web", describe_tool_progress(name, input)),
+        "glob_search" | "Glob" => (
+            "\x1b[1;35m🔎\x1b[0m",
+            "glob",
+            describe_tool_progress(name, input),
+        ),
+        "grep_search" | "Grep" => (
+            "\x1b[1;35m🔎\x1b[0m",
+            "grep",
+            describe_tool_progress(name, input),
+        ),
+        "web_search" | "WebSearch" => (
+            "\x1b[1;34m🌐\x1b[0m",
+            "web",
+            describe_tool_progress(name, input),
+        ),
         _ => ("\x1b[1;37m•\x1b[0m", name, summarize_tool_payload(input)),
     };
 
@@ -5722,11 +6379,7 @@ fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
         .and_then(|value| value.as_str())
         .unwrap_or_default();
     let end_line = start_line.saturating_add(num_lines.saturating_sub(1));
-    let label = if kind == "directory" {
-        "Open"
-    } else {
-        "Read"
-    };
+    let label = if kind == "directory" { "Open" } else { "Read" };
     let emoji = if kind == "directory" { "📁" } else { "📄" };
 
     format!(
@@ -5814,7 +6467,9 @@ fn format_edit_result(icon: &str, parsed: &serde_json::Value) -> String {
     });
 
     match preview {
-        Some(preview) => format!("{icon} \x1b[1;33medit\x1b[0m \x1b[38;5;245m{path}{suffix}\x1b[0m\n{preview}"),
+        Some(preview) => {
+            format!("{icon} \x1b[1;33medit\x1b[0m \x1b[38;5;245m{path}{suffix}\x1b[0m\n{preview}")
+        }
         None => format!("{icon} \x1b[1;33medit\x1b[0m \x1b[38;5;245m{path}{suffix}\x1b[0m"),
     }
 }
@@ -5873,9 +6528,8 @@ fn format_grep_result(icon: &str, parsed: &serde_json::Value) -> String {
                 .join("\n")
         })
         .unwrap_or_default();
-    let summary = format!(
-        "{icon} \x1b[38;5;245mgrep\x1b[0m {num_matches} matches across {num_files} files"
-    );
+    let summary =
+        format!("{icon} \x1b[38;5;245mgrep\x1b[0m {num_matches} matches across {num_files} files");
     if !content.trim().is_empty() {
         format!(
             "{summary}\n{}",
@@ -6290,7 +6944,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "  claw sandbox")?;
     writeln!(out, "      Show the current sandbox isolation snapshot")?;
     writeln!(out, "  claw providers")?;
-    writeln!(out, "      List supported model providers and required env vars")?;
+    writeln!(
+        out,
+        "      List supported model providers and required env vars"
+    )?;
     writeln!(out, "  claw experimental [status|on|off]")?;
     writeln!(out, "      Toggle experimental uninterrupted agent mode")?;
     writeln!(out, "  claw dump-manifests")?;
@@ -6315,6 +6972,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
         "  --permission-mode MODE     Set read-only, workspace-write, or danger-full-access"
+    )?;
+    writeln!(
+        out,
+        "  --theme THEME              Set clawie1, chrome, or classic terminal design"
     )?;
     writeln!(
         out,
@@ -6385,27 +7046,27 @@ fn print_help() {
 mod tests {
     use super::{
         build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        create_managed_session_handle, describe_tool_progress, filter_tool_specs,
+        create_managed_session_handle, describe_tool_progress, expand_file_mentions_with_roots,
+        extract_file_mentions, filter_tool_specs, final_assistant_text_or_fallback,
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
-        format_compact_report, format_cost_report, format_internal_prompt_progress_line,
-        format_experimental_report,
-        format_issue_report, format_model_report, format_model_switch_report,
-        format_providers_report,
-        format_permissions_report, format_permissions_switch_report, format_pr_report,
-        format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
-        format_ultraplan_report, format_unknown_slash_command,
+        format_compact_report, format_cost_report, format_experimental_report,
+        format_internal_prompt_progress_line, format_issue_report, format_model_report,
+        format_model_switch_report, format_permissions_report, format_permissions_switch_report,
+        format_pr_report, format_providers_report, format_resume_report, format_status_report,
+        format_theme_report, format_theme_switch_report, format_tool_call_start,
+        format_tool_result, format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, normalize_permission_mode, parse_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
-        permission_policy, print_help_to, push_output_block, render_config_report,
-        render_diff_report, render_diff_report_for, render_memory_report, render_repl_help,
-        render_resume_usage, resolve_model_alias, resolve_session_reference, response_to_events,
-        resume_supported_slash_commands, run_resume_command, persist_provider_api_key,
-        slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        upsert_export_line, write_mcp_server_fixture, CliAction, CliOutputFormat,
-        CliToolExecutor, GitWorkspaceSummary, InternalPromptProgressEvent,
-        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, TokenUsage,
-        DEFAULT_MODEL, final_assistant_text_or_fallback,
+        permission_policy, persist_provider_api_key, print_help_to, push_output_block,
+        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
+        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
+        response_to_events, resume_supported_slash_commands, run_resume_command,
+        slash_command_completion_candidates_with_sessions, status_context, upsert_export_line,
+        validate_no_args, write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
+        GitWorkspaceSummary, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
+        SlashCommand, StatusUsage, TokenUsage, DEFAULT_MODEL,
     };
+    use crate::render::{active_terminal_theme, set_active_terminal_theme, TerminalTheme};
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
         PluginManager, PluginManagerConfig, PluginTool, PluginToolDefinition, PluginToolPermission,
@@ -6452,6 +7113,70 @@ mod tests {
             .expect("time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("rusty-claude-cli-{nanos}"))
+    }
+
+    #[test]
+    fn extracts_file_mentions_without_treating_emails_as_mentions() {
+        assert_eq!(
+            extract_file_mentions("read @README.md and @\"Project Plan.md\" but not me@test.dev"),
+            vec!["README.md".to_string(), "Project Plan.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn expands_exact_file_mentions_with_preview_context() {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("docs")).expect("create docs");
+        fs::write(
+            root.join("docs").join("plan.md"),
+            "Ship the @ mention resolver\n",
+        )
+        .expect("write plan");
+
+        let expanded = expand_file_mentions_with_roots("summarize @docs/plan.md", &root, None);
+
+        assert!(expanded.contains("<local_file_mentions>"));
+        assert!(expanded.contains("Ship the @ mention resolver"));
+        assert!(expanded.contains("docs/plan.md"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expands_quoted_mentions_from_documents_root() {
+        let root = temp_dir();
+        let home = temp_dir();
+        let documents = home.join("Documents");
+        fs::create_dir_all(&documents).expect("create documents");
+        fs::write(
+            documents.join("Project Plan.md"),
+            "Document from computer\n",
+        )
+        .expect("write document");
+
+        let expanded = expand_file_mentions_with_roots(
+            "use @\"Project Plan.md\" for context",
+            &root,
+            Some(&home),
+        );
+
+        assert!(expanded.contains("Project Plan.md"));
+        assert!(expanded.contains("Document from computer"));
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn unresolved_mentions_are_reported_as_missing() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("create root");
+
+        let expanded = expand_file_mentions_with_roots("open @missing-notes.md", &root, None);
+
+        assert!(expanded.contains("@missing-notes.md: no matching local file was found"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     fn git(args: &[&str], cwd: &Path) {
@@ -6712,6 +7437,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_theme_flag() {
+        set_active_terminal_theme(TerminalTheme::Emoji);
+        let args = vec!["--theme=chrome".to_string()];
+        assert_eq!(
+            parse_args(&args).expect("args should parse"),
+            CliAction::Repl {
+                model: DEFAULT_MODEL.to_string(),
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+            }
+        );
+        assert_eq!(active_terminal_theme(), TerminalTheme::Chrome);
+        set_active_terminal_theme(TerminalTheme::Emoji);
+    }
+
+    #[test]
     fn parses_allowed_tools_flags_with_aliases_and_lists() {
         let _guard = env_lock();
         std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
@@ -6879,8 +7620,22 @@ mod tests {
             CliAction::Skills { args: None }
         );
         assert_eq!(
-            parse_args(&["/skill".to_string(), "add".to_string(), "creative".to_string(), "::".to_string(), "Use".to_string(), "stronger".to_string(), "visuals".to_string()])
-                .expect("/skill add should parse"),
+            parse_args(&["/theme".to_string(), "chrome".to_string()]).expect("/theme should parse"),
+            CliAction::Theme {
+                name: Some("chrome".to_string())
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "/skill".to_string(),
+                "add".to_string(),
+                "creative".to_string(),
+                "::".to_string(),
+                "Use".to_string(),
+                "stronger".to_string(),
+                "visuals".to_string()
+            ])
+            .expect("/skill add should parse"),
             CliAction::Skills {
                 args: Some("add creative :: Use stronger visuals".to_string())
             }
@@ -7117,6 +7872,7 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
+        assert!(help.contains("/theme [clawie1|chrome|classic]"));
         assert!(help.contains("/exit"));
         assert!(help.contains("Auto-save            ~/.claw/sessions/<session-id>.jsonl"));
         assert!(help.contains("Resume latest        /resume latest"));
@@ -7135,6 +7891,9 @@ mod tests {
         assert!(completions.contains(&"/model grok-3".to_string()));
         assert!(completions.contains(&"/providers".to_string()));
         assert!(completions.contains(&"/permissions workspace-write".to_string()));
+        assert!(completions.contains(&"/theme clawie1".to_string()));
+        assert!(completions.contains(&"/theme chrome".to_string()));
+        assert!(completions.contains(&"/theme classic".to_string()));
         assert!(completions.contains(&"/experimental on".to_string()));
         assert!(completions.contains(&"/session list".to_string()));
         assert!(completions.contains(&"/session switch session-current".to_string()));
@@ -7245,6 +8004,25 @@ mod tests {
     }
 
     #[test]
+    fn theme_report_lists_three_designs() {
+        let report = format_theme_report(TerminalTheme::Chrome);
+        assert!(report.contains("Theme"));
+        assert!(report.contains("Active design    chrome"));
+        assert!(report.contains("clawie1    ○ available red accent with emoji status markers"));
+        assert!(report.contains("chrome     ● current   black and white with emoji status markers"));
+        assert!(report.contains("classic    ○ available red accent without emoji status markers"));
+    }
+
+    #[test]
+    fn theme_switch_report_is_structured() {
+        let report = format_theme_switch_report(TerminalTheme::Emoji, TerminalTheme::Classic);
+        assert!(report.contains("Theme updated"));
+        assert!(report.contains("Previous theme   clawie1"));
+        assert!(report.contains("Active theme     classic"));
+        assert!(report.contains("Applies to       new output in this session"));
+    }
+
+    #[test]
     fn init_help_mentions_direct_subcommand() {
         let mut help = Vec::new();
         print_help_to(&mut help).expect("help should render");
@@ -7267,7 +8045,7 @@ mod tests {
         assert!(report.contains("Model"));
         assert!(report.contains("Current model    claude-sonnet"));
         assert!(report.contains("Session messages 12"));
-        assert!(report.contains("Switch models with /model <name>"));
+        assert!(report.contains("Model switching is disabled in Clawie"));
     }
 
     #[test]
@@ -7622,6 +8400,63 @@ UU conflicted.rs",
     }
 
     #[test]
+    fn test_artifact_resume_commands() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("create root");
+        let session_path = root.join("session.json");
+        let session = Session::new();
+        session.save_to_path(&session_path).expect("session should save");
+
+        let old_config_home = std::env::var("CLAW_CONFIG_HOME");
+        std::env::set_var("CLAW_CONFIG_HOME", &root);
+
+        // 1. Initially artifacts should be empty
+        let outcome = run_resume_command(&session_path, &session, &SlashCommand::Artifacts)
+            .expect("resume artifacts should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("no artifacts in this session"));
+
+        // 2. Create an artifact
+        let outcome = run_resume_command(
+            &session_path,
+            &session,
+            &SlashCommand::ArtifactCreate {
+                name: Some("test_art.md".to_string()),
+            },
+        )
+        .expect("resume artifact-create should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("created artifact: test_art.md"));
+
+        // 3. View the artifact
+        let outcome = run_resume_command(
+            &session_path,
+            &session,
+            &SlashCommand::ArtifactView {
+                name: Some("test_art.md".to_string()),
+            },
+        )
+        .expect("resume artifact-view should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("name: test_art.md"));
+        assert!(message.contains("Manual artifact creation."));
+
+        // 4. List artifacts again
+        let outcome = run_resume_command(&session_path, &session, &SlashCommand::Artifacts)
+            .expect("resume artifacts should work");
+        let message = outcome.message.expect("message should exist");
+        assert!(message.contains("total: 1"));
+        assert!(message.contains("test_art.md"));
+
+        if let Ok(val) = old_config_home {
+            std::env::set_var("CLAW_CONFIG_HOME", val);
+        } else {
+            std::env::remove_var("CLAW_CONFIG_HOME");
+        }
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn status_context_reads_real_workspace_metadata() {
         let context = status_context(None).expect("status context should load");
         assert!(context.cwd.is_absolute());
@@ -7871,7 +8706,7 @@ UU conflicted.rs",
     #[test]
     fn tool_rendering_helpers_compact_output() {
         let start = format_tool_call_start("read_file", r#"{"path":"src/main.rs"}"#);
-        assert!(start.contains("read_file"));
+        assert!(start.contains("read"));
         assert!(start.contains("src/main.rs"));
 
         let done = format_tool_result(
@@ -8359,8 +9194,12 @@ UU conflicted.rs",
         let runtime_config = loader.load().expect("runtime config should load");
         let state = build_runtime_plugin_state_with_loader(&workspace, &loader, &runtime_config)
             .expect("runtime plugin state should load");
-        let mut executor =
-            CliToolExecutor::new(None, false, state.tool_registry.clone(), state.mcp_state.clone());
+        let mut executor = CliToolExecutor::new(
+            None,
+            false,
+            state.tool_registry.clone(),
+            state.mcp_state.clone(),
+        );
 
         let search_output = executor
             .execute("ToolSearch", r#"{"query":"remote","max_results":5}"#)
@@ -8391,6 +9230,7 @@ UU conflicted.rs",
         // Inject a dummy API key so runtime construction succeeds without real credentials.
         // This test only exercises plugin lifecycle (init/shutdown), never calls the API.
         std::env::set_var("ANTHROPIC_API_KEY", "test-dummy-key-for-plugin-lifecycle");
+        std::env::set_var("OPENAI_API_KEY", "test-dummy-key-for-plugin-lifecycle");
         let workspace = temp_dir();
         let source_root = temp_dir();
         fs::create_dir_all(&config_home).expect("config home");
@@ -8440,6 +9280,7 @@ UU conflicted.rs",
         let _ = fs::remove_dir_all(workspace);
         let _ = fs::remove_dir_all(source_root);
         std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
     }
 }
 
@@ -8540,6 +9381,109 @@ fn write_mcp_server_fixture(script_path: &Path) {
         ]
         .join("\n");
     fs::write(script_path, script).expect("mcp fixture script should write");
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+struct RustArtifactMetadata {
+    summary: String,
+    #[serde(default = "default_true")]
+    user_facing: bool,
+    #[serde(default)]
+    request_feedback: bool,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+struct RustArtifactIndexEntry {
+    artifact_id: String,
+    name: String,
+    metadata: RustArtifactMetadata,
+    path: String,
+}
+
+struct RustArtifactStore {
+    session_dir: PathBuf,
+    index_path: PathBuf,
+    index: HashMap<String, RustArtifactIndexEntry>,
+}
+
+impl RustArtifactStore {
+    fn new(session_id: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let base_dir = claw_home_dir().join("artifacts");
+        let session_dir = base_dir.join(session_id);
+        fs::create_dir_all(&session_dir)?;
+        let index_path = session_dir.join("_index.json");
+        let mut index = HashMap::new();
+        if index_path.exists() {
+            let content = fs::read_to_string(&index_path)?;
+            if !content.trim().is_empty() {
+                index = serde_json::from_str(&content)?;
+            }
+        }
+        Ok(Self {
+            session_dir,
+            index_path,
+            index,
+        })
+    }
+
+    fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let content = serde_json::to_string_pretty(&self.index)?;
+        fs::write(&self.index_path, content)?;
+        Ok(())
+    }
+
+    fn create(&mut self, name: &str, content: &str, summary: &str) -> Result<RustArtifactIndexEntry, Box<dyn std::error::Error>> {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let artifact_id = format!("artifact-{millis}");
+        let artifact_path = self.session_dir.join(name);
+        
+        if let Some(parent) = artifact_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&artifact_path, content)?;
+
+        let now_str = format!("{millis}");
+        let metadata = RustArtifactMetadata {
+            summary: summary.to_string(),
+            user_facing: true,
+            request_feedback: false,
+            created_at: now_str.clone(),
+            updated_at: now_str,
+            tags: Vec::new(),
+        };
+
+        let entry = RustArtifactIndexEntry {
+            artifact_id: artifact_id.clone(),
+            name: name.to_string(),
+            metadata,
+            path: artifact_path.to_string_lossy().to_string(),
+        };
+
+        self.index.insert(artifact_id, entry.clone());
+        self.save()?;
+        Ok(entry)
+    }
+
+    fn list_artifacts(&self) -> Vec<RustArtifactIndexEntry> {
+        self.index.values().cloned().collect()
+    }
+
+    fn get_by_name(&self, name: &str) -> Option<RustArtifactIndexEntry> {
+        self.index.values().find(|e| e.name == name).cloned()
+    }
 }
 
 #[cfg(test)]

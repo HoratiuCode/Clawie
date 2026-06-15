@@ -247,6 +247,27 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
     },
+    SlashCommandSpec {
+        name: "artifacts",
+        aliases: &[],
+        summary: "List artifacts generated in this session",
+        argument_hint: None,
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "artifact-create",
+        aliases: &[],
+        summary: "Create a new artifact manually",
+        argument_hint: Some("<name>"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "artifact-view",
+        aliases: &[],
+        summary: "View the contents of a specific artifact",
+        argument_hint: Some("<name>"),
+        resume_supported: true,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +341,13 @@ pub enum SlashCommand {
     Skills {
         args: Option<String>,
     },
+    Artifacts,
+    ArtifactCreate {
+        name: Option<String>,
+    },
+    ArtifactView {
+        name: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -376,6 +404,13 @@ impl SlashCommand {
                 confirm: parts.next() == Some("--confirm"),
             },
             "cost" => Self::Cost,
+            "artifacts" => Self::Artifacts,
+            "artifact-create" => Self::ArtifactCreate {
+                name: parts.next().map(ToOwned::to_owned),
+            },
+            "artifact-view" => Self::ArtifactView {
+                name: parts.next().map(ToOwned::to_owned),
+            },
             "resume" => Self::Resume {
                 session_path: parts.next().map(ToOwned::to_owned),
             },
@@ -1706,6 +1741,9 @@ pub fn handle_slash_command(
         | SlashCommand::Plugins { .. }
         | SlashCommand::Agents { .. }
         | SlashCommand::Skills { .. }
+        | SlashCommand::Artifacts
+        | SlashCommand::ArtifactCreate { .. }
+        | SlashCommand::ArtifactView { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -2062,8 +2100,8 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
-        assert_eq!(slash_command_specs().len(), 28);
-        assert_eq!(resume_supported_slash_commands().len(), 13);
+        assert_eq!(slash_command_specs().len(), 31);
+        assert_eq!(resume_supported_slash_commands().len(), 16);
     }
 
     #[test]

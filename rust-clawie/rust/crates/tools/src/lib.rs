@@ -17,7 +17,6 @@ use runtime::{
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
     read_file,
     summary_compression::compress_summary_text,
-    TaskPacket,
     task_registry::TaskRegistry,
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry},
@@ -25,7 +24,8 @@ use runtime::{
     BranchFreshness, ContentBlock, ConversationMessage, ConversationRuntime, GrepSearchInput,
     LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
     McpDegradedReport, MessageRole, PermissionMode, PermissionPolicy, PromptCacheEvent,
-    RuntimeError, Session, ToolError, ToolExecutor,
+    RuntimeAgentPath, RuntimeAgentRegistry, RuntimeAgentRegistryError, RuntimeAgentState,
+    RuntimeError, Session, TaskPacket, ToolError, ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -65,6 +65,19 @@ fn global_worker_registry() -> &'static WorkerRegistry {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<WorkerRegistry> = OnceLock::new();
     REGISTRY.get_or_init(WorkerRegistry::new)
+}
+
+fn global_runtime_agent_registry() -> &'static RuntimeAgentRegistry {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<RuntimeAgentRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| RuntimeAgentRegistry::new(configured_agent_spawn_limit()))
+}
+
+fn configured_agent_spawn_limit() -> Option<usize> {
+    std::env::var("CLAWD_AGENT_MAX_AGENTS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -583,6 +596,18 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "AgentList",
+            description: "List live or historical sub-agent metadata tracked by the runtime agent registry.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "include_terminal": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
             name: "ToolSearch",
@@ -1195,6 +1220,7 @@ fn execute_tool_with_enforcer(
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
         "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
         "Agent" => from_value::<AgentInput>(input).and_then(run_agent),
+        "AgentList" => from_value::<AgentListInput>(input).and_then(run_agent_list),
         "ToolSearch" => from_value::<ToolSearchInput>(input).and_then(run_tool_search),
         "NotebookEdit" => from_value::<NotebookEditInput>(input).and_then(run_notebook_edit),
         "Sleep" => from_value::<SleepInput>(input).and_then(run_sleep),
@@ -1879,27 +1905,25 @@ fn branch_divergence_output(
         dangerously_disable_sandbox: None,
         return_code_interpretation: Some("preflight_blocked:branch_divergence".to_string()),
         no_output_expected: Some(false),
-        structured_content: Some(vec![
-            serde_json::to_value(
-                LaneEvent::new(
-                    LaneEventName::BranchStaleAgainstMain,
-                    LaneEventStatus::Blocked,
-                    iso8601_now(),
-                )
-                    .with_failure_class(LaneFailureClass::BranchDivergence)
-                    .with_detail(stderr.clone())
-                    .with_data(json!({
-                        "branch": branch,
-                        "mainRef": main_ref,
-                        "commitsBehind": commits_behind,
-                        "commitsAhead": commits_ahead,
-                        "missingCommits": missing_fixes,
-                        "blockedCommand": command,
-                        "recommendedAction": format!("merge or rebase {main_ref} before workspace tests")
-                    })),
+        structured_content: Some(vec![serde_json::to_value(
+            LaneEvent::new(
+                LaneEventName::BranchStaleAgainstMain,
+                LaneEventStatus::Blocked,
+                iso8601_now(),
             )
-            .expect("lane event should serialize"),
-        ]),
+            .with_failure_class(LaneFailureClass::BranchDivergence)
+            .with_detail(stderr.clone())
+            .with_data(json!({
+                "branch": branch,
+                "mainRef": main_ref,
+                "commitsBehind": commits_behind,
+                "commitsAhead": commits_ahead,
+                "missingCommits": missing_fixes,
+                "blockedCommand": command,
+                "recommendedAction": format!("merge or rebase {main_ref} before workspace tests")
+            })),
+        )
+        .expect("lane event should serialize")]),
         persisted_output_path: None,
         persisted_output_size: None,
         sandbox_status: None,
@@ -1959,6 +1983,20 @@ fn run_skill(input: SkillInput) -> Result<String, String> {
 
 fn run_agent(input: AgentInput) -> Result<String, String> {
     to_pretty_json(execute_agent(input)?)
+}
+
+fn run_agent_list(input: AgentListInput) -> Result<String, String> {
+    let agents = if input.include_terminal {
+        global_runtime_agent_registry().all_agents()
+    } else {
+        global_runtime_agent_registry().live_agents()
+    };
+    to_pretty_json(json!({
+        "agents": agents,
+        "count": agents.len(),
+        "include_terminal": input.include_terminal,
+        "total_spawned": global_runtime_agent_registry().total_spawned()
+    }))
 }
 
 fn run_tool_search(input: ToolSearchInput) -> Result<String, String> {
@@ -2084,6 +2122,12 @@ struct AgentInput {
     subagent_type: Option<String>,
     name: Option<String>,
     model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentListInput {
+    #[serde(default)]
+    include_terminal: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2349,6 +2393,12 @@ struct SkillOutput {
 struct AgentOutput {
     #[serde(rename = "agentId")]
     agent_id: String,
+    #[serde(rename = "agentPath", skip_serializing_if = "Option::is_none")]
+    agent_path: Option<String>,
+    #[serde(rename = "parentAgentPath", skip_serializing_if = "Option::is_none")]
+    parent_agent_path: Option<String>,
+    #[serde(rename = "agentNickname", skip_serializing_if = "Option::is_none")]
+    agent_nickname: Option<String>,
     name: String,
     description: String,
     #[serde(rename = "subagentType")]
@@ -3025,6 +3075,25 @@ fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     execute_agent_with_spawn(input, spawn_agent_job)
 }
 
+fn ensure_root_agent_registered() -> Result<(), String> {
+    match global_runtime_agent_registry().register_root("root", "build") {
+        Ok(_) => Ok(()),
+        Err(RuntimeAgentRegistryError::AgentAlreadyExists { .. })
+        | Err(RuntimeAgentRegistryError::PathAlreadyExists { .. }) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn runtime_state_for_agent_status(status: &str) -> RuntimeAgentState {
+    match status {
+        "completed" => RuntimeAgentState::Completed,
+        "failed" => RuntimeAgentState::Failed,
+        "stopped" => RuntimeAgentState::Stopped,
+        "running" => RuntimeAgentState::Running,
+        _ => RuntimeAgentState::Starting,
+    }
+}
+
 fn execute_agent_with_spawn<F>(input: AgentInput, spawn_fn: F) -> Result<AgentOutput, String>
 where
     F: FnOnce(AgentJob) -> Result<(), String>,
@@ -3052,6 +3121,17 @@ where
     let created_at = iso8601_now();
     let system_prompt = build_agent_system_prompt(&normalized_subagent_type)?;
     let allowed_tools = allowed_tools_for_subagent(&normalized_subagent_type);
+    ensure_root_agent_registered()?;
+    let runtime_agent = global_runtime_agent_registry()
+        .spawn_subagent(
+            agent_id.clone(),
+            &RuntimeAgentPath::root(),
+            normalized_subagent_type.clone(),
+            Some(&agent_name),
+            None,
+            Some(&input.prompt),
+        )
+        .map_err(|error| error.to_string())?;
 
     let output_contents = format!(
         "# Agent Task
@@ -3072,6 +3152,9 @@ where
 
     let manifest = AgentOutput {
         agent_id,
+        agent_path: Some(runtime_agent.path.to_string()),
+        parent_agent_path: runtime_agent.parent_path.as_ref().map(ToString::to_string),
+        agent_nickname: Some(runtime_agent.nickname),
         name: agent_name,
         description: input.description,
         subagent_type: Some(normalized_subagent_type),
@@ -3097,8 +3180,17 @@ where
     };
     if let Err(error) = spawn_fn(job) {
         let error = format!("failed to spawn sub-agent: {error}");
+        let _ = global_runtime_agent_registry()
+            .set_state(&manifest.agent_id, RuntimeAgentState::Failed);
         persist_agent_terminal_state(&manifest, "failed", None, Some(error.clone()))?;
         return Err(error);
+    }
+    if global_runtime_agent_registry()
+        .get_by_id(&manifest.agent_id)
+        .is_some_and(|agent| !agent.state.is_terminal())
+    {
+        let _ = global_runtime_agent_registry()
+            .set_state(&manifest.agent_id, RuntimeAgentState::Running);
     }
 
     Ok(manifest)
@@ -3287,6 +3379,8 @@ fn persist_agent_terminal_state(
     result: Option<&str>,
     error: Option<String>,
 ) -> Result<(), String> {
+    let _ = global_runtime_agent_registry()
+        .set_state(&manifest.agent_id, runtime_state_for_agent_status(status));
     let blocker = error.as_deref().map(classify_lane_blocker);
     append_agent_output(
         &manifest.output_file,
@@ -3298,12 +3392,12 @@ fn persist_agent_terminal_state(
     next_manifest.current_blocker = blocker.clone();
     next_manifest.error = error;
     if let Some(blocker) = blocker {
-        next_manifest.lane_events.push(
-            LaneEvent::blocked(iso8601_now(), &blocker),
-        );
-        next_manifest.lane_events.push(
-            LaneEvent::failed(iso8601_now(), &blocker),
-        );
+        next_manifest
+            .lane_events
+            .push(LaneEvent::blocked(iso8601_now(), &blocker));
+        next_manifest
+            .lane_events
+            .push(LaneEvent::failed(iso8601_now(), &blocker));
     } else {
         next_manifest.current_blocker = None;
         let compressed_detail = result
@@ -4953,8 +5047,8 @@ mod tests {
         agent_permission_policy, allowed_tools_for_subagent, classify_lane_failure,
         execute_agent_with_spawn, execute_tool, final_assistant_text, mvp_tool_specs,
         permission_mode_from_plugin, persist_agent_terminal_state, push_output_block,
-        run_task_packet, AgentInput, AgentJob, GlobalToolRegistry, LaneEventName,
-        LaneFailureClass, SubagentToolExecutor,
+        run_task_packet, AgentInput, AgentJob, GlobalToolRegistry, LaneEventName, LaneFailureClass,
+        SubagentToolExecutor,
     };
     use api::OutputContentBlock;
     use runtime::{
@@ -5767,6 +5861,12 @@ mod tests {
         std::env::remove_var("CLAWD_AGENT_STORE");
 
         assert_eq!(manifest.name, "ship-audit");
+        assert!(manifest
+            .agent_path
+            .as_deref()
+            .is_some_and(|path| path.starts_with("root/agent-")));
+        assert_eq!(manifest.parent_agent_path.as_deref(), Some("root"));
+        assert_eq!(manifest.agent_nickname.as_deref(), Some("ship-audit"));
         assert_eq!(manifest.subagent_type.as_deref(), Some("Explore"));
         assert_eq!(manifest.status, "running");
         assert!(!manifest.created_at.is_empty());
@@ -5783,6 +5883,11 @@ mod tests {
         assert!(manifest_contents.contains("\"status\": \"running\""));
         assert_eq!(manifest_json["laneEvents"][0]["event"], "lane.started");
         assert_eq!(manifest_json["laneEvents"][0]["status"], "running");
+        assert!(manifest_json["agentPath"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("root/agent-")));
+        assert_eq!(manifest_json["parentAgentPath"], "root");
+        assert_eq!(manifest_json["agentNickname"], "ship-audit");
         assert!(manifest_json["currentBlocker"].is_null());
         let captured_job = captured
             .lock()
@@ -5864,6 +5969,27 @@ mod tests {
             "lane.finished"
         );
         assert!(completed_manifest_json["currentBlocker"].is_null());
+        let agent_list = execute_tool(
+            "AgentList",
+            &json!({
+                "include_terminal": true
+            }),
+        )
+        .expect("AgentList should expose runtime metadata");
+        let agent_list_json: serde_json::Value =
+            serde_json::from_str(&agent_list).expect("agent list json");
+        assert!(agent_list_json["agents"]
+            .as_array()
+            .expect("agents should be array")
+            .iter()
+            .any(|agent| {
+                agent["agent_id"] == completed.agent_id
+                    && agent["state"] == "completed"
+                    && completed
+                        .agent_path
+                        .as_deref()
+                        .is_some_and(|path| agent["path"] == path)
+            }));
 
         let failed = execute_agent_with_spawn(
             AgentInput {
@@ -5978,7 +6104,10 @@ mod tests {
                 "gateway routing rejected the request",
                 LaneFailureClass::GatewayRouting,
             ),
-            ("tool failed: denied tool execution from hook", LaneFailureClass::ToolRuntime),
+            (
+                "tool failed: denied tool execution from hook",
+                LaneFailureClass::ToolRuntime,
+            ),
             ("thread creation failed", LaneFailureClass::Infra),
         ];
 
@@ -6001,11 +6130,17 @@ mod tests {
             (LaneEventName::MergeReady, "lane.merge.ready"),
             (LaneEventName::Finished, "lane.finished"),
             (LaneEventName::Failed, "lane.failed"),
-            (LaneEventName::BranchStaleAgainstMain, "branch.stale_against_main"),
+            (
+                LaneEventName::BranchStaleAgainstMain,
+                "branch.stale_against_main",
+            ),
         ];
 
         for (event, expected) in cases {
-            assert_eq!(serde_json::to_value(event).expect("serialize lane event"), json!(expected));
+            assert_eq!(
+                serde_json::to_value(event).expect("serialize lane event"),
+                json!(expected)
+            );
         }
     }
 
