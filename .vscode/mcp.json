@@ -1,0 +1,11 @@
+{
+	"servers": {
+		"clawie-agent": {
+			"type": "stdio",
+			"command": "${workspaceFolder}/clawie",
+			"args": [],
+			"env": {},
+			"description": "Clawie AI Agent — Anthropic-powered coding assistant"
+		}
+	}
+}

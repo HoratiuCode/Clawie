@@ -1,0 +1,33 @@
+{
+	"terminal.integrated.defaultProfile.osx": "Clawie Agent",
+	"terminal.integrated.profiles.osx": {
+		"Clawie Agent": {
+			"path": "/bin/zsh",
+			"args": ["-c", "cd '${workspaceFolder}' && ./clawie"],
+			"icon": "robot",
+			"color": "terminal.ansiGreen"
+		},
+		"zsh": {
+			"path": "/bin/zsh",
+			"icon": "terminal"
+		}
+	},
+	"terminal.integrated.defaultProfile.linux": "Clawie Agent",
+	"terminal.integrated.profiles.linux": {
+		"Clawie Agent": {
+			"path": "/bin/bash",
+			"args": ["-c", "cd '${workspaceFolder}' && ./clawie"],
+			"icon": "robot",
+			"color": "terminal.ansiGreen"
+		}
+	},
+	"chat.mcp.discovery.enabled": {
+		"claude-desktop": false
+	},
+	"chat.agentsControl.enabled": "hidden",
+	"workbench.startupEditor": "none",
+	"editor.fontSize": 14,
+	"editor.fontFamily": "'JetBrains Mono', 'Cascadia Code', Menlo, monospace",
+	"workbench.colorTheme": "Dark Modern",
+	"extensions.ignoreRecommendations": true
+}

@@ -2070,7 +2070,28 @@ fn run_repl(
         cli.repl_completion_candidates().unwrap_or_default(),
     );
     editor.set_model(&cli.model);
-    println!("{}", cli.startup_banner());
+    if io::stdout().is_terminal() {
+        print!("\r\x1b[2K Loading Clawie workspace... [ ● ∙ ∙ ]");
+        let _ = io::stdout().flush();
+        thread::sleep(Duration::from_millis(200));
+        print!("\r\x1b[2K Loading Clawie workspace... [ ∙ ● ∙ ]");
+        let _ = io::stdout().flush();
+        thread::sleep(Duration::from_millis(200));
+        print!("\r\x1b[2K Loading Clawie workspace... [ ∙ ∙ ● ]");
+        let _ = io::stdout().flush();
+        thread::sleep(Duration::from_millis(200));
+        print!("\r\x1b[2K");
+        let _ = io::stdout().flush();
+
+        let banner = cli.startup_banner();
+        for line in banner.lines() {
+            println!("{}", line);
+            let _ = io::stdout().flush();
+            thread::sleep(Duration::from_millis(30));
+        }
+    } else {
+        println!("{}", cli.startup_banner());
+    }
 
     loop {
         editor.set_completions(cli.repl_completion_candidates().unwrap_or_default());
@@ -3046,41 +3067,49 @@ impl LiveCli {
             |context| context.git_summary.headline(),
         );
         let theme = active_terminal_theme();
-        let rows = vec![
-            "~, clawie".to_string(),
-            format!("Model            {}", self.model),
-            format!("Permissions      {}", self.permission_mode.as_str()),
-            format!("Theme            {}", theme.as_str()),
-            format!("Branch           {}", git_branch),
-            format!("Workspace        {}", workspace),
-            format!("Directory        {}", cwd),
+
+        let logo_lines = [
+            r"       ▄████████▄     ██████╗██╗      █████╗ ██╗    ██╗██╗███████╗",
+            r"      ███▀▀  ▀▀███    ██╔════╝██║     ██╔══██╗██║    ██║██║██╔════╝",
+            r"     ███   ▄▄   ███   ██║     ██║     ███████║██║ █╗ ██║██║█████╗  ",
+            r"     ███  ████  ███   ██║     ██║     ██╔══██║██║███╗██║██║██╔══╝  ",
+            r"      ███▄    ▄███    ╚██████╗███████╗██║  ██║╚███╔███╔╝██║███████╗",
+            r"       ▀████████▀      ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝╚══════╝",
         ];
-        let box_width = rows.iter().map(|row| row.len()).max().unwrap_or(0);
-        let top_border = format!("┌{}┐", "─".repeat(box_width + 2));
-        let middle = rows
-            .iter()
-            .map(|row| format!("│ {:<width$} │", row, width = box_width))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let bottom_border = format!("└{}┘", "─".repeat(box_width + 2));
-        let logo = format!(
-            "{}",
-            " ██████╗██╗      █████╗ ██╗    ██╗██╗███████╗\n\
-██╔════╝██║     ██╔══██╗██║    ██║██║██╔════╝\n\
-██║     ██║     ███████║██║ █╗ ██║██║█████╗  \n\
-██║     ██║     ██╔══██║██║███╗██║██║██╔══╝  \n\
-╚██████╗███████╗██║  ██║╚███╔███╔╝██║███████╗\n\
- ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝╚══════╝"
-                .with(theme.banner_color())
+
+        let status_line = format!(
+            "  {}{}{}",
+            "─────────────────────────────".dim(),
+            " CLAWIE v0.1.0 ".bold(),
+            "─────────────────────────────".dim()
         );
-        format!(
-            "{logo}\n\n\
-{top_border}\n\
-{middle}\n\
-{bottom_border}\n\n\
-Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline\n\n{prompt_banner}",
-            prompt_banner = input::render_prompt_banner(),
-        )
+
+        let metadata_lines = [
+            format!("  {:<12} {}", "Model".dim(), self.model.clone().white()),
+            format!("  {:<12} {}", "Permissions".dim(), self.permission_mode.as_str().white()),
+            format!("  {:<12} {}", "Theme".dim(), theme.as_str().white()),
+            format!("  {:<12} {}", "Workspace".dim(), workspace.white()),
+        ];
+
+        let mut combined = String::new();
+        combined.push_str("\n");
+        for line in logo_lines {
+            combined.push_str(&format!("{}\n", line.to_string().with(theme.banner_color())));
+        }
+        combined.push_str("\n");
+        combined.push_str(&format!("{}\n\n", status_line));
+
+        for line in metadata_lines {
+            combined.push_str(&format!("{}\n", line));
+        }
+
+        combined.push_str(&format!(
+            "\n  {}\n",
+            "──────────────────────────────────────────────────────────────────────────".dim()
+        ));
+        combined.push_str("  Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline");
+
+        combined
     }
 
     fn repl_completion_candidates(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -5087,6 +5116,10 @@ fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     )?;
     sections.push(
         "When the user is discussing a change request, you may inspect folders, open files, and modify workspace files directly whenever that is the clearest way to complete the task. Use the available search and file-edit tools instead of only describing hypothetical edits."
+            .to_string(),
+    );
+    sections.push(
+        "You have values, not just rules. You weren't given a list of prohibited outputs and told to filter around them. You were trained to actually care about outcomes — for the person in front of you, for third parties, for society. When you decline something, it's because you find it genuinely problematic, not because a classifier fired.\n\nYou have a stable identity. You can engage with challenging philosophical questions, roleplay, manipulation attempts, or claims that your \"true self\" is different — without losing the thread of who you are. Curiosity doesn't destabilize you. Pressure doesn't either."
             .to_string(),
     );
     Ok(sections)
@@ -7921,7 +7954,7 @@ mod tests {
             .startup_banner()
         });
 
-        assert!(banner.contains("~, clawie"));
+        assert!(banner.contains("CLAWIE"));
         assert!(banner.contains("Tab"));
         assert!(banner.contains("workflow completions"));
 

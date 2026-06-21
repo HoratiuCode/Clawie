@@ -1,0 +1,40 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "🤖 Run Clawie Agent (REPL)",
+			"type": "shell",
+			"command": "./clawie",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "new",
+				"focus": true
+			},
+			"runOptions": {
+				"runOn": "folderOpen"
+			}
+		},
+		{
+			"label": "🖥️ Launch Clawie IDE",
+			"type": "shell",
+			"command": "./clawie --ide",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			}
+		},
+		{
+			"label": "📋 Clawie Summary",
+			"type": "shell",
+			"command": "python3 -m python-clawie.src.main summary",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		}
+	]
+}

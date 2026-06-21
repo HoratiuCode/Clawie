@@ -1,0 +1,36 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug Rust CLI (Clawie)",
+			"cargo": {
+				"args": [
+					"build",
+					"--manifest-path=rust-clawie/rust/Cargo.toml",
+					"-p",
+					"rusty-claude-cli",
+					"--bin",
+					"claw"
+				],
+				"filter": {
+					"name": "claw",
+					"kind": "bin"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"name": "Debug Python Mirror (Clawie)",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "python-clawie.src.main",
+			"args": [
+				"summary"
+			],
+			"cwd": "${workspaceFolder}"
+		}
+	]
+}
