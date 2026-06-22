@@ -1267,6 +1267,14 @@ fn provider_env_file_path() -> PathBuf {
         .join("launcher-provider.env")
 }
 
+fn load_terminal_user_name() -> Option<String> {
+    env::var("CLAWIE_USER_NAME")
+        .ok()
+        .or_else(|| env::var("USER").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn experimental_env_file_path() -> PathBuf {
     env::var_os("CLAW_CONFIG_HOME")
         .map(PathBuf::from)
@@ -3052,6 +3060,14 @@ impl LiveCli {
         Ok(cli)
     }
 
+    fn load_terminal_user_name(&self) -> Option<String> {
+        env::var("CLAWIE_USER_NAME")
+            .ok()
+            .or_else(|| env::var("USER").ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
     fn startup_banner(&self) -> String {
         let cwd = env::current_dir().map_or_else(
             |_| "<unknown>".to_string(),
@@ -3080,16 +3096,76 @@ impl LiveCli {
         let status_line = format!(
             "  {}{}{}",
             "─────────────────────────────".dim(),
-            " CLAWIE v0.1.0 ".bold(),
+            " CLAWIE v0.2.0i ".bold(),
             "─────────────────────────────".dim()
         );
 
-        let metadata_lines = [
-            format!("  {:<12} {}", "Model".dim(), self.model.clone().white()),
-            format!("  {:<12} {}", "Permissions".dim(), self.permission_mode.as_str().white()),
-            format!("  {:<12} {}", "Theme".dim(), theme.as_str().white()),
-            format!("  {:<12} {}", "Workspace".dim(), workspace.white()),
+        let model_val = self.model.clone();
+        let perm_val = self.permission_mode.as_str().to_string();
+        let theme_val = theme.as_str().to_string();
+        let ws_val = workspace.clone();
+
+        let raw_lines = [
+            format!("  Model        {}", model_val),
+            format!("  Permissions  {}", perm_val),
+            format!("  Theme        {}", theme_val),
+            format!("  Workspace    {}", ws_val),
         ];
+
+        let max_raw_len = raw_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+
+        let user_name = self.load_terminal_user_name().unwrap_or_else(|| "developer".to_string());
+        let greetings = [
+            format!("Hello {}, how is your day going?", user_name),
+            format!("Ready to code? Let's build something awesome, {}!", user_name),
+            format!("Work, work! Let's ship some code. 🚀"),
+            format!("Happy coding, {}! What are we building today?", user_name),
+            format!("Focus mode active. Let's do this! ✨"),
+        ];
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let index = (nanos % greetings.len() as u128) as usize;
+
+        let right_lines = [
+            "".to_string(),
+            format!("  {}", greetings[index].clone().italic().yellow()),
+            "".to_string(),
+            "".to_string(),
+        ];
+
+        let mut metadata_lines = Vec::new();
+        for i in 0..4 {
+            let label = match i {
+                0 => "Model",
+                1 => "Permissions",
+                2 => "Theme",
+                _ => "Workspace",
+            };
+            let val = match i {
+                0 => &model_val,
+                1 => &perm_val,
+                2 => &theme_val,
+                _ => &ws_val,
+            };
+
+            let raw_len = format!("  {:<12} {}", label, val).len();
+            let padding_len = max_raw_len.saturating_sub(raw_len);
+            let padding = " ".repeat(padding_len);
+
+            let padded_label = format!("{:<12}", label);
+            let styled_line = format!(
+                "  {} {}{}{}{}",
+                padded_label.dim(),
+                val.as_str().white(),
+                padding,
+                " │".dim(),
+                right_lines[i]
+            );
+            metadata_lines.push(styled_line);
+        }
 
         let mut combined = String::new();
         combined.push_str("\n");

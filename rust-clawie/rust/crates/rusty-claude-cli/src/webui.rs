@@ -48,6 +48,12 @@ struct UploadRequest {
     content: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct InstanceActionRequest {
+    pid: u32,
+    action: String,
+}
+
 pub fn launch() -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
     let output_dir = documents_output_dir()?;
     fs::create_dir_all(&output_dir)?;
@@ -150,6 +156,16 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing pid"))?;
             let log = instance_log(pid)?;
             write_json_response(stream, "200 OK", &json!({"ok": true, "log": log}).to_string())
+        }
+        line if line.starts_with("POST /instance-action ") => {
+            let payload: InstanceActionRequest =
+                parse_json_body(&request, header_end, "instance action")?;
+            run_instance_action(&payload)?;
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({"ok": true, "pid": payload.pid, "action": payload.action}).to_string(),
+            )
         }
         line if line.starts_with("POST /files ") => {
             let payload: DirectoryRequest = parse_json_body(&request, header_end, "files")?;
@@ -477,6 +493,39 @@ fn instance_log(pid: u32) -> io::Result<serde_json::Value> {
         "command": command,
         "events": events,
     }))
+}
+
+fn run_instance_action(payload: &InstanceActionRequest) -> io::Result<()> {
+    if payload.action != "terminate" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported instance action: {}", payload.action),
+        ));
+    }
+    let instances = running_clawie_instances()?;
+    let is_known_instance = instances
+        .iter()
+        .any(|instance| instance.get("pid").and_then(serde_json::Value::as_u64) == Some(payload.pid as u64));
+    if !is_known_instance {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("pid {} is not a running Clawie CLI instance", payload.pid),
+        ));
+    }
+
+    let output = Command::new("kill")
+        .args(["-TERM", &payload.pid.to_string()])
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(io::Error::other(if stderr.is_empty() {
+            format!("failed to terminate pid {}", payload.pid)
+        } else {
+            stderr
+        }))
+    }
 }
 
 fn parse_json_body<T>(request: &[u8], header_end: usize, name: &str) -> io::Result<T>
@@ -1858,6 +1907,39 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       border-radius: var(--radius-md);
     }
 
+    .agent-menu {
+      position: fixed;
+      z-index: 20000;
+      min-width: 190px;
+      background: #111827;
+      border: 2px solid #f8fafc;
+      box-shadow: 4px 4px 0 rgba(0,0,0,0.45);
+      padding: 0.25rem;
+    }
+
+    .agent-menu[hidden] {
+      display: none;
+    }
+
+    .agent-menu button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: #f8fafc;
+      text-align: left;
+      font: 700 0.72rem var(--font-ui);
+      padding: 0.45rem 0.55rem;
+      cursor: pointer;
+    }
+
+    .agent-menu button:hover {
+      background: #1f2937;
+    }
+
+    .agent-menu button.danger {
+      color: #fca5a5;
+    }
+
     @media (max-width: 1100px) {
       header {
         padding: 0 0.75rem;
@@ -2656,6 +2738,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     </div>
   </div>
 
+  <div id="agent-context-menu" class="agent-menu" hidden>
+    <button type="button" data-agent-action="logs">Open logs</button>
+    <button type="button" data-agent-action="copy-pid">Copy PID</button>
+    <button type="button" data-agent-action="refresh">Refresh instances</button>
+    <button type="button" data-agent-action="terminate" class="danger">Terminate CLI</button>
+  </div>
+
   <!-- Settings Modal Overlay -->
   <div id="settings-modal" class="modal-overlay" hidden>
     <div class="modal-content">
@@ -2776,8 +2865,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const instanceLogClose = document.querySelector('#instance-log-close');
     const instanceLogTitle = document.querySelector('#instance-log-title');
     const instanceLogBody = document.querySelector('#instance-log-body');
+    const agentContextMenu = document.querySelector('#agent-context-menu');
 
     let activeFileName = null;
+    let selectedAgentContext = null;
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -2933,7 +3024,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             <div class="server-rack" style="right: 22px; top: 58px; transform: scale(0.82); transform-origin: top right;"></div>
             <div class="plant" style="right: 28px; bottom: 22px;"></div>
             <div class="status-beacon" style="right: 34px; top: 36px;"></div>
-            <div class="agent ${color} draggable-agent" data-agent-id="instance-${safeId}" data-name="${escapeText(agentName)}" style="left: 88px; top: 130px;"></div>
+            <div class="agent ${color} draggable-agent" data-agent-id="instance-${safeId}" data-name="${escapeText(agentName)}" data-pid="${escapeText(instance.pid || '')}" data-kind="${escapeText(instance.kind || 'Clawie CLI')}" data-status="${escapeText(status)}" style="left: 88px; top: 130px;"></div>
             ${showTaskBoxes ? `
               <div class="task-box" style="left: 132px; top: 118px;"></div>
               <div class="task-box two" style="left: 158px; top: 138px;"></div>
@@ -3020,6 +3111,48 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       });
     }
 
+    function openAgentContextMenu(agent, event) {
+      event.preventDefault();
+      selectedAgentContext = {
+        pid: agent.dataset.pid,
+        kind: agent.dataset.kind,
+        status: agent.dataset.status
+      };
+      agentContextMenu.hidden = false;
+      const menuWidth = 200;
+      const menuHeight = 152;
+      agentContextMenu.style.left = Math.min(event.clientX, window.innerWidth - menuWidth - 8) + 'px';
+      agentContextMenu.style.top = Math.min(event.clientY, window.innerHeight - menuHeight - 8) + 'px';
+    }
+
+    function closeAgentContextMenu() {
+      agentContextMenu.hidden = true;
+      selectedAgentContext = null;
+    }
+
+    async function terminateSelectedInstance() {
+      if (!selectedAgentContext?.pid || selectedAgentContext.status === 'closed') {
+        setStatus('No running CLI instance selected', 'error');
+        return;
+      }
+      const confirmed = window.confirm(`Terminate Clawie CLI PID ${selectedAgentContext.pid}?`);
+      if (!confirmed) return;
+      try {
+        setStatus('Terminating CLI PID ' + selectedAgentContext.pid + '...', 'busy');
+        const response = await fetch('/instance-action', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ pid: Number(selectedAgentContext.pid), action: 'terminate' })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Terminate failed');
+        setStatus('Terminate signal sent to PID ' + selectedAgentContext.pid, 'saved');
+        await refreshInstances();
+      } catch (error) {
+        setStatus(error.message, 'error');
+      }
+    }
+
     function initializeAgentDragging() {
       const pixelMap = document.querySelector('.pixel-map');
       const agents = Array.from(document.querySelectorAll('.draggable-agent'));
@@ -3028,6 +3161,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       agents.forEach(agent => {
         if (agent.dataset.dragReady === 'true') return;
         agent.dataset.dragReady = 'true';
+        agent.addEventListener('contextmenu', event => openAgentContextMenu(agent, event));
         const saved = localStorage.getItem('clawie-agent-pos-' + agent.dataset.agentId);
         if (saved) {
           try {
@@ -3433,10 +3567,30 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       if (!monitor) return;
       openInstanceLog(monitor.dataset.pid, monitor.dataset.kind, monitor.dataset.status);
     });
+    agentContextMenu.addEventListener('click', async event => {
+      const action = event.target.closest('button')?.dataset.agentAction;
+      if (!action || !selectedAgentContext) return;
+      const context = selectedAgentContext;
+      agentContextMenu.hidden = true;
+      if (action === 'logs') {
+        openInstanceLog(context.pid, context.kind, context.status);
+      } else if (action === 'copy-pid') {
+        await navigator.clipboard.writeText(context.pid || '');
+        setStatus('Copied PID ' + context.pid, 'saved');
+      } else if (action === 'refresh') {
+        await refreshInstances();
+      } else if (action === 'terminate') {
+        selectedAgentContext = context;
+        await terminateSelectedInstance();
+      }
+    });
     instanceLogClose.addEventListener('click', () => {
       instanceLogModal.hidden = true;
     });
     window.addEventListener('click', event => {
+      if (!agentContextMenu.hidden && !event.target.closest('#agent-context-menu')) {
+        closeAgentContextMenu();
+      }
       if (event.target === instanceLogModal) {
         instanceLogModal.hidden = true;
       }
