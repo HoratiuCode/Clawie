@@ -577,10 +577,10 @@
   {
     "name": "undo",
     "aliases": [],
-    "summary": "Undo the last file write or edit",
+    "summary": "Undo the last git commit while keeping changes",
     "argument_hint": null,
     "resume_supported": false,
-    "category": "Other"
+    "category": "Workspace & git"
   },
   {
     "name": "stop",
@@ -1002,11 +1002,61 @@
   },
   {
     "name": "map",
-    "aliases": [],
-    "summary": "Show a visual map of the codebase structure",
-    "argument_hint": "[depth]",
+    "aliases": [
+      "repo-map"
+    ],
+    "summary": "Show ranked repo map with important files and symbols",
+    "argument_hint": null,
     "resume_supported": true,
-    "category": "Other"
+    "category": "Discovery & debugging"
+  },
+  {
+    "name": "lean",
+    "aliases": [],
+    "summary": "Switch lazy senior dev mode",
+    "argument_hint": "[lite|full|ultra|off]",
+    "resume_supported": true,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "lean-review",
+    "aliases": [],
+    "summary": "Review current changes for over-engineering only",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "lean-audit",
+    "aliases": [],
+    "summary": "Audit the repo for over-engineering only",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "lean-debt",
+    "aliases": [],
+    "summary": "Harvest Clawie lean comments into a debt ledger",
+    "argument_hint": null,
+    "resume_supported": false,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "lean-gain",
+    "aliases": [],
+    "summary": "Show Clawie lean benchmark impact",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Analysis & automation"
+  },
+  {
+    "name": "lean-help",
+    "aliases": [],
+    "summary": "Show Clawie lean command reference",
+    "argument_hint": null,
+    "resume_supported": true,
+    "category": "Analysis & automation"
   },
   {
     "name": "symbols",

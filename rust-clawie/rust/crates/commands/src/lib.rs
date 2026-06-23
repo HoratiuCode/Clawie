@@ -61,6 +61,7 @@ pub enum SlashCommand {
         scope: Option<String>,
     },
     Commit,
+    Undo,
     Pr {
         context: Option<String>,
     },
@@ -110,6 +111,15 @@ pub enum SlashCommand {
     Init,
     WebUi,
     Diff,
+    Map,
+    Lean {
+        mode: Option<String>,
+    },
+    LeanReview,
+    LeanAudit,
+    LeanDebt,
+    LeanGain,
+    LeanHelp,
     Version,
     Export {
         path: Option<String>,
@@ -276,6 +286,10 @@ pub fn validate_slash_command_input(
             validate_no_args(command, &args)?;
             SlashCommand::Commit
         }
+        "undo" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Undo
+        }
         "pr" => SlashCommand::Pr { context: remainder },
         "issue" => SlashCommand::Issue { context: remainder },
         "ultraplan" => SlashCommand::Ultraplan { task: remainder },
@@ -342,6 +356,33 @@ pub fn validate_slash_command_input(
         "diff" => {
             validate_no_args(command, &args)?;
             SlashCommand::Diff
+        }
+        "map" | "repo-map" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Map
+        }
+        "lean" => SlashCommand::Lean {
+            mode: optional_single_arg(command, &args, "[lite|full|ultra|off]")?,
+        },
+        "lean-review" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::LeanReview
+        }
+        "lean-audit" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::LeanAudit
+        }
+        "lean-debt" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::LeanDebt
+        }
+        "lean-gain" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::LeanGain
+        }
+        "lean-help" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::LeanHelp
         }
         "version" => {
             validate_no_args(command, &args)?;
@@ -2438,6 +2479,7 @@ pub fn handle_slash_command(
         SlashCommand::Status
         | SlashCommand::Bughunter { .. }
         | SlashCommand::Commit
+        | SlashCommand::Undo
         | SlashCommand::Pr { .. }
         | SlashCommand::Issue { .. }
         | SlashCommand::Ultraplan { .. }
@@ -2458,6 +2500,13 @@ pub fn handle_slash_command(
         | SlashCommand::Init
         | SlashCommand::WebUi
         | SlashCommand::Diff
+        | SlashCommand::Map
+        | SlashCommand::Lean { .. }
+        | SlashCommand::LeanReview
+        | SlashCommand::LeanAudit
+        | SlashCommand::LeanDebt
+        | SlashCommand::LeanGain
+        | SlashCommand::LeanHelp
         | SlashCommand::Version
         | SlashCommand::Export { .. }
         | SlashCommand::Session { .. }
@@ -2966,7 +3015,9 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|add <name> :: <instructions>|help]"));
-        assert_eq!(slash_command_specs().len(), 144);
+        assert!(help.contains("/lean [lite|full|ultra|off]"));
+        assert!(help.contains("/lean-review"));
+        assert_eq!(slash_command_specs().len(), 150);
         assert!(resume_supported_slash_commands().len() >= 42);
     }
 

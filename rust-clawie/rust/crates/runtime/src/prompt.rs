@@ -5,6 +5,9 @@ use std::process::Command;
 
 use crate::agent::AgentRegistry;
 use crate::config::{ConfigError, ConfigLoader, RuntimeConfig};
+use crate::git_context::GitContext;
+use crate::lean::{active_lean_mode, lean_system_section};
+use crate::stale_base::{check_base_commit, format_stale_base_warning, resolve_expected_base};
 
 /// Errors raised while assembling the final system prompt.
 #[derive(Debug)]
@@ -57,6 +60,8 @@ pub struct ProjectContext {
     pub current_date: String,
     pub git_status: Option<String>,
     pub git_diff: Option<String>,
+    pub git_context: Option<String>,
+    pub stale_base_warning: Option<String>,
     pub instruction_files: Vec<ContextFile>,
 }
 
@@ -72,6 +77,8 @@ impl ProjectContext {
             current_date: current_date.into(),
             git_status: None,
             git_diff: None,
+            git_context: None,
+            stale_base_warning: None,
             instruction_files,
         })
     }
@@ -83,6 +90,12 @@ impl ProjectContext {
         let mut context = Self::discover(cwd, current_date)?;
         context.git_status = read_git_status(&context.cwd);
         context.git_diff = read_git_diff(&context.cwd);
+        context.git_context = GitContext::detect(&context.cwd)
+            .map(|git_context| git_context.render())
+            .filter(|rendered| !rendered.trim().is_empty());
+        let expected_base = resolve_expected_base(None, &context.cwd);
+        context.stale_base_warning =
+            format_stale_base_warning(&check_base_commit(&context.cwd, expected_base.as_ref()));
         Ok(context)
     }
 }
@@ -146,6 +159,9 @@ impl SystemPromptBuilder {
         }
         sections.push(get_simple_system_section());
         sections.push(get_simple_doing_tasks_section());
+        if let Some(lean_section) = lean_system_section(active_lean_mode()) {
+            sections.push(lean_section);
+        }
         sections.push(get_actions_section());
         sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
         sections.push(self.environment_section());
@@ -299,6 +315,16 @@ fn render_project_context(project_context: &ProjectContext) -> String {
         lines.push(String::new());
         lines.push("Git status snapshot:".to_string());
         lines.push(status.clone());
+    }
+    if let Some(git_context) = &project_context.git_context {
+        lines.push(String::new());
+        lines.push("Git context:".to_string());
+        lines.push(git_context.clone());
+    }
+    if let Some(warning) = &project_context.stale_base_warning {
+        lines.push(String::new());
+        lines.push("Stale base warning:".to_string());
+        lines.push(warning.clone());
     }
     if let Some(diff) = &project_context.git_diff {
         lines.push(String::new());

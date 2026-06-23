@@ -5,13 +5,19 @@
 //! that drives interactive and one-shot turns.
 
 pub mod agent;
+mod approval_tokens;
 mod bash;
 pub mod bash_validation;
 mod bootstrap;
+pub mod branch_lock;
 mod compact;
 mod config;
+pub mod config_validate;
 mod conversation;
+mod edit_workflow;
 mod file_ops;
+mod git_context;
+mod git_workflow;
 pub mod green_contract;
 mod hooks;
 mod json;
@@ -27,13 +33,17 @@ pub mod permission_enforcer;
 mod permissions;
 pub mod plugin_lifecycle;
 mod policy_engine;
+mod lean;
 mod prompt;
 pub mod recovery_recipes;
 mod remote;
+mod repo_map;
+mod report_schema;
 pub mod sandbox;
 mod session;
 pub mod session_control;
 mod sse;
+pub mod stale_base;
 pub mod stale_branch;
 pub mod summary_compression;
 pub mod task_packet;
@@ -48,29 +58,46 @@ pub use agent::{
     RuntimeAgentMetadata, RuntimeAgentPath, RuntimeAgentRegistry, RuntimeAgentRegistryError,
     RuntimeAgentState,
 };
+pub use approval_tokens::{
+    ApprovalDelegationHop, ApprovalScope, ApprovalTokenAudit, ApprovalTokenError,
+    ApprovalTokenGrant, ApprovalTokenLedger, ApprovalTokenStatus,
+};
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
+pub use branch_lock::{detect_branch_lock_collisions, BranchLockCollision, BranchLockIntent};
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
 pub use config::{
-    ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
+    default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
     McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
     McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
     ResolvedPermissionMode, RuntimeAgentConfig, RuntimeAgentDefinitionConfig, RuntimeConfig,
     RuntimeFeatureConfig, RuntimeHookConfig, RuntimePermissionRuleConfig, RuntimePluginConfig,
     ScopedMcpServerConfig, CLAW_SETTINGS_SCHEMA_NAME,
 };
+pub use config_validate::{
+    check_unsupported_format, format_diagnostics, validate_config_file, ConfigDiagnostic,
+    DiagnosticKind, ValidationResult,
+};
 pub use conversation::{
     auto_compaction_threshold_from_env, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
     ConversationRuntime, PromptCacheEvent, RuntimeError, StaticToolExecutor, ToolError,
     ToolExecutor, TurnSummary,
 };
+pub use edit_workflow::{
+    apply_edit_workflow, EditWorkflowFormat, EditWorkflowInput, EditWorkflowOutput,
+};
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
     GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
     WriteFileOutput,
+};
+pub use git_context::{GitCommitEntry, GitContext};
+pub use git_workflow::{
+    git_commit, git_diff, git_status, git_undo_last_commit, GitCommandOutput, GitCommitInput,
+    GitDiffInput, GitDiffOutput, GitStatusOutput, GitUndoInput,
 };
 pub use hooks::{
     HookAbortSignal, HookEvent, HookProgressEvent, HookProgressReporter, HookRunResult, HookRunner,
@@ -118,6 +145,11 @@ pub use policy_engine::{
     evaluate, DiffScope, GreenLevel, LaneBlocker, LaneContext, PolicyAction, PolicyCondition,
     PolicyEngine, PolicyRule, ReconcileReason, ReviewStatus,
 };
+pub use lean::{
+    active_lean_mode, format_lean_mode_report, persist_lean_mode,
+    lean_command_prompt, lean_gain_report, lean_help_report, lean_system_section,
+    LeanMode,
+};
 pub use prompt::{
     load_system_prompt, prepend_bullets, ContextFile, ProjectContext, PromptBuildError,
     SystemPromptBuilder, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
@@ -131,6 +163,14 @@ pub use remote::{
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
+pub use repo_map::{build_repo_map, RepoMapEntry, RepoMapOptions, RepoMapOutput};
+pub use report_schema::{
+    canonicalize_report, project_report, report_content_hash, report_schema_v1_registry,
+    CanonicalReportV1, ClaimKind, ConsumerCapabilities, FieldDelta, FieldDeltaState,
+    NegativeEvidence, NegativeFindingStatus, ProjectionProvenance, RedactionProvenance,
+    ReportClaim, ReportConfidence, ReportIdentity, ReportProjectionV1, ReportSchemaField,
+    ReportSchemaRegistry, SensitivityClass, DEFAULT_PROJECTION_POLICY_V1, REPORT_SCHEMA_V1,
+};
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,
     resolve_sandbox_status, resolve_sandbox_status_for_request, ContainerEnvironment,
@@ -142,6 +182,10 @@ pub use session::{
     SessionFork,
 };
 pub use sse::{IncrementalSseParser, SseEvent};
+pub use stale_base::{
+    check_base_commit, format_stale_base_warning, read_claw_base_file, resolve_expected_base,
+    BaseCommitSource, BaseCommitState,
+};
 pub use stale_branch::{
     apply_policy, check_freshness, BranchFreshness, StaleBranchAction, StaleBranchEvent,
     StaleBranchPolicy,

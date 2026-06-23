@@ -9,6 +9,7 @@
 mod init;
 mod input;
 mod render;
+mod setup_wizard;
 mod webui;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -46,14 +47,17 @@ use render::{
     active_terminal_theme, set_active_terminal_theme, Spinner, TerminalRenderer, TerminalTheme,
 };
 use runtime::{
-    clear_oauth_credentials, format_usd, generate_pkce_pair, generate_state, load_system_prompt,
-    parse_oauth_callback_request_target, pricing_for_model, read_file, resolve_sandbox_status,
-    save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
-    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
+    active_lean_mode, build_repo_map, clear_oauth_credentials, format_lean_mode_report,
+    format_usd, generate_pkce_pair, generate_state, git_commit, git_undo_last_commit,
+    load_system_prompt, parse_oauth_callback_request_target, persist_lean_mode,
+    lean_command_prompt, lean_gain_report, lean_help_report, pricing_for_model,
+    read_file, resolve_sandbox_status, save_oauth_credentials, ApiClient, ApiRequest,
+    AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
+    ConversationMessage, ConversationRuntime, GitCommitInput, GitUndoInput, McpServerManager,
     McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
-    UsageTracker,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, LeanMode, ProjectContext,
+    PromptCacheEvent, RepoMapOptions, ResolvedPermissionMode, RuntimeError, Session, TokenUsage,
+    ToolError, ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -138,10 +142,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             model,
             permission_mode,
         } => print_status_snapshot(&model, permission_mode)?,
+        CliAction::Map => println!("{}", render_repo_map_report()?),
         CliAction::Sandbox => print_sandbox_status_snapshot()?,
         CliAction::Providers => print_providers_report(),
         CliAction::Experimental { mode } => print_experimental_report(mode.as_deref())?,
         CliAction::Theme { name } => print_theme_report(name.as_deref())?,
+        CliAction::Lean { mode } => print_lean_report(mode.as_deref())?,
+        CliAction::LeanGain => println!("{}", lean_gain_report()),
+        CliAction::LeanHelp => println!("{}", lean_help_report()),
         CliAction::Prompt {
             prompt,
             model,
@@ -153,6 +161,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
+        CliAction::Setup => setup_wizard::run_setup_wizard()?,
         CliAction::Repl {
             model,
             allowed_tools,
@@ -189,6 +198,7 @@ enum CliAction {
         model: String,
         permission_mode: PermissionMode,
     },
+    Map,
     Sandbox,
     Providers,
     Experimental {
@@ -197,6 +207,11 @@ enum CliAction {
     Theme {
         name: Option<String>,
     },
+    Lean {
+        mode: Option<String>,
+    },
+    LeanGain,
+    LeanHelp,
     Prompt {
         prompt: String,
         model: String,
@@ -207,6 +222,7 @@ enum CliAction {
     Login,
     Logout,
     Init,
+    Setup,
     Repl {
         model: String,
         allowed_tools: Option<AllowedToolSet>,
@@ -401,9 +417,15 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "experimental" => Ok(CliAction::Experimental {
             mode: join_optional_args(&rest[1..]),
         }),
+        "lean" => Ok(CliAction::Lean {
+            mode: join_optional_args(&rest[1..]),
+        }),
+        "lean-gain" => Ok(CliAction::LeanGain),
+        "lean-help" => Ok(CliAction::LeanHelp),
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
+        "setup" => Ok(CliAction::Setup),
         "prompt" => {
             let prompt = rest[1..].join(" ");
             if prompt.trim().is_empty() {
@@ -451,6 +473,9 @@ fn parse_single_word_command_alias(
         "sandbox" => Some(Ok(CliAction::Sandbox)),
         "providers" => Some(Ok(CliAction::Providers)),
         "experimental" => Some(Ok(CliAction::Experimental { mode: None })),
+        "lean" => Some(Ok(CliAction::Lean { mode: None })),
+        "lean-gain" => Some(Ok(CliAction::LeanGain)),
+        "lean-help" => Some(Ok(CliAction::LeanHelp)),
         other => bare_slash_command_guidance(other).map(Err),
     }
 }
@@ -467,6 +492,7 @@ fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
             | "login"
             | "logout"
             | "init"
+            | "setup"
             | "prompt"
     ) {
         return None;
@@ -517,7 +543,11 @@ fn parse_direct_slash_cli_action(
         Ok(Some(SlashCommand::Providers)) => Ok(CliAction::Providers),
         Ok(Some(SlashCommand::Experimental { mode })) => Ok(CliAction::Experimental { mode }),
         Ok(Some(SlashCommand::Theme { name })) => Ok(CliAction::Theme { name }),
+        Ok(Some(SlashCommand::Lean { mode })) => Ok(CliAction::Lean { mode }),
+        Ok(Some(SlashCommand::LeanGain)) => Ok(CliAction::LeanGain),
+        Ok(Some(SlashCommand::LeanHelp)) => Ok(CliAction::LeanHelp),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
+        Ok(Some(SlashCommand::Map)) => Ok(CliAction::Map),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
             let _ = command;
@@ -1572,6 +1602,21 @@ fn print_theme_report(name: Option<&str>) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+fn print_lean_report(mode: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let active = match mode.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let next = LeanMode::parse(value).ok_or_else(|| {
+                format!("unsupported lean mode '{value}'. Use lite, full, ultra, or off.")
+            })?;
+            persist_lean_mode(next)?;
+            next
+        }
+        None => active_lean_mode(),
+    };
+    println!("{}", format_lean_mode_report(active));
+    Ok(())
+}
+
 fn format_cost_report(usage: TokenUsage) -> String {
     format!(
         "Cost
@@ -1894,10 +1939,42 @@ fn run_resume_command(
                 session_path.parent().unwrap_or_else(|| Path::new(".")),
             )?),
         }),
-        SlashCommand::Version => Ok(ResumeCommandOutcome {
-            session: session.clone(),
-            message: Some(render_version_report()),
-        }),
+            SlashCommand::Map => Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(render_repo_map_report_for(
+                    session_path.parent().unwrap_or_else(|| Path::new(".")),
+                )?),
+            }),
+            SlashCommand::Lean { mode } => {
+                let mode = match mode.as_deref() {
+                    Some(value) => {
+                        let next = LeanMode::parse(value).ok_or_else(|| {
+                            format!(
+                                "unsupported lean mode '{value}'. Use lite, full, ultra, or off."
+                            )
+                        })?;
+                        persist_lean_mode(next)?;
+                        next
+                    }
+                    None => active_lean_mode(),
+                };
+                Ok(ResumeCommandOutcome {
+                    session: session.clone(),
+                    message: Some(format_lean_mode_report(mode)),
+                })
+            }
+            SlashCommand::LeanGain => Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(lean_gain_report().to_string()),
+            }),
+            SlashCommand::LeanHelp => Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(lean_help_report().to_string()),
+            }),
+            SlashCommand::Version => Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(render_version_report()),
+            }),
         SlashCommand::Export { path } => {
             let export_path = resolve_export_path(path.as_deref(), session)?;
             fs::write(&export_path, render_export_text(session))?;
@@ -2015,11 +2092,15 @@ fn run_resume_command(
         SlashCommand::WebUi
         | SlashCommand::Bughunter { .. }
         | SlashCommand::Commit { .. }
+        | SlashCommand::Undo
         | SlashCommand::Pr { .. }
         | SlashCommand::Issue { .. }
         | SlashCommand::Ultraplan { .. }
         | SlashCommand::Teleport { .. }
         | SlashCommand::DebugToolCall { .. }
+        | SlashCommand::LeanReview
+        | SlashCommand::LeanAudit
+        | SlashCommand::LeanDebt
         | SlashCommand::Resume { .. }
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
@@ -3114,10 +3195,15 @@ impl LiveCli {
 
         let max_raw_len = raw_lines.iter().map(|l| l.len()).max().unwrap_or(0);
 
-        let user_name = self.load_terminal_user_name().unwrap_or_else(|| "developer".to_string());
+        let user_name = self
+            .load_terminal_user_name()
+            .unwrap_or_else(|| "developer".to_string());
         let greetings = [
             format!("Hello {}, how is your day going?", user_name),
-            format!("Ready to code? Let's build something awesome, {}!", user_name),
+            format!(
+                "Ready to code? Let's build something awesome, {}!",
+                user_name
+            ),
             format!("Work, work! Let's ship some code. 🚀"),
             format!("Happy coding, {}! What are we building today?", user_name),
             format!("Focus mode active. Let's do this! ✨"),
@@ -3170,7 +3256,10 @@ impl LiveCli {
         let mut combined = String::new();
         combined.push_str("\n");
         for line in logo_lines {
-            combined.push_str(&format!("{}\n", line.to_string().with(theme.banner_color())));
+            combined.push_str(&format!(
+                "{}\n",
+                line.to_string().with(theme.banner_color())
+            ));
         }
         combined.push_str("\n");
         combined.push_str(&format!("{}\n\n", status_line));
@@ -3385,6 +3474,10 @@ impl LiveCli {
                 self.run_commit(None)?;
                 false
             }
+            SlashCommand::Undo => {
+                self.run_undo()?;
+                false
+            }
             SlashCommand::Pr { context } => {
                 self.run_pr(context.as_deref())?;
                 false
@@ -3431,7 +3524,11 @@ impl LiveCli {
                 } else {
                     println!("  • total: {}", artifacts.len());
                     for art in artifacts {
-                        let facing = if art.metadata.user_facing { "📄" } else { "🔧" };
+                        let facing = if art.metadata.user_facing {
+                            "📄"
+                        } else {
+                            "🔧"
+                        };
                         println!(
                             "  • {} `{}` — {} ({} bytes)",
                             facing,
@@ -3449,7 +3546,10 @@ impl LiveCli {
                 match name {
                     Some(art_name) => {
                         if store.get_by_name(&art_name).is_some() {
-                            println!("  • artifact '{}' already exists — use a different name", art_name);
+                            println!(
+                                "  • artifact '{}' already exists — use a different name",
+                                art_name
+                            );
                         } else {
                             let content = format!("# {art_name}\n\nManual artifact creation.");
                             store.create(&art_name, &content, "Created via CLI")?;
@@ -3527,6 +3627,31 @@ impl LiveCli {
             }
             SlashCommand::Diff => {
                 Self::print_diff()?;
+                false
+            }
+            SlashCommand::Map => {
+                Self::print_repo_map()?;
+                false
+            }
+            SlashCommand::Lean { mode } => self.set_lean(mode)?,
+            SlashCommand::LeanReview => {
+                self.run_lean_prompt("review")?;
+                false
+            }
+            SlashCommand::LeanAudit => {
+                self.run_lean_prompt("audit")?;
+                false
+            }
+            SlashCommand::LeanDebt => {
+                self.run_lean_prompt("debt")?;
+                false
+            }
+            SlashCommand::LeanGain => {
+                println!("{}", lean_gain_report());
+                false
+            }
+            SlashCommand::LeanHelp => {
+                println!("{}", lean_help_report());
                 false
             }
             SlashCommand::Version => {
@@ -3769,6 +3894,33 @@ impl LiveCli {
         Ok(false)
     }
 
+    fn set_lean(&mut self, mode: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
+        let Some(mode) = mode else {
+            println!("{}", format_lean_mode_report(active_lean_mode()));
+            return Ok(false);
+        };
+        let next = LeanMode::parse(&mode).ok_or_else(|| {
+            format!("unsupported lean mode '{mode}'. Use lite, full, ultra, or off.")
+        })?;
+        persist_lean_mode(next)?;
+        self.system_prompt = build_system_prompt()?;
+        let session = self.runtime.session().clone();
+        let runtime = build_runtime(
+            session,
+            &self.session.id,
+            self.model.clone(),
+            self.system_prompt.clone(),
+            true,
+            true,
+            self.allowed_tools.clone(),
+            self.permission_mode,
+            None,
+        )?;
+        self.replace_runtime(runtime)?;
+        println!("{}", format_lean_mode_report(next));
+        Ok(true)
+    }
+
     fn set_experimental(
         &mut self,
         mode: Option<String>,
@@ -3951,6 +4103,11 @@ impl LiveCli {
 
     fn print_diff() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", render_diff_report()?);
+        Ok(())
+    }
+
+    fn print_repo_map() -> Result<(), Box<dyn std::error::Error>> {
+        println!("{}", render_repo_map_report()?);
         Ok(())
     }
 
@@ -4156,6 +4313,14 @@ impl LiveCli {
         Ok(())
     }
 
+    fn run_lean_prompt(&self, command: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let prompt = lean_command_prompt(command)
+            .ok_or_else(|| format!("unknown lean command '{command}'"))?;
+        let text = self.run_internal_prompt_text(prompt, true)?;
+        println!("{text}");
+        Ok(())
+    }
+
     fn run_teleport(target: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         let Some(target) = target.map(str::trim).filter(|value| !value.is_empty()) else {
             println!("Usage: /teleport <symbol-or-path>");
@@ -4186,6 +4351,41 @@ impl LiveCli {
             "{}",
             format_commit_preflight_report(branch.as_deref(), summary)
         );
+        let output = git_commit(GitCommitInput {
+            message: None,
+            all: Some(true),
+        })?;
+        if output.success {
+            println!(
+                "Commit\n  Result           created commit\n  Branch           {}\n{}",
+                branch.as_deref().unwrap_or("unknown"),
+                indent_block(output.stdout.trim(), 2)
+            );
+        } else {
+            println!(
+                "Commit\n  Result           failed\n  Branch           {}\n  Error\n{}",
+                branch.as_deref().unwrap_or("unknown"),
+                indent_block(output.stderr.trim(), 4)
+            );
+        }
+        Ok(())
+    }
+
+    fn run_undo(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let output = git_undo_last_commit(GitUndoInput {
+            keep_changes: Some(true),
+        })?;
+        if output.success {
+            println!(
+                "Undo\n  Result           undone last commit\n  Mode             soft reset, changes kept\n{}",
+                indent_block(output.stdout.trim(), 2)
+            );
+        } else {
+            println!(
+                "Undo\n  Result           failed\n  Error\n{}",
+                indent_block(output.stderr.trim(), 4)
+            );
+        }
         Ok(())
     }
 
@@ -4791,6 +4991,52 @@ fn normalize_permission_mode(mode: &str) -> Option<&'static str> {
 
 fn render_diff_report() -> Result<String, Box<dyn std::error::Error>> {
     render_diff_report_for(&env::current_dir()?)
+}
+
+fn render_repo_map_report() -> Result<String, Box<dyn std::error::Error>> {
+    render_repo_map_report_for(&env::current_dir()?)
+}
+
+fn render_repo_map_report_for(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let map = build_repo_map(RepoMapOptions {
+        root: Some(cwd.to_string_lossy().into_owned()),
+        max_files: Some(40),
+        include_tests: Some(true),
+    })?;
+    let mut lines = vec![
+        "Repo map".to_string(),
+        format!("  Root             {}", map.root),
+        format!("  Summary          {}", map.summary),
+        format!("  Truncated        {}", map.truncated),
+    ];
+    if !map.languages.is_empty() {
+        let languages = map
+            .languages
+            .iter()
+            .map(|(language, count)| format!("{language}:{count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("  Languages        {languages}"));
+    }
+    lines.push(String::new());
+    lines.push("Ranked files".to_string());
+    if map.entries.is_empty() {
+        lines.push("  no source files found".to_string());
+    } else {
+        for entry in map.entries {
+            let symbols = if entry.symbols.is_empty() {
+                "(no symbols extracted)".to_string()
+            } else {
+                entry.symbols.join(", ")
+            };
+            lines.push(format!(
+                "  {:>4}  {:<10} {}",
+                entry.score, entry.language, entry.path
+            ));
+            lines.push(format!("        symbols: {symbols}"));
+        }
+    }
+    Ok(lines.join("\n"))
 }
 
 fn render_diff_report_for(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
@@ -7068,6 +7314,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "  claw login")?;
     writeln!(out, "  claw logout")?;
     writeln!(out, "  claw init")?;
+    writeln!(out, "  claw setup")?;
     writeln!(out)?;
     writeln!(out, "Flags:")?;
     writeln!(
@@ -8514,7 +8761,9 @@ UU conflicted.rs",
         fs::create_dir_all(&root).expect("create root");
         let session_path = root.join("session.json");
         let session = Session::new();
-        session.save_to_path(&session_path).expect("session should save");
+        session
+            .save_to_path(&session_path)
+            .expect("session should save");
 
         let old_config_home = std::env::var("CLAW_CONFIG_HOME");
         std::env::set_var("CLAW_CONFIG_HOME", &root);
@@ -9551,14 +9800,19 @@ impl RustArtifactStore {
         Ok(())
     }
 
-    fn create(&mut self, name: &str, content: &str, summary: &str) -> Result<RustArtifactIndexEntry, Box<dyn std::error::Error>> {
+    fn create(
+        &mut self,
+        name: &str,
+        content: &str,
+        summary: &str,
+    ) -> Result<RustArtifactIndexEntry, Box<dyn std::error::Error>> {
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
         let artifact_id = format!("artifact-{millis}");
         let artifact_path = self.session_dir.join(name);
-        
+
         if let Some(parent) = artifact_path.parent() {
             fs::create_dir_all(parent)?;
         }

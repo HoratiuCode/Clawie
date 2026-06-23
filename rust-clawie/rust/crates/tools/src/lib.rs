@@ -11,7 +11,8 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    check_freshness, edit_file, execute_bash, glob_search, grep_search, load_system_prompt,
+    apply_edit_workflow, build_repo_map, check_freshness, edit_file, execute_bash, git_commit,
+    git_diff, git_status, git_undo_last_commit, glob_search, grep_search, load_system_prompt,
     lsp_client::LspRegistry,
     mcp_tool_bridge::McpToolRegistry,
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
@@ -21,11 +22,12 @@ use runtime::{
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry},
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
-    BranchFreshness, ContentBlock, ConversationMessage, ConversationRuntime, GrepSearchInput,
-    LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
-    McpDegradedReport, MessageRole, PermissionMode, PermissionPolicy, PromptCacheEvent,
-    RuntimeAgentPath, RuntimeAgentRegistry, RuntimeAgentRegistryError, RuntimeAgentState,
-    RuntimeError, Session, TaskPacket, ToolError, ToolExecutor,
+    BranchFreshness, ContentBlock, ConversationMessage, ConversationRuntime, EditWorkflowInput,
+    GitCommitInput, GitDiffInput, GitUndoInput, GrepSearchInput, LaneEvent, LaneEventBlocker,
+    LaneEventName, LaneEventStatus, LaneFailureClass, McpDegradedReport, MessageRole,
+    PermissionMode, PermissionPolicy, PromptCacheEvent, RepoMapOptions, RuntimeAgentPath,
+    RuntimeAgentRegistry, RuntimeAgentRegistryError, RuntimeAgentState, RuntimeError, Session,
+    TaskPacket, ToolError, ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -231,6 +233,28 @@ impl GlobalToolRegistry {
             ("edit", "edit_file"),
             ("glob", "glob_search"),
             ("grep", "grep_search"),
+            ("repo", "repo_map"),
+            ("repo_map", "repo_map"),
+            ("repo-map", "repo_map"),
+            ("apply_edit", "apply_edit"),
+            ("apply-edit", "apply_edit"),
+            ("git_status", "git_status"),
+            ("git-status", "git_status"),
+            ("git_diff", "git_diff"),
+            ("git-diff", "git_diff"),
+            ("git_commit", "git_commit"),
+            ("git-commit", "git_commit"),
+            ("git_undo", "git_undo"),
+            ("git-undo", "git_undo"),
+            ("gitlog", "GitLog"),
+            ("git_log", "GitLog"),
+            ("git-log", "GitLog"),
+            ("gitshow", "GitShow"),
+            ("git_show", "GitShow"),
+            ("git-show", "GitShow"),
+            ("gitblame", "GitBlame"),
+            ("git_blame", "GitBlame"),
+            ("git-blame", "GitBlame"),
         ] {
             name_map.insert(alias.to_string(), canonical.to_string());
         }
@@ -498,6 +522,135 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "multiline": { "type": "boolean" }
                 },
                 "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "repo_map",
+            description: "Build an Aider-style ranked map of the workspace with languages, important files, and extracted symbols.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "root": { "type": "string" },
+                    "maxFiles": { "type": "integer", "minimum": 1 },
+                    "includeTests": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "apply_edit",
+            description: "Apply a whole-file, search/replace, or unified-diff edit workflow.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "format": { "type": "string", "enum": ["whole_file", "search_replace", "unified_diff"] },
+                    "path": { "type": "string" },
+                    "content": { "type": "string" },
+                    "oldString": { "type": "string" },
+                    "newString": { "type": "string" },
+                    "replaceAll": { "type": "boolean" },
+                    "diff": { "type": "string" }
+                },
+                "required": ["format"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "git_status",
+            description: "Inspect git branch and porcelain status for the current workspace.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "git_diff",
+            description: "Return the staged or unstaged git diff, optionally scoped to a path.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "cached": { "type": "boolean" },
+                    "path": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "git_commit",
+            description: "Stage workspace changes and create a git commit with a supplied or generated message.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string" },
+                    "all": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "git_undo",
+            description: "Undo the last git commit, keeping changes by default.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "keepChanges": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "GitLog",
+            description: "Show commit history with count, author/date/path filters, and oneline format. Use this instead of bash for read-only git history inspection.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "count": { "type": "integer", "minimum": 1 },
+                    "oneline": { "type": "boolean" },
+                    "author": { "type": "string" },
+                    "since": { "type": "string" },
+                    "until": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "GitShow",
+            description: "Show a commit, tag, or tree object. format=patch shows full diff, stat shows diffstat, metadata shows commit info without patch.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "stat": { "type": "boolean" },
+                    "format": { "type": "string", "enum": ["patch", "stat", "metadata"] }
+                },
+                "required": ["commit"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "GitBlame",
+            description: "Show the revision and author that last modified each line of a file, optionally restricted to a line range.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "start_line": { "type": "integer", "minimum": 1 },
+                    "end_line": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["path"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -1214,6 +1367,42 @@ fn execute_tool_with_enforcer(
         "grep_search" => {
             maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<GrepSearchInput>(input).and_then(run_grep_search)
+        }
+        "repo_map" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<RepoMapOptions>(input).and_then(run_repo_map)
+        }
+        "apply_edit" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<EditWorkflowInput>(input).and_then(run_apply_edit)
+        }
+        "git_status" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            run_git_status(input.clone())
+        }
+        "git_diff" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<GitDiffInput>(input).and_then(run_git_diff)
+        }
+        "git_commit" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<GitCommitInput>(input).and_then(run_git_commit)
+        }
+        "git_undo" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<GitUndoInput>(input).and_then(run_git_undo)
+        }
+        "GitLog" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<GitLogToolInput>(input).and_then(run_git_log_tool)
+        }
+        "GitShow" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<GitShowToolInput>(input).and_then(run_git_show_tool)
+        }
+        "GitBlame" => {
+            maybe_enforce_permission_check(enforcer, name, input)?;
+            from_value::<GitBlameToolInput>(input).and_then(run_git_blame_tool)
         }
         "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
@@ -1964,6 +2153,113 @@ fn run_grep_search(input: GrepSearchInput) -> Result<String, String> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
+fn run_repo_map(input: RepoMapOptions) -> Result<String, String> {
+    to_pretty_json(build_repo_map(input).map_err(io_to_string)?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_apply_edit(input: EditWorkflowInput) -> Result<String, String> {
+    to_pretty_json(apply_edit_workflow(input).map_err(io_to_string)?)
+}
+
+fn run_git_status(_input: Value) -> Result<String, String> {
+    to_pretty_json(git_status().map_err(io_to_string)?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_git_diff(input: GitDiffInput) -> Result<String, String> {
+    to_pretty_json(git_diff(input).map_err(io_to_string)?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_git_commit(input: GitCommitInput) -> Result<String, String> {
+    to_pretty_json(git_commit(input).map_err(io_to_string)?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_git_undo(input: GitUndoInput) -> Result<String, String> {
+    to_pretty_json(git_undo_last_commit(input).map_err(io_to_string)?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_git_log_tool(input: GitLogToolInput) -> Result<String, String> {
+    let mut args = vec![
+        "log".to_string(),
+        format!("-n{}", input.count.unwrap_or(20)),
+    ];
+    if input.oneline.unwrap_or(false) {
+        args.push("--oneline".to_string());
+    }
+    if let Some(author) = input.author {
+        args.push(format!("--author={author}"));
+    }
+    if let Some(since) = input.since {
+        args.push(format!("--since={since}"));
+    }
+    if let Some(until) = input.until {
+        args.push(format!("--until={until}"));
+    }
+    if let Some(path) = input.path {
+        args.push("--".to_string());
+        args.push(path);
+    }
+    run_git_read_tool("git log", &args)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_git_show_tool(input: GitShowToolInput) -> Result<String, String> {
+    let mut args = vec!["show".to_string()];
+    match input.format.as_deref() {
+        Some("metadata") if input.path.is_some() => {
+            return Err("GitShow format \"metadata\" cannot be combined with path".to_string());
+        }
+        Some("metadata") => {
+            args.push("--format=medium".to_string());
+            args.push("--no-patch".to_string());
+        }
+        Some("stat") => args.push("--stat".to_string()),
+        Some("patch") | None => {
+            if input.format.is_none() && input.stat.unwrap_or(false) {
+                args.push("--stat".to_string());
+            }
+        }
+        Some(other) => {
+            return Err(format!(
+                "unknown GitShow format: \"{other}\". Supported values: patch, stat, metadata."
+            ));
+        }
+    }
+    if let Some(path) = input.path {
+        args.push(format!("{}:{path}", input.commit));
+    } else {
+        args.push(input.commit);
+    }
+    run_git_read_tool("git show", &args)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_git_blame_tool(input: GitBlameToolInput) -> Result<String, String> {
+    let mut args = vec!["blame".to_string()];
+    if let (Some(start), Some(end)) = (input.start_line, input.end_line) {
+        args.push(format!("-L{start},{end}"));
+    }
+    args.push(input.path);
+    run_git_read_tool("git blame", &args)
+}
+
+fn run_git_read_tool(label: &str, args: &[String]) -> Result<String, String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    git_stdout(&arg_refs).map_or_else(
+        || {
+            Err(format!(
+                "{label} failed. Ensure the current directory is inside a git repository."
+            ))
+        },
+        |output| to_pretty_json(json!({ "output": output })),
+    )
+}
+
+#[allow(clippy::needless_pass_by_value)]
 fn run_web_fetch(input: WebFetchInput) -> Result<String, String> {
     to_pretty_json(execute_web_fetch(&input)?)
 }
@@ -2073,6 +2369,31 @@ struct EditFileInput {
 struct GlobSearchInputValue {
     pattern: String,
     path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitLogToolInput {
+    path: Option<String>,
+    count: Option<usize>,
+    oneline: Option<bool>,
+    author: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitShowToolInput {
+    commit: String,
+    path: Option<String>,
+    stat: Option<bool>,
+    format: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitBlameToolInput {
+    path: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
