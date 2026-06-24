@@ -157,6 +157,77 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
             let log = instance_log(pid)?;
             write_json_response(stream, "200 OK", &json!({"ok": true, "log": log}).to_string())
         }
+        line if line.starts_with("GET /ws-log?") || line.starts_with("GET /ws-log ") => {
+            let mut ws_key = None;
+            for header_line in headers.lines() {
+                let parts: Vec<&str> = header_line.splitn(2, ':').collect();
+                if parts.len() == 2 && parts[0].trim().to_ascii_lowercase() == "sec-websocket-key" {
+                    ws_key = Some(parts[1].trim().to_string());
+                    break;
+                }
+            }
+
+            if let Some(key) = ws_key {
+                let magic = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+                let mut input = key.as_bytes().to_vec();
+                input.extend_from_slice(magic);
+                let hash = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, &input);
+
+                use base64::Engine;
+                let accept = base64::prelude::BASE64_STANDARD.encode(hash.as_ref());
+
+                let response = format!(
+                    "HTTP/1.1 101 Switching Protocols\r\n\
+                     Upgrade: websocket\r\n\
+                     Connection: Upgrade\r\n\
+                     Sec-WebSocket-Accept: {}\r\n\r\n",
+                    accept
+                );
+                stream.write_all(response.as_bytes())?;
+
+                let pid = query_value(request_line, "pid")
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing pid"))?;
+
+                stream.set_nonblocking(true)?;
+                let mut last_len = 0;
+                loop {
+                    let mut buf = [0u8; 1];
+                    match stream.peek(&mut buf) {
+                        Ok(0) => break,
+                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(_) => break,
+                        Ok(_) => {
+                            let _ = stream.read(&mut buf);
+                        }
+                    }
+
+                    if let Ok(log) = instance_log(pid) {
+                        let events = log["events"].as_array().cloned().unwrap_or_default();
+                        if events.len() > last_len {
+                            for event in &events[last_len..] {
+                                if let Some(event_str) = event.as_str() {
+                                    let frame = make_ws_text_frame(event_str);
+                                    stream.set_nonblocking(false)?;
+                                    if stream.write_all(&frame).is_err() {
+                                        return Ok(());
+                                    }
+                                    stream.set_nonblocking(true)?;
+                                }
+                            }
+                            last_len = events.len();
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                return Ok(());
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Missing Sec-WebSocket-Key header",
+                ));
+            }
+        }
         line if line.starts_with("POST /instance-action ") => {
             let payload: InstanceActionRequest =
                 parse_json_body(&request, header_end, "instance action")?;
@@ -271,6 +342,27 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
             r#"{"ok":false,"error":"not found"}"#,
         ),
     }
+}
+
+fn make_ws_text_frame(text: &str) -> Vec<u8> {
+    let payload = text.as_bytes();
+    let len = payload.len();
+    let mut frame = Vec::new();
+    frame.push(0x81); // FIN + Text opcode
+    if len <= 125 {
+        frame.push(len as u8);
+    } else if len <= 65535 {
+        frame.push(126);
+        frame.push((len >> 8) as u8);
+        frame.push((len & 0xff) as u8);
+    } else {
+        frame.push(127);
+        for i in (0..8).rev() {
+            frame.push((len >> (i * 8)) as u8);
+        }
+    }
+    frame.extend_from_slice(payload);
+    frame
 }
 
 fn select_directory_via_dialog() -> io::Result<Option<String>> {
@@ -2630,7 +2722,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 <span class="brand-dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);"></span>
                 No file open
               </span>
-              <button id="editor-save-btn" class="accent-btn" style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.75rem; display: none;">Save</button>
+              <div style="display: flex; gap: 0.5rem;">
+                <button id="editor-diff-btn" class="accent-btn" style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.75rem; display: none; background: var(--bg-hover); color: var(--text); border: 1px solid var(--border);">Show Diff</button>
+                <button id="editor-save-btn" class="accent-btn" style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.75rem; display: none;">Save</button>
+              </div>
             </div>
             
             <div class="editor-content-container" style="flex: 1; position: relative; display: flex; flex-direction: row; background: #050507; overflow: hidden;">
@@ -2641,6 +2736,17 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
               
               <div id="editor-line-numbers" style="display: none; width: 45px; padding: 1rem 0; text-align: right; color: var(--text-muted); font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; background: rgba(0,0,0,0.25); border-right: 1px solid var(--border); user-select: none; overflow-y: hidden; box-sizing: border-box; padding-right: 0.75rem;">1</div>
               <textarea id="editor-textarea" style="display: none; flex: 1; height: 100%; background: transparent; border: none; outline: none; resize: none; color: #a9b1d6; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; padding: 1rem; box-sizing: border-box; overflow-y: auto; white-space: pre; overflow-wrap: normal;" spellcheck="false"></textarea>
+              
+              <div id="diff-container" style="display: none; flex: 1; height: 100%; flex-direction: row; background: #050507; overflow: hidden; width: 100%;">
+                <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden; border-right: 1px solid var(--border);">
+                  <div style="background: rgba(255,255,255,0.03); padding: 0.25rem 0.5rem; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; border-bottom: 1px solid var(--border);">Original File</div>
+                  <pre id="diff-left" style="flex: 1; margin: 0; padding: 1rem; overflow: auto; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; white-space: pre; color: #a9b1d6; box-sizing: border-box;"></pre>
+                </div>
+                <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
+                  <div style="background: rgba(255,255,255,0.03); padding: 0.25rem 0.5rem; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; border-bottom: 1px solid var(--border);">Improvements / Edited</div>
+                  <pre id="diff-right" style="flex: 1; margin: 0; padding: 1rem; overflow: auto; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; white-space: pre; color: #a9b1d6; box-sizing: border-box;"></pre>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -2867,7 +2973,15 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const instanceLogBody = document.querySelector('#instance-log-body');
     const agentContextMenu = document.querySelector('#agent-context-menu');
 
+    const editorDiffBtn = document.querySelector('#editor-diff-btn');
+    const diffContainer = document.querySelector('#diff-container');
+    const diffLeft = document.querySelector('#diff-left');
+    const diffRight = document.querySelector('#diff-right');
+
     let activeFileName = null;
+    let originalCode = '';
+    let improvementsCode = '';
+    let logWebSocket = null;
     let selectedAgentContext = null;
 
     let totalInputTokens = 0;
@@ -3037,6 +3151,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     }
 
     async function openInstanceLog(pid, kind, statusOverride = null) {
+      if (logWebSocket) {
+        logWebSocket.close();
+        logWebSocket = null;
+      }
       instanceLogTitle.textContent = `${kind || 'Clawie Instance'} Logs`;
       instanceLogModal.hidden = false;
       const monitor = document.querySelector(`.instance-monitor[data-pid="${CSS.escape(String(pid || ''))}"]`);
@@ -3061,16 +3179,36 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         return;
       }
 
-      instanceLogBody.innerHTML = '<div class="log-line">Loading process details...</div>';
+      instanceLogBody.innerHTML = '<div class="log-line">Connecting to live log stream...</div>';
       try {
-        const response = await fetch('/instance-log?pid=' + encodeURIComponent(pid));
-        const result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || 'Could not load instance logs');
-        const log = result.log;
-        instanceLogTitle.textContent = `${kind || 'Clawie Instance'} · PID ${escapeText(log.pid)}`;
-        instanceLogBody.innerHTML = (log.events || []).map((line, index) => (
-          `<div class="log-line"><strong>${String(index + 1).padStart(2, '0')}</strong> ${escapeText(line)}</div>`
-        )).join('');
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws-log?pid=${encodeURIComponent(pid)}`;
+        logWebSocket = new WebSocket(wsUrl);
+
+        logWebSocket.onopen = () => {
+          instanceLogBody.innerHTML = '<div class="log-line" style="color: var(--ok);"><strong>Connected:</strong> Log stream active.</div>';
+        };
+
+        logWebSocket.onmessage = (event) => {
+          const line = event.data;
+          const logLineDiv = document.createElement('div');
+          logLineDiv.className = 'log-line';
+          logLineDiv.innerHTML = `<strong>*</strong> ${escapeText(line)}`;
+          instanceLogBody.appendChild(logLineDiv);
+          instanceLogBody.scrollTop = instanceLogBody.scrollHeight;
+        };
+
+        logWebSocket.onerror = (error) => {
+          console.error("WebSocket error:", error);
+          instanceLogBody.innerHTML = '<div class="log-line" style="color: var(--error);"><strong>Error:</strong> WebSocket connection error.</div>';
+        };
+
+        logWebSocket.onclose = () => {
+          const closeDiv = document.createElement('div');
+          closeDiv.className = 'log-line';
+          closeDiv.innerHTML = '<strong>Disconnected:</strong> Log stream closed.';
+          instanceLogBody.appendChild(closeDiv);
+        };
       } catch (error) {
         instanceLogBody.innerHTML = `<div class="log-line"><strong>Error:</strong> ${escapeText(error.message)}</div>`;
       }
@@ -3501,6 +3639,91 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       lineNumbers.scrollTop = textarea.scrollTop;
     });
 
+    editorDiffBtn.addEventListener('click', () => {
+      if (diffContainer.style.display === 'none') {
+        textarea.style.display = 'none';
+        lineNumbers.style.display = 'none';
+        diffContainer.style.display = 'flex';
+        editorDiffBtn.textContent = 'Show Editor';
+        
+        const currentCode = textarea.value;
+        const targetCode = (improvementsCode && improvementsCode !== originalCode) ? improvementsCode : currentCode;
+        const diffResult = computeLineDiff(originalCode, targetCode);
+        diffLeft.innerHTML = diffResult.left;
+        diffRight.innerHTML = diffResult.right;
+      } else {
+        diffContainer.style.display = 'none';
+        textarea.style.display = 'block';
+        lineNumbers.style.display = 'block';
+        editorDiffBtn.textContent = 'Show Diff';
+      }
+    });
+
+    function computeLineDiff(oldText, newText) {
+      const oldLines = oldText.split('\n');
+      const newLines = newText.split('\n');
+      
+      if (oldLines.length * newLines.length > 1000000) {
+        const leftHtml = [];
+        const rightHtml = [];
+        const maxLen = Math.max(oldLines.length, newLines.length);
+        for (let i = 0; i < maxLen; i++) {
+          const oldLine = i < oldLines.length ? oldLines[i] : null;
+          const newLine = i < newLines.length ? newLines[i] : null;
+          if (oldLine === newLine) {
+            const line = escapeText(oldLine);
+            leftHtml.push(`<div>  ${line}</div>`);
+            rightHtml.push(`<div>  ${line}</div>`);
+          } else {
+            if (oldLine !== null) {
+              leftHtml.push(`<div style="background-color: rgba(247, 118, 142, 0.2); font-weight: 500;">- ${escapeText(oldLine)}</div>`);
+            }
+            if (newLine !== null) {
+              rightHtml.push(`<div style="background-color: rgba(78, 172, 109, 0.2); font-weight: 500;">+ ${escapeText(newLine)}</div>`);
+            }
+          }
+        }
+        return { left: leftHtml.join(''), right: rightHtml.join('') };
+      }
+      
+      const dp = Array(oldLines.length + 1).fill(null).map(() => Array(newLines.length + 1).fill(0));
+      for (let i = 1; i <= oldLines.length; i++) {
+        for (let j = 1; j <= newLines.length; j++) {
+          if (oldLines[i - 1] === newLines[j - 1]) {
+            dp[i][j] = dp[i - 1][j - 1] + 1;
+          } else {
+            dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+          }
+        }
+      }
+      
+      const leftHtml = [];
+      const rightHtml = [];
+      let i = oldLines.length;
+      let j = newLines.length;
+      
+      while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+          const line = escapeText(oldLines[i - 1]);
+          leftHtml.unshift(`<div>  ${line}</div>`);
+          rightHtml.unshift(`<div>  ${line}</div>`);
+          i--;
+          j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+          const line = escapeText(newLines[j - 1]);
+          leftHtml.unshift(`<div style="background-color: rgba(0, 0, 0, 0); min-height: 1.5em;">&nbsp;</div>`);
+          rightHtml.unshift(`<div style="background-color: rgba(78, 172, 109, 0.2); font-weight: 500;">+ ${line}</div>`);
+          j--;
+        } else {
+          const line = escapeText(oldLines[i - 1]);
+          leftHtml.unshift(`<div style="background-color: rgba(247, 118, 142, 0.2); font-weight: 500;">- ${line}</div>`);
+          rightHtml.unshift(`<div style="background-color: rgba(0, 0, 0, 0); min-height: 1.5em;">&nbsp;</div>`);
+          i--;
+        }
+      }
+      return { left: leftHtml.join(''), right: rightHtml.join('') };
+    }
+
     async function loadFile(name, item) {
       setStatus('Opening ' + name + '...', 'busy');
       try {
@@ -3509,6 +3732,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         if (!response.ok || !result.ok) throw new Error(result.error || 'Open failed');
         
         activeFileName = name;
+        originalCode = result.code;
+        improvementsCode = result.improvements || '';
+        
         document.querySelector('#editor-filename').innerHTML = `
           <span class="brand-dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok);"></span>
           ${name}
@@ -3518,6 +3744,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         textarea.value = result.code;
         textarea.style.display = 'block';
         lineNumbers.style.display = 'block';
+        diffContainer.style.display = 'none';
+        editorDiffBtn.style.display = 'block';
+        editorDiffBtn.textContent = 'Show Diff';
         document.querySelector('#editor-save-btn').style.display = 'block';
 
         document.querySelectorAll('.file').forEach(f => f.classList.remove('active'));
@@ -3586,6 +3815,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     });
     instanceLogClose.addEventListener('click', () => {
       instanceLogModal.hidden = true;
+      if (logWebSocket) {
+        logWebSocket.close();
+        logWebSocket = null;
+      }
     });
     window.addEventListener('click', event => {
       if (!agentContextMenu.hidden && !event.target.closest('#agent-context-menu')) {
@@ -3593,6 +3826,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       }
       if (event.target === instanceLogModal) {
         instanceLogModal.hidden = true;
+        if (logWebSocket) {
+          logWebSocket.close();
+          logWebSocket = null;
+        }
       }
     });
 

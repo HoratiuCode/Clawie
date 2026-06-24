@@ -1947,12 +1947,14 @@ name = "rusty-claude-cli"
 version = "0.1.0"
 dependencies = [
  "api",
+ "base64",
  "clawie-systems",
  "commands",
  "compat-harness",
  "crossterm",
  "plugins",
  "pulldown-cmark",
+ "ring",
  "runtime",
  "rustyline",
  "serde",
