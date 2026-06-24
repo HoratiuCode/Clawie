@@ -49,6 +49,24 @@ SQLite-backed vector indexing service for semantic repository searches:
 - **Ingest files**: `cargo run -p claw-rag-service -- ingest --workspace .`
 - **Serve API & UI**: `cargo run -p claw-rag-service -- serve`
 
+### 6. Web UI Visual Upgrades
+Advanced graphical interface features for the local Clawie Web UI:
+- **WebSocket Live Log Streaming**: Dynamic real-time execution log streams. Rather than pulling static snapshots, the UI connects to a background socket (`/ws-log`) to monitor process events as they happen.
+- **Side-by-Side Visual Diffing**: Compare original files vs agent improvements or current edits. Clicking "Show Diff" provides visual red/green deletions/additions side-by-side with automatic layout alignment.
+
+### 7. Automated Parity Pipelines
+Checks sync and parity between the Rust codebase and Python mirrors:
+- **Sync Auditor CLI**: `./scripts/check_rust_python_sync.py` analyzes command/tool definitions and file parity.
+- **Unit Testing**: Tests defined in `test_rust_python_sync.py` run checks in continuous integration.
+
+### 8. Pixel Agents Dashboard (Visual Interface)
+A gamified, real-time pixel-art dashboard showing active agent instances and status:
+- **Draggable Agents**: CLI processes are rendered as active pixel-art characters in visual rooms (complete with desks, computers, bookshelves, and server racks).
+- **Session Actions**: Terminate active agent sessions directly from the visual interface.
+- **State Beacons**: Displays process statuses (thinking, executing, idle, closed) dynamically via color-coded status lights.
+
+<img src="./visual_agents_webui.png" alt="Pixel Agents Visualizer" width="700" />
+
 ## Quick Start
 
 1. Set up the workspace:
@@ -115,6 +133,33 @@ python3 -m python-clawie.src.main turn-loop "audit this module" --max-turns 30
 # Resume an existing session
 python3 -m python-clawie.src.main resume-session <session_id> "continue"
 ```
+
+## Use Cases & Workflows
+
+### 1. Live Background Agent Monitoring (WebSocket Logs)
+When running complex agent tasks (e.g. running a multi-turn audit session with `/lean-audit`), developers can launch the Web UI alongside their terminal and watch the agent's actions live.
+*   **Workflow**:
+    1. Start a CLI session: `./clawie`
+    2. Open the Web UI by running `/webui` in the CLI REPL or by running `./clawie --webui`
+    3. Click on the active room's terminal monitor inside the Web UI dashboard to open the Log Console.
+    4. The console connects via WebSocket to `/ws-log?pid=<PID>` and streams process lifecycle updates, command elapsed times, and execution details in real time as the agent runs.
+
+### 2. Code Improvement Review (Side-by-Side Diff)
+When Clawie suggests changes to code files, you can review, edit, and apply them using the side-by-side split screen.
+*   **Workflow**:
+    1. Ask Clawie to improve a file: `"Optimize main.py"` (which generates a `.improvements.md` file).
+    2. Open the Web UI and select the file from the workspace explorer sidebar.
+    3. Click the **"Show Diff"** button at the top right of the editor.
+    4. Compare the **Original File** (left pane, red deletions) and the **Improvements / Edited** (right pane, green additions).
+    5. Switch back to the editor with **"Show Editor"** to make manual refinements, then click **"Save"**.
+
+### 3. Continuous Parity Checking (Automated Pipelines)
+To ensure that CLI runtime command/tool updates inside `rust-clawie` are mirrored properly inside `python-clawie` without creating feature drift:
+*   **Workflow**:
+    1. Run the sync check CLI tool: `./scripts/check_rust_python_sync.py`
+    2. The tool outputs a detailed parity report comparing commands in Rust `commands.json` vs Python's snapshot, and tool specifications in Rust `tools/src/lib.rs` vs Python's snapshot.
+    3. If there are missing files or content drifts, the script exits with code `1`, serving as a validator in Git hooks or CI pipelines.
+    4. Run `python3 -m unittest python-clawie/tests/test_rust_python_sync.py` to assert package structure sync.
 
 ## Product Naming
 
