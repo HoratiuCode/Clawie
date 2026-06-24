@@ -54,6 +54,8 @@ Advanced graphical interface features for the local Clawie Web UI:
 - **WebSocket Live Log Streaming**: Dynamic real-time execution log streams. Rather than pulling static snapshots, the UI connects to a background socket (`/ws-log`) to monitor process events as they happen.
 - **Side-by-Side Visual Diffing**: Compare original files vs agent improvements or current edits. Clicking "Show Diff" provides visual red/green deletions/additions side-by-side with automatic layout alignment.
 
+<img src="./web_ui_overview.png" alt="Clawie Web UI Overview" width="700" />
+
 ### 7. Automated Parity Pipelines
 Checks sync and parity between the Rust codebase and Python mirrors:
 - **Sync Auditor CLI**: `./scripts/check_rust_python_sync.py` analyzes command/tool definitions and file parity.
