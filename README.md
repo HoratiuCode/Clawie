@@ -9,15 +9,59 @@ Clawie is a packaged workspace that keeps both sides of the project together:
 
 This repository exists so the full project is shareable and runnable from one folder.
 
+## Key Features & Recent Updates
+
+### 1. Interactive Setup Wizard
+Configure your environment variables, provider, model, API key, and base URL interactively:
+```bash
+./clawie setup
+```
+Settings are persisted in `settings.json` under the Clawie config directory.
+
+### 2. Lazy Senior Dev Mode (Lean Mode)
+Clawie enforces a **Lean Ladder** to prevent over-engineering:
+1. *Does this need to exist?*
+2. *Is it already in this codebase?*
+3. *Does stdlib do it?*
+4. *Does a native platform feature cover it?*
+5. *Does an installed dependency solve it?*
+6. *Can it be one line?*
+7. *Only then write the minimum code.*
+
+Manage this mode directly inside the REPL session:
+- `/lean [lite|full|ultra|off]`: Switch or view the active lean mode (default is `full`).
+- `/lean-review`: Review current diff for over-engineering.
+- `/lean-audit`: Scan repository for over-engineering.
+- `/lean-debt`: Harvest `clawie:` simplification comments into a ledger.
+- `/lean-gain`: Show benchmark impact metrics.
+- `/lean-help`: Print command reference.
+
+### 3. Repository Mapping
+Use the `/map` (or `/repo-map`) command in the REPL to generate a ranked map of the repository's files and extracted symbols, helping navigate large codebases.
+
+### 4. Git Integration
+Manage commits directly from the REPL:
+- `/commit`: Preflight checks changes, generates a commit message, and commits them.
+- `/undo`: Undoes the last commit (soft reset, keeping changes).
+
+### 5. Workspace RAG Service (`claw-rag-service`)
+SQLite-backed vector indexing service for semantic repository searches:
+- **Ingest files**: `cargo run -p claw-rag-service -- ingest --workspace .`
+- **Serve API & UI**: `cargo run -p claw-rag-service -- serve`
+
 ## Quick Start
 
-1. From repository root, run:
+1. Set up the workspace:
+```bash
+./clawie setup
+```
 
+2. Launch the Clawie agent REPL:
 ```bash
 ./clawie
 ```
 
-2. Work in these folders depending on focus:
+3. Work in these folders depending on focus:
 
 - `rust-clawie` for CLI/runtime behavior
 - `python-clawie` for Python-side mirrored modules and tooling
