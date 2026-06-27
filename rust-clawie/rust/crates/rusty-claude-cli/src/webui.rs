@@ -1503,6 +1503,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     .zoom-btn {
       width: 26px;
       height: 26px;
+      padding: 0;
       border: 2px solid #52526a;
       background: #232336;
       color: #f4f4f5;
@@ -1510,6 +1511,18 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       place-items: center;
       font: 700 1rem var(--font-ui);
       box-shadow: inset 0 -2px 0 rgba(0,0,0,0.35);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .zoom-btn:hover {
+      background: #303044;
+      border-color: #71718a;
+    }
+
+    .zoom-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
     }
 
     .pixel-map {
@@ -1522,8 +1535,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         linear-gradient(90deg, rgba(0,0,0,0.12) 1px, transparent 1px) 0 0 / 32px 32px,
         linear-gradient(rgba(0,0,0,0.12) 1px, transparent 1px) 0 0 / 32px 32px,
         linear-gradient(90deg, #9a642d 0 52%, #202b3d 52% 100%);
-      overflow: hidden;
+      overflow: auto;
       cursor: grab;
+      --instance-zoom: 1;
     }
 
     .instance-room-grid {
@@ -1536,6 +1550,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       z-index: 5;
       overflow: auto;
       padding: 2px;
+      transform: scale(var(--instance-zoom));
+      transform-origin: top left;
+      width: calc((100% - 32px) / var(--instance-zoom));
+      height: calc((100% - 32px) / var(--instance-zoom));
     }
 
     .instance-room-grid::-webkit-scrollbar {
@@ -2803,9 +2821,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           <div class="instance-stage" aria-label="Running Clawie instance">
             <div class="instance-titlebar">
               <span>Pixel Agents</span>
-              <div class="zoom-stack" aria-hidden="true">
-                <div class="zoom-btn">+</div>
-                <div class="zoom-btn">-</div>
+              <div class="zoom-stack">
+                <button class="zoom-btn" id="instance-zoom-in" type="button" title="Zoom in">+</button>
+                <button class="zoom-btn" id="instance-zoom-out" type="button" title="Zoom out">-</button>
               </div>
             </div>
             <div class="pixel-map">
@@ -3025,6 +3043,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const instanceRefresh = document.querySelector('#instance-refresh');
     const processList = document.querySelector('#process-list');
     const instanceRoomGrid = document.querySelector('#instance-room-grid');
+    const instanceZoomIn = document.querySelector('#instance-zoom-in');
+    const instanceZoomOut = document.querySelector('#instance-zoom-out');
     const instanceLogModal = document.querySelector('#instance-log-modal');
     const instanceLogClose = document.querySelector('#instance-log-close');
     const instanceLogTitle = document.querySelector('#instance-log-title');
@@ -3047,6 +3067,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     let totalCost = 0.0;
     const maxTokensLimit = 12000;
     let knownInstanceRooms = loadKnownInstanceRooms();
+    let instanceZoom = Number(localStorage.getItem('clawie-instance-zoom') || '1');
+    const minInstanceZoom = 0.7;
+    const maxInstanceZoom = 1.6;
+    const instanceZoomStep = 0.1;
 
     const statusStates = new Set(['idle', 'busy', 'thinking', 'uploading', 'listening', 'saved', 'unsaved', 'error']);
 
@@ -3078,6 +3102,22 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-workspace-view', showAutomations ? 'automations' : showInstance ? 'instance' : 'code');
       syncInstancePanel();
       if (showInstance) refreshInstances();
+    }
+
+    function clampInstanceZoom(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return 1;
+      return Math.max(minInstanceZoom, Math.min(maxInstanceZoom, numeric));
+    }
+
+    function setInstanceZoom(nextZoom) {
+      instanceZoom = clampInstanceZoom(nextZoom);
+      if (instanceRoomGrid) {
+        instanceRoomGrid.style.setProperty('--instance-zoom', instanceZoom.toFixed(2));
+      }
+      if (instanceZoomIn) instanceZoomIn.disabled = instanceZoom >= maxInstanceZoom;
+      if (instanceZoomOut) instanceZoomOut.disabled = instanceZoom <= minInstanceZoom;
+      localStorage.setItem('clawie-instance-zoom', instanceZoom.toFixed(2));
     }
 
     function escapeText(value) {
@@ -3387,10 +3427,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           agent.style.bottom = 'auto';
 
           const moveAgent = moveEvent => {
+            const zoomScale = boundsRect.width > 0 && dragBounds.offsetWidth > 0
+              ? boundsRect.width / dragBounds.offsetWidth
+              : 1;
             const maxLeft = dragBounds.clientWidth - agent.offsetWidth - 4;
             const maxTop = dragBounds.clientHeight - agent.offsetHeight - 4;
-            const nextLeft = Math.max(4, Math.min(maxLeft, moveEvent.clientX - boundsRect.left - offsetX));
-            const nextTop = Math.max(36, Math.min(maxTop, moveEvent.clientY - boundsRect.top - offsetY));
+            const nextLeft = Math.max(4, Math.min(maxLeft, (moveEvent.clientX - boundsRect.left - offsetX) / zoomScale));
+            const nextTop = Math.max(36, Math.min(maxTop, (moveEvent.clientY - boundsRect.top - offsetY) / zoomScale));
             const snappedLeft = Math.round(nextLeft / 4) * 4;
             const snappedTop = Math.round(nextTop / 4) * 4;
             agent.style.left = snappedLeft + 'px';
@@ -3852,6 +3895,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     codeViewTab.addEventListener('click', () => setWorkspaceView('code'));
     instanceViewTab.addEventListener('click', () => setWorkspaceView('instance'));
     automationsViewTab.addEventListener('click', () => setWorkspaceView('automations'));
+    instanceZoomIn.addEventListener('click', () => setInstanceZoom(instanceZoom + instanceZoomStep));
+    instanceZoomOut.addEventListener('click', () => setInstanceZoom(instanceZoom - instanceZoomStep));
     instanceRefresh.addEventListener('click', refreshInstances);
     instanceRoomGrid.addEventListener('click', event => {
       const monitor = event.target.closest('.instance-monitor');
@@ -4186,6 +4231,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     applyTheme(selectedTheme);
     updateUsageDisplay(0, 0);
     renderInstanceRooms([]);
+    setInstanceZoom(instanceZoom);
     const savedWorkspaceView = localStorage.getItem('clawie-workspace-view');
     setWorkspaceView(['code', 'instance', 'automations'].includes(savedWorkspaceView) ? savedWorkspaceView : 'code');
     initializeAgentDragging();
