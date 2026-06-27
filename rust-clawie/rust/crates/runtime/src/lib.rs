@@ -22,6 +22,7 @@ pub mod green_contract;
 mod hooks;
 mod json;
 mod lane_events;
+mod lean;
 pub mod lsp_client;
 mod mcp;
 mod mcp_client;
@@ -33,7 +34,6 @@ pub mod permission_enforcer;
 mod permissions;
 pub mod plugin_lifecycle;
 mod policy_engine;
-mod lean;
 mod prompt;
 pub mod recovery_recipes;
 mod remote;
@@ -105,6 +105,10 @@ pub use hooks::{
 pub use lane_events::{
     LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
 };
+pub use lean::{
+    active_lean_mode, format_lean_mode_report, lean_command_prompt, lean_gain_report,
+    lean_help_report, lean_system_section, persist_lean_mode, LeanMode,
+};
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
     scoped_mcp_config_hash, unwrap_ccr_proxy_url,
@@ -144,11 +148,6 @@ pub use plugin_lifecycle::{
 pub use policy_engine::{
     evaluate, DiffScope, GreenLevel, LaneBlocker, LaneContext, PolicyAction, PolicyCondition,
     PolicyEngine, PolicyRule, ReconcileReason, ReviewStatus,
-};
-pub use lean::{
-    active_lean_mode, format_lean_mode_report, persist_lean_mode,
-    lean_command_prompt, lean_gain_report, lean_help_report, lean_system_section,
-    LeanMode,
 };
 pub use prompt::{
     load_system_prompt, prepend_bullets, ContextFile, ProjectContext, PromptBuildError,

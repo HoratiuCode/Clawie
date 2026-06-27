@@ -269,7 +269,8 @@ impl LineEditor {
             let readline_res = if initial_text.is_empty() {
                 self.editor.readline(&full_prompt)
             } else {
-                self.editor.readline_with_initial(&full_prompt, (&initial_text, ""))
+                self.editor
+                    .readline_with_initial(&full_prompt, (&initial_text, ""))
             };
 
             match readline_res {
@@ -278,7 +279,9 @@ impl LineEditor {
                     if SLASH_MENU_REQUESTED.swap(false, Ordering::Relaxed) {
                         match self.open_slash_command_picker()? {
                             ReadOutcome::Submit(selection) => {
-                                if selection.starts_with("/model") || selection.starts_with("/theme") {
+                                if selection.starts_with("/model")
+                                    || selection.starts_with("/theme")
+                                {
                                     return Ok(ReadOutcome::Submit(selection));
                                 } else {
                                     initial_text = format!("{selection} ");
@@ -396,6 +399,7 @@ impl LineEditor {
         let picker = (|| -> io::Result<ReadOutcome> {
             let mut selected = 0usize;
             let mut offset = 0usize;
+            let mut query = String::new();
             let window_size = 8usize;
             let mut previous_lines = 0usize;
             let is_model_picker = items
@@ -412,27 +416,49 @@ impl LineEditor {
                 "🌶 Slash Menu"
             };
             loop {
-                let visible_end = items.len().min(offset + window_size);
-                let visible = &items[offset..visible_end];
+                let filtered_indices = filter_slash_menu_indices(&items, &query);
+                if selected >= filtered_indices.len() {
+                    selected = filtered_indices.len().saturating_sub(1);
+                }
+                if selected < offset {
+                    offset = selected;
+                }
+                if selected >= offset + window_size {
+                    offset = selected + 1 - window_size;
+                }
+                let visible_end = filtered_indices.len().min(offset + window_size);
+                let visible = &filtered_indices[offset..visible_end];
                 let subtitle = if is_model_picker {
-                    "Choose a model and press Enter"
+                    "Type to filter models, then press Enter"
                 } else if is_theme_picker {
-                    "Choose a theme and press Enter"
+                    "Type to filter themes, then press Enter"
                 } else {
-                    "Type a slash command and press Enter"
+                    "Type to filter slash commands, then press Enter"
                 };
-                let footer = "↑↓ move · Enter select · Esc cancel";
+                let query_line = if query.is_empty() {
+                    "Search: ".to_string()
+                } else {
+                    format!("Search: {query}")
+                };
+                let footer = "↑↓ move · Enter select · Backspace edit · Esc cancel";
                 let item_width = visible
                     .iter()
-                    .map(|item| item.label.chars().count() + 2)
+                    .map(|index| items[*index].label.chars().count() + 2)
                     .max()
                     .unwrap_or(0);
+                let empty_width = if filtered_indices.is_empty() {
+                    "No matches".chars().count() + 2
+                } else {
+                    0
+                };
                 let inner_width = title
                     .chars()
                     .count()
                     .max(subtitle.chars().count())
+                    .max(query_line.chars().count())
                     .max(footer.chars().count())
-                    .max(item_width);
+                    .max(item_width)
+                    .max(empty_width);
 
                 if previous_lines > 0 {
                     execute!(stdout, MoveUp(previous_lines as u16))?;
@@ -447,12 +473,33 @@ impl LineEditor {
                     ResetColor,
                     SetForegroundColor(Color::DarkGrey),
                     Print(format!("│ {:<width$} │\r\n", subtitle, width = inner_width)),
+                    Print(format!(
+                        "│ {:<width$} │\r\n",
+                        query_line,
+                        width = inner_width
+                    )),
                     ResetColor
                 )?;
 
-                for (index, item) in visible.iter().enumerate() {
+                if visible.is_empty() {
+                    execute!(
+                        stdout,
+                        Print("│   "),
+                        SetForegroundColor(Color::DarkGrey),
+                        Print(format!(
+                            "{:<width$}",
+                            "No matches",
+                            width = inner_width.saturating_sub(2)
+                        )),
+                        ResetColor,
+                        Print(" │\r\n")
+                    )?;
+                }
+
+                for (index, item_index) in visible.iter().enumerate() {
                     let actual_index = offset + index;
                     let is_selected = actual_index == selected;
+                    let item = &items[*item_index];
                     execute!(stdout, Print("│ "))?;
                     if is_selected {
                         execute!(
@@ -484,7 +531,7 @@ impl LineEditor {
                     ResetColor
                 )?;
 
-                previous_lines = visible.len() + 5;
+                previous_lines = visible.len().max(1) + 6;
                 stdout.flush()?;
 
                 let event = read()?;
@@ -497,19 +544,24 @@ impl LineEditor {
                             }
                         }
                         CrosstermKeyCode::Down => {
-                            if selected + 1 < items.len() {
+                            if selected + 1 < filtered_indices.len() {
                                 selected += 1;
                                 if selected >= offset + window_size {
                                     offset = selected + 1 - window_size;
                                 }
                             }
                         }
-                        CrosstermKeyCode::Enter | CrosstermKeyCode::Char(' ') => {
+                        CrosstermKeyCode::Enter => {
+                            if filtered_indices.is_empty() {
+                                continue;
+                            }
                             if previous_lines > 0 {
                                 execute!(stdout, MoveUp(previous_lines as u16))?;
                             }
                             execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
-                            return Ok(ReadOutcome::Submit(items[selected].value.clone()));
+                            return Ok(ReadOutcome::Submit(
+                                items[filtered_indices[selected]].value.clone(),
+                            ));
                         }
                         CrosstermKeyCode::Esc => {
                             if previous_lines > 0 {
@@ -517,6 +569,15 @@ impl LineEditor {
                             }
                             execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
                             return Ok(ReadOutcome::Cancel);
+                        }
+                        CrosstermKeyCode::Char('u')
+                            if key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
+                            query.clear();
+                            selected = 0;
+                            offset = 0;
                         }
                         CrosstermKeyCode::Char('c')
                             if key
@@ -528,6 +589,21 @@ impl LineEditor {
                             }
                             execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
                             return Ok(ReadOutcome::Cancel);
+                        }
+                        CrosstermKeyCode::Backspace => {
+                            query.pop();
+                            selected = 0;
+                            offset = 0;
+                        }
+                        CrosstermKeyCode::Char(ch)
+                            if key.modifiers.is_empty()
+                                || key
+                                    .modifiers
+                                    .contains(crossterm::event::KeyModifiers::SHIFT) =>
+                        {
+                            query.push(ch);
+                            selected = 0;
+                            offset = 0;
                         }
                         _ => {}
                     },
@@ -626,6 +702,29 @@ impl LineEditor {
     }
 }
 
+fn filter_slash_menu_indices(items: &[SlashMenuItem], query: &str) -> Vec<usize> {
+    let terms = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+
+    if terms.is_empty() {
+        return (0..items.len()).collect();
+    }
+
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let haystack = format!("{} {}", item.label, item.value).to_lowercase();
+            terms
+                .iter()
+                .all(|term| haystack.contains(term))
+                .then_some(index)
+        })
+        .collect()
+}
+
 fn format_theme_picker_label(theme: &str) -> String {
     match theme {
         "clawie1" => "clawie1  red + emoji".to_string(),
@@ -675,9 +774,9 @@ fn format_model_picker_label(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_model_picker_label, format_theme_picker_label, prompt_prefix,
-        render_input_status_bar, render_prompt_banner, slash_command_prefix, LineEditor,
-        SlashCommandHelper, SlashMenuItem,
+        filter_slash_menu_indices, format_model_picker_label, format_theme_picker_label,
+        prompt_prefix, render_input_status_bar, render_prompt_banner, slash_command_prefix,
+        LineEditor, SlashCommandHelper, SlashMenuItem,
     };
     use rustyline::completion::Completer;
     use rustyline::highlight::Highlighter;
@@ -809,6 +908,29 @@ mod tests {
                 "/status".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn slash_menu_filter_matches_values_and_labels_case_insensitively() {
+        let items = vec![
+            SlashMenuItem {
+                label: "/help".to_string(),
+                value: "/help".to_string(),
+            },
+            SlashMenuItem {
+                label: "OpenAI     gpt-4.1".to_string(),
+                value: "/model gpt-4.1".to_string(),
+            },
+            SlashMenuItem {
+                label: "Anthropic  claude-sonnet-4-6".to_string(),
+                value: "/model claude-sonnet-4-6".to_string(),
+            },
+        ];
+
+        assert_eq!(filter_slash_menu_indices(&items, ""), vec![0, 1, 2]);
+        assert_eq!(filter_slash_menu_indices(&items, "GPT"), vec![1]);
+        assert_eq!(filter_slash_menu_indices(&items, "model sonnet"), vec![2]);
+        assert!(filter_slash_menu_indices(&items, "missing").is_empty());
     }
 
     #[test]

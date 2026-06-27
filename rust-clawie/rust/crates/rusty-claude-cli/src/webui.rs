@@ -155,7 +155,11 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                 .and_then(|value| value.parse::<u32>().ok())
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing pid"))?;
             let log = instance_log(pid)?;
-            write_json_response(stream, "200 OK", &json!({"ok": true, "log": log}).to_string())
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({"ok": true, "log": log}).to_string(),
+            )
         }
         line if line.starts_with("GET /ws-log?") || line.starts_with("GET /ws-log ") => {
             let mut ws_key = None;
@@ -540,7 +544,12 @@ fn query_value(request_line: &str, key: &str) -> Option<String> {
 
 fn instance_log(pid: u32) -> io::Result<serde_json::Value> {
     let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "pid=,ppid=,stat=,etime=,lstart=,command="])
+        .args([
+            "-p",
+            &pid.to_string(),
+            "-o",
+            "pid=,ppid=,stat=,etime=,lstart=,command=",
+        ])
         .output()?;
     if !output.status.success() {
         return Err(io::Error::new(
@@ -595,9 +604,9 @@ fn run_instance_action(payload: &InstanceActionRequest) -> io::Result<()> {
         ));
     }
     let instances = running_clawie_instances()?;
-    let is_known_instance = instances
-        .iter()
-        .any(|instance| instance.get("pid").and_then(serde_json::Value::as_u64) == Some(payload.pid as u64));
+    let is_known_instance = instances.iter().any(|instance| {
+        instance.get("pid").and_then(serde_json::Value::as_u64) == Some(payload.pid as u64)
+    });
     if !is_known_instance {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,

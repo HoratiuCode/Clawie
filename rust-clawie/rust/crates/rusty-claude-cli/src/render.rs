@@ -1227,7 +1227,7 @@ mod tests {
     fn renders_pretty_diff_blocks() {
         let terminal_renderer = TerminalRenderer::new();
         let markdown_output = terminal_renderer.markdown_to_ansi(
-            "```diff\n- old_code();\n+ new_code();\n@@ hunk @@\ncontext_line\n```"
+            "```diff\n- old_code();\n+ new_code();\n@@ hunk @@\ncontext_line\n```",
         );
         let plain_text = strip_ansi(&markdown_output);
 
@@ -1241,9 +1241,8 @@ mod tests {
     #[test]
     fn renders_pretty_checklists_and_phases() {
         let terminal_renderer = TerminalRenderer::new();
-        let markdown_output = terminal_renderer.render_markdown(
-            "Phase 1: Planning\n- [x] Task one\n- [ ] Task two"
-        );
+        let markdown_output =
+            terminal_renderer.render_markdown("Phase 1: Planning\n- [x] Task one\n- [ ] Task two");
         let plain_text = strip_ansi(&markdown_output);
 
         assert!(plain_text.contains("Phase 1: Planning"));
