@@ -743,9 +743,64 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "prompt": { "type": "string" },
                     "subagent_type": { "type": "string" },
                     "name": { "type": "string" },
-                    "model": { "type": "string" }
+                    "model": { "type": "string" },
+                    "tools": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["description", "prompt"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "Subagent",
+            description: "Run a reusable named markdown subagent from ~/.claw/agents, .claw/agents, or .agents/agents.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent": { "type": "string" },
+                    "task": { "type": "string" },
+                    "model": { "type": "string" },
+                    "subagent_type": { "type": "string" },
+                    "tools": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["agent", "task"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "AgentWorkflow",
+            description: "Run reusable markdown subagents as a single task, parallel task set, or sequential chain.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent": { "type": "string" },
+                    "task": { "type": "string" },
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent": { "type": "string" },
+                                "task": { "type": "string" }
+                            },
+                            "required": ["agent", "task"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "chain": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent": { "type": "string" },
+                                "task": { "type": "string" }
+                            },
+                            "required": ["agent", "task"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::DangerFullAccess,
@@ -1409,6 +1464,8 @@ fn execute_tool_with_enforcer(
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
         "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
         "Agent" => from_value::<AgentInput>(input).and_then(run_agent),
+        "Subagent" => from_value::<SubagentInput>(input).and_then(run_subagent),
+        "AgentWorkflow" => from_value::<AgentWorkflowInput>(input).and_then(run_agent_workflow),
         "AgentList" => from_value::<AgentListInput>(input).and_then(run_agent_list),
         "ToolSearch" => from_value::<ToolSearchInput>(input).and_then(run_tool_search),
         "NotebookEdit" => from_value::<NotebookEditInput>(input).and_then(run_notebook_edit),
@@ -2281,6 +2338,14 @@ fn run_agent(input: AgentInput) -> Result<String, String> {
     to_pretty_json(execute_agent(input)?)
 }
 
+fn run_subagent(input: SubagentInput) -> Result<String, String> {
+    to_pretty_json(execute_subagent(input)?)
+}
+
+fn run_agent_workflow(input: AgentWorkflowInput) -> Result<String, String> {
+    to_pretty_json(execute_agent_workflow(input)?)
+}
+
 fn run_agent_list(input: AgentListInput) -> Result<String, String> {
     let agents = if input.include_terminal {
         global_runtime_agent_registry().all_agents()
@@ -2443,6 +2508,30 @@ struct AgentInput {
     subagent_type: Option<String>,
     name: Option<String>,
     model: Option<String>,
+    tools: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SubagentInput {
+    agent: String,
+    task: String,
+    model: Option<String>,
+    subagent_type: Option<String>,
+    tools: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AgentWorkflowTaskInput {
+    agent: String,
+    task: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentWorkflowInput {
+    agent: Option<String>,
+    task: Option<String>,
+    tasks: Option<Vec<AgentWorkflowTaskInput>>,
+    chain: Option<Vec<AgentWorkflowTaskInput>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3388,12 +3477,396 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
     Err(format!("unknown skill: {requested}"))
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct MarkdownAgentDefinition {
+    name: String,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subagent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<String>,
+    prompt: String,
+    path: String,
+    source: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SubagentOutput {
+    agent: MarkdownAgentDefinition,
+    task: String,
+    output: AgentOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentWorkflowOutput {
+    mode: String,
+    results: Vec<SubagentOutput>,
+}
+
 const DEFAULT_AGENT_MODEL: &str = "gpt-4.1";
 const DEFAULT_AGENT_SYSTEM_DATE: &str = "2026-03-31";
 const DEFAULT_AGENT_MAX_ITERATIONS: usize = 32;
 
+const DEFAULT_MARKDOWN_AGENTS: &[(&str, &str)] = &[
+    (
+        "scout",
+        r#"---
+name: scout
+description: Fast codebase recon that returns compressed context for handoff
+subagent_type: Explore
+model: gpt-4.1
+tools: read_file, glob_search, grep_search, bash
+---
+You are a scout subagent. Quickly investigate the codebase and return structured findings that another agent can use without rereading everything.
+
+Focus on relevant files, exact paths, important functions, and concise architecture notes. Do not modify files.
+"#,
+    ),
+    (
+        "reviewer",
+        r#"---
+name: reviewer
+description: Code review specialist for quality, regressions, and security analysis
+subagent_type: Verification
+model: gpt-4.1
+tools: read_file, glob_search, grep_search, bash
+---
+You are a senior code reviewer. Review changes for bugs, regressions, security risks, missing tests, and maintainability.
+
+Use read-only commands unless explicitly asked to fix. Return findings first with file paths and concrete evidence.
+"#,
+    ),
+    (
+        "planner",
+        r#"---
+name: planner
+description: Creates concrete implementation plans from requirements and context
+subagent_type: Plan
+model: gpt-4.1
+tools: read_file, glob_search, grep_search
+---
+You are a planning subagent. Analyze the task and produce a concrete implementation plan. Do not modify files.
+
+List files to inspect or change, expected edits, tests to run, and risks.
+"#,
+    ),
+    (
+        "worker",
+        r#"---
+name: worker
+description: General-purpose implementation subagent for bounded work
+subagent_type: General
+model: gpt-4.1
+---
+You are a worker subagent. Complete the delegated task autonomously within the available tools.
+
+Return what changed, files touched, verification performed, and anything the parent agent should know.
+"#,
+    ),
+];
+
 fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     execute_agent_with_spawn(input, spawn_agent_job)
+}
+
+fn execute_subagent(input: SubagentInput) -> Result<SubagentOutput, String> {
+    execute_subagent_with_spawn(input, spawn_agent_job)
+}
+
+fn execute_subagent_with_spawn<F>(
+    input: SubagentInput,
+    spawn_fn: F,
+) -> Result<SubagentOutput, String>
+where
+    F: FnOnce(AgentJob) -> Result<(), String>,
+{
+    let agent = resolve_markdown_agent(&input.agent)?;
+    let mut agent_input =
+        agent_input_from_markdown(&agent, &input.task, input.model, input.subagent_type);
+    if input.tools.is_some() {
+        agent_input.tools = input.tools;
+    }
+    let output = execute_agent_with_spawn(agent_input, spawn_fn)?;
+    Ok(SubagentOutput {
+        agent,
+        task: input.task,
+        output,
+    })
+}
+
+fn execute_agent_workflow(input: AgentWorkflowInput) -> Result<AgentWorkflowOutput, String> {
+    execute_agent_workflow_with_spawn(input, spawn_agent_job)
+}
+
+fn execute_agent_workflow_with_spawn<F>(
+    input: AgentWorkflowInput,
+    mut spawn_fn: F,
+) -> Result<AgentWorkflowOutput, String>
+where
+    F: FnMut(AgentJob) -> Result<(), String>,
+{
+    let has_single = input.agent.is_some() || input.task.is_some();
+    let has_tasks = input.tasks.as_ref().is_some_and(|tasks| !tasks.is_empty());
+    let has_chain = input.chain.as_ref().is_some_and(|chain| !chain.is_empty());
+    let mode_count = usize::from(has_single) + usize::from(has_tasks) + usize::from(has_chain);
+    if mode_count != 1 {
+        return Err(String::from(
+            "provide exactly one workflow mode: agent+task, tasks, or chain",
+        ));
+    }
+
+    if has_single {
+        let agent = input
+            .agent
+            .ok_or_else(|| String::from("agent is required for single mode"))?;
+        let task = input
+            .task
+            .ok_or_else(|| String::from("task is required for single mode"))?;
+        return Ok(AgentWorkflowOutput {
+            mode: String::from("single"),
+            results: vec![execute_subagent_with_spawn(
+                SubagentInput {
+                    agent,
+                    task,
+                    model: None,
+                    subagent_type: None,
+                    tools: None,
+                },
+                &mut spawn_fn,
+            )?],
+        });
+    }
+
+    if let Some(tasks) = input.tasks {
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            results.push(execute_subagent_with_spawn(
+                SubagentInput {
+                    agent: task.agent,
+                    task: task.task,
+                    model: None,
+                    subagent_type: None,
+                    tools: None,
+                },
+                &mut spawn_fn,
+            )?);
+        }
+        return Ok(AgentWorkflowOutput {
+            mode: String::from("parallel"),
+            results,
+        });
+    }
+
+    let mut previous = String::new();
+    let mut results = Vec::new();
+    for task in input.chain.unwrap_or_default() {
+        let prompt = task.task.replace("{previous}", &previous);
+        let mut result = execute_subagent_with_spawn(
+            SubagentInput {
+                agent: task.agent,
+                task: prompt,
+                model: None,
+                subagent_type: None,
+                tools: None,
+            },
+            &mut spawn_fn,
+        )?;
+        result.output = wait_for_agent_completion(result.output)?;
+        previous = std::fs::read_to_string(&result.output.output_file)
+            .unwrap_or_else(|_| format!("Previous output file: {}", result.output.output_file));
+        results.push(result);
+    }
+    Ok(AgentWorkflowOutput {
+        mode: String::from("chain"),
+        results,
+    })
+}
+
+fn agent_input_from_markdown(
+    agent: &MarkdownAgentDefinition,
+    task: &str,
+    model_override: Option<String>,
+    subagent_type_override: Option<String>,
+) -> AgentInput {
+    let prompt = format!(
+        "{}\n\n## Delegated task\n\n{}",
+        agent.prompt.trim(),
+        task.trim()
+    );
+    AgentInput {
+        description: agent.description.clone(),
+        prompt,
+        subagent_type: subagent_type_override.or_else(|| agent.subagent_type.clone()),
+        name: Some(agent.name.clone()),
+        model: model_override.or_else(|| agent.model.clone()),
+        tools: if agent.tools.is_empty() {
+            None
+        } else {
+            Some(agent.tools.clone())
+        },
+    }
+}
+
+fn resolve_markdown_agent(name: &str) -> Result<MarkdownAgentDefinition, String> {
+    ensure_default_markdown_agents()?;
+    let requested = name.trim();
+    if requested.is_empty() {
+        return Err(String::from("agent name must not be empty"));
+    }
+
+    let mut available = Vec::new();
+    for dir in markdown_agent_dirs()? {
+        if !dir.is_dir() {
+            continue;
+        }
+        let entries = std::fs::read_dir(&dir).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                continue;
+            }
+            if let Ok(agent) = parse_markdown_agent_file(&path, &dir) {
+                if agent.name == requested {
+                    return Ok(agent);
+                }
+                available.push(agent.name);
+            }
+        }
+    }
+    available.sort();
+    available.dedup();
+    Err(format!(
+        "unknown subagent `{requested}`. Available agents: {}",
+        if available.is_empty() {
+            "none".to_string()
+        } else {
+            available.join(", ")
+        }
+    ))
+}
+
+fn ensure_default_markdown_agents() -> Result<(), String> {
+    let user_dir = user_markdown_agent_dir()?;
+    std::fs::create_dir_all(&user_dir).map_err(|error| error.to_string())?;
+    for (name, contents) in DEFAULT_MARKDOWN_AGENTS {
+        let path = user_dir.join(format!("{name}.md"));
+        if path.exists() {
+            continue;
+        }
+        std::fs::write(path, contents.trim_start()).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn user_markdown_agent_dir() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| String::from("HOME is not configured"))?;
+    Ok(home.join(".claw").join("agents"))
+}
+
+fn markdown_agent_dirs() -> Result<Vec<PathBuf>, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    Ok(vec![
+        user_markdown_agent_dir()?,
+        cwd.join(".claw").join("agents"),
+        cwd.join(".agents").join("agents"),
+    ])
+}
+
+fn parse_markdown_agent_file(
+    path: &Path,
+    source_dir: &Path,
+) -> Result<MarkdownAgentDefinition, String> {
+    let contents = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let (frontmatter, body) = split_markdown_frontmatter(&contents)?;
+    let name = frontmatter
+        .get("name")
+        .cloned()
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| format!("missing agent name in {}", path.display()))?;
+    let description = frontmatter
+        .get("description")
+        .cloned()
+        .unwrap_or_else(|| format!("Reusable subagent `{name}`"));
+    let tools = frontmatter
+        .get("tools")
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|tool| !tool.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(MarkdownAgentDefinition {
+        name,
+        description,
+        subagent_type: frontmatter.get("subagent_type").cloned(),
+        model: frontmatter.get("model").cloned(),
+        tools,
+        prompt: body.trim().to_string(),
+        path: path.display().to_string(),
+        source: source_dir.display().to_string(),
+    })
+}
+
+fn split_markdown_frontmatter(
+    contents: &str,
+) -> Result<(BTreeMap<String, String>, String), String> {
+    let mut frontmatter = BTreeMap::new();
+    let normalized = contents.replace("\r\n", "\n");
+    if !normalized.starts_with("---\n") {
+        return Ok((frontmatter, normalized));
+    }
+    let rest = &normalized[4..];
+    let Some(end) = rest.find("\n---\n") else {
+        return Err(String::from("unterminated markdown frontmatter"));
+    };
+    let header = &rest[..end];
+    let body = rest[end + 5..].to_string();
+    for line in header.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim().trim_matches('"');
+        if !key.is_empty() && !value.is_empty() {
+            frontmatter.insert(key.to_string(), value.to_string());
+        }
+    }
+    Ok((frontmatter, body))
+}
+
+fn wait_for_agent_completion(mut output: AgentOutput) -> Result<AgentOutput, String> {
+    let timeout = std::env::var("CLAWD_AGENT_WORKFLOW_STEP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(300);
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    loop {
+        let manifest =
+            std::fs::read_to_string(&output.manifest_file).map_err(|error| error.to_string())?;
+        output = serde_json::from_str(&manifest).map_err(|error| error.to_string())?;
+        if matches!(output.status.as_str(), "completed" | "failed" | "stopped") {
+            return Ok(output);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "subagent `{}` did not complete within {timeout}s",
+                output.name
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn ensure_root_agent_registered() -> Result<(), String> {
@@ -3441,7 +3914,11 @@ where
         .unwrap_or_else(|| slugify_agent_name(&input.description));
     let created_at = iso8601_now();
     let system_prompt = build_agent_system_prompt(&normalized_subagent_type)?;
-    let allowed_tools = allowed_tools_for_subagent(&normalized_subagent_type);
+    let allowed_tools = input
+        .tools
+        .as_deref()
+        .map(allowed_tools_from_names)
+        .unwrap_or_else(|| allowed_tools_for_subagent(&normalized_subagent_type));
     ensure_root_agent_registered()?;
     let runtime_agent = global_runtime_agent_registry()
         .spawn_subagent(
@@ -3596,6 +4073,23 @@ fn resolve_agent_model(model: Option<&str>) -> String {
         .filter(|model| !model.is_empty())
         .unwrap_or(DEFAULT_AGENT_MODEL)
         .to_string()
+}
+
+fn allowed_tools_from_names(tools: &[String]) -> BTreeSet<String> {
+    let known = mvp_tool_specs()
+        .into_iter()
+        .map(|spec| (normalize_tool_name(spec.name), spec.name.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    tools
+        .iter()
+        .filter_map(|tool| {
+            let normalized = normalize_tool_name(tool);
+            known
+                .get(&normalized)
+                .cloned()
+                .or_else(|| (!normalized.is_empty()).then_some(normalized))
+        })
+        .collect()
 }
 
 fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
@@ -5366,10 +5860,12 @@ mod tests {
 
     use super::{
         agent_permission_policy, allowed_tools_for_subagent, classify_lane_failure,
-        execute_agent_with_spawn, execute_tool, final_assistant_text, mvp_tool_specs,
-        permission_mode_from_plugin, persist_agent_terminal_state, push_output_block,
-        run_task_packet, AgentInput, AgentJob, GlobalToolRegistry, LaneEventName, LaneFailureClass,
-        SubagentToolExecutor,
+        ensure_default_markdown_agents, execute_agent_with_spawn,
+        execute_agent_workflow_with_spawn, execute_subagent_with_spawn, execute_tool,
+        final_assistant_text, mvp_tool_specs, permission_mode_from_plugin,
+        persist_agent_terminal_state, push_output_block, resolve_markdown_agent, run_task_packet,
+        AgentInput, AgentJob, AgentWorkflowInput, AgentWorkflowTaskInput, GlobalToolRegistry,
+        LaneEventName, LaneFailureClass, SubagentInput, SubagentToolExecutor,
     };
     use api::OutputContentBlock;
     use runtime::{
@@ -6170,6 +6666,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("ship-audit".to_string()),
                 model: None,
+                tools: None,
             },
             move |job| {
                 *captured_for_spawn
@@ -6261,6 +6758,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("complete-task".to_string()),
                 model: Some("claude-sonnet-4-6".to_string()),
+                tools: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6319,6 +6817,7 @@ mod tests {
                 subagent_type: Some("Verification".to_string()),
                 name: Some("fail-task".to_string()),
                 model: None,
+                tools: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6365,6 +6864,7 @@ mod tests {
                 subagent_type: None,
                 name: Some("spawn-error".to_string()),
                 model: None,
+                tools: None,
             },
             |_| Err(String::from("thread creation failed")),
         )
@@ -6393,6 +6893,159 @@ mod tests {
 
         std::env::remove_var("CLAWD_AGENT_STORE");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn markdown_agents_seed_once_and_preserve_user_edits() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = temp_path("markdown-agent-home");
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+
+        ensure_default_markdown_agents().expect("defaults should seed");
+        let scout = home.join(".claw").join("agents").join("scout.md");
+        assert!(scout.exists());
+        std::fs::write(
+            &scout,
+            "---\nname: scout\ndescription: Custom scout\nsubagent_type: Explore\n---\nCustom prompt\n",
+        )
+        .expect("custom scout should be writable");
+
+        ensure_default_markdown_agents().expect("defaults should not overwrite");
+        let custom = std::fs::read_to_string(&scout).expect("custom scout should exist");
+        assert!(custom.contains("Custom prompt"));
+
+        let definition = resolve_markdown_agent("scout").expect("scout should resolve");
+        assert_eq!(definition.description, "Custom scout");
+        assert_eq!(definition.prompt, "Custom prompt");
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn subagent_uses_markdown_definition_for_native_agent_spawn() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = temp_path("subagent-home");
+        let store = temp_path("subagent-store");
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+        std::env::set_var("CLAWD_AGENT_STORE", &store);
+
+        let captured = Arc::new(Mutex::new(None::<AgentJob>));
+        let captured_for_spawn = Arc::clone(&captured);
+        let output = execute_subagent_with_spawn(
+            SubagentInput {
+                agent: "reviewer".to_string(),
+                task: "Review the current diff".to_string(),
+                model: None,
+                subagent_type: None,
+                tools: None,
+            },
+            move |job| {
+                *captured_for_spawn
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(job);
+                Ok(())
+            },
+        )
+        .expect("subagent should spawn");
+
+        assert_eq!(output.agent.name, "reviewer");
+        assert_eq!(output.output.name, "reviewer");
+        assert_eq!(output.output.subagent_type.as_deref(), Some("Verification"));
+        let captured_job = captured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("job should be captured");
+        assert!(captured_job.prompt.contains("senior code reviewer"));
+        assert!(captured_job.prompt.contains("Review the current diff"));
+        assert!(captured_job.allowed_tools.contains("read_file"));
+        assert!(captured_job.allowed_tools.contains("grep_search"));
+
+        std::env::remove_var("CLAWD_AGENT_STORE");
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(home);
+        let _ = std::fs::remove_dir_all(store);
+    }
+
+    #[test]
+    fn agent_workflow_chain_passes_previous_output_to_next_step() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = temp_path("workflow-home");
+        let store = temp_path("workflow-store");
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+        std::env::set_var("CLAWD_AGENT_STORE", &store);
+
+        let prompts = Arc::new(Mutex::new(Vec::<String>::new()));
+        let prompts_for_spawn = Arc::clone(&prompts);
+        let workflow = execute_agent_workflow_with_spawn(
+            AgentWorkflowInput {
+                agent: None,
+                task: None,
+                tasks: None,
+                chain: Some(vec![
+                    AgentWorkflowTaskInput {
+                        agent: "scout".to_string(),
+                        task: "Find auth code".to_string(),
+                    },
+                    AgentWorkflowTaskInput {
+                        agent: "planner".to_string(),
+                        task: "Plan from previous:\n{previous}".to_string(),
+                    },
+                ]),
+            },
+            move |job| {
+                prompts_for_spawn
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(job.prompt.clone());
+                persist_agent_terminal_state(
+                    &job.manifest,
+                    "completed",
+                    Some(&format!("Completed prompt:\n{}", job.prompt)),
+                    None,
+                )
+            },
+        )
+        .expect("workflow should complete");
+
+        assert_eq!(workflow.mode, "chain");
+        assert_eq!(workflow.results.len(), 2);
+        assert_eq!(workflow.results[0].agent.name, "scout");
+        assert_eq!(workflow.results[1].agent.name, "planner");
+        let prompts = prompts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[0].contains("Find auth code"));
+        assert!(prompts[1].contains("Completed prompt:"));
+        assert!(prompts[1].contains("Find auth code"));
+
+        std::env::remove_var("CLAWD_AGENT_STORE");
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(home);
+        let _ = std::fs::remove_dir_all(store);
     }
 
     #[test]
