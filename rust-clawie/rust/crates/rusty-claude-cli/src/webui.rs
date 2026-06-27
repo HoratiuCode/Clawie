@@ -1417,17 +1417,56 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       }
     }
 
-    .instance-page {
+    .instance-page,
+    .automations-page {
       width: 100%;
       max-width: 1400px;
       height: 100%;
+    }
+
+    .instance-page {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 320px;
       gap: 1rem;
     }
 
-    .instance-page[hidden], .workspace-content-wrap[hidden] {
+    .instance-page[hidden], .workspace-content-wrap[hidden], .automations-page[hidden] {
       display: none !important;
+    }
+
+    .automations-page {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .automations-coming-soon {
+      width: min(520px, 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--bg-card);
+      box-shadow: var(--panel-shadow);
+      padding: 3rem 2rem;
+      text-align: center;
+    }
+
+    .automations-emoji {
+      font-size: 4rem;
+      line-height: 1;
+      margin-bottom: 1rem;
+    }
+
+    .automations-coming-soon h2 {
+      margin: 0;
+      color: var(--text-primary);
+      font-size: 1.35rem;
+      letter-spacing: 0;
+    }
+
+    .automations-coming-soon p {
+      margin: 0.5rem 0 0;
+      color: var(--text-muted);
+      font-size: 0.9rem;
     }
 
     .instance-stage {
@@ -2665,6 +2704,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         <div class="view-switch" aria-label="Workspace view">
           <button class="view-tab active" id="code-view-tab" type="button" data-view="code">Code</button>
           <button class="view-tab" id="instance-view-tab" type="button" data-view="instance">Instance</button>
+          <button class="view-tab" id="automations-view-tab" type="button" data-view="automations">Automations</button>
         </div>
         <div class="usage-container" id="usage-container" style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.3rem 0.6rem; background: rgba(255, 255, 255, 0.01);">
           <span style="color: var(--text-muted);">Session Usage:</span>
@@ -2817,6 +2857,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             </div>
           </aside>
         </section>
+        <section class="automations-page" id="automations-page" hidden>
+          <div class="automations-coming-soon">
+            <div class="automations-emoji" aria-hidden="true">🦐</div>
+            <h2>Automations</h2>
+            <p>Coming soon</p>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -2966,8 +3013,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const chatSend = document.querySelector('#chat-send');
     const codeViewTab = document.querySelector('#code-view-tab');
     const instanceViewTab = document.querySelector('#instance-view-tab');
+    const automationsViewTab = document.querySelector('#automations-view-tab');
     const workspaceContentWrap = document.querySelector('.workspace-content-wrap');
     const instancePage = document.querySelector('#instance-page');
+    const automationsPage = document.querySelector('#automations-page');
     const instanceFolder = document.querySelector('#instance-folder');
     const instanceFile = document.querySelector('#instance-file');
     const instanceModel = document.querySelector('#instance-model');
@@ -3019,11 +3068,14 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     function setWorkspaceView(view) {
       const showInstance = view === 'instance';
-      workspaceContentWrap.hidden = showInstance;
+      const showAutomations = view === 'automations';
+      workspaceContentWrap.hidden = showInstance || showAutomations;
       instancePage.hidden = !showInstance;
-      codeViewTab.classList.toggle('active', !showInstance);
+      automationsPage.hidden = !showAutomations;
+      codeViewTab.classList.toggle('active', !showInstance && !showAutomations);
       instanceViewTab.classList.toggle('active', showInstance);
-      localStorage.setItem('clawie-workspace-view', showInstance ? 'instance' : 'code');
+      automationsViewTab.classList.toggle('active', showAutomations);
+      localStorage.setItem('clawie-workspace-view', showAutomations ? 'automations' : showInstance ? 'instance' : 'code');
       syncInstancePanel();
       if (showInstance) refreshInstances();
     }
@@ -3799,6 +3851,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     locationPath.addEventListener('change', refreshFiles);
     codeViewTab.addEventListener('click', () => setWorkspaceView('code'));
     instanceViewTab.addEventListener('click', () => setWorkspaceView('instance'));
+    automationsViewTab.addEventListener('click', () => setWorkspaceView('automations'));
     instanceRefresh.addEventListener('click', refreshInstances);
     instanceRoomGrid.addEventListener('click', event => {
       const monitor = event.target.closest('.instance-monitor');
@@ -4133,7 +4186,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     applyTheme(selectedTheme);
     updateUsageDisplay(0, 0);
     renderInstanceRooms([]);
-    setWorkspaceView(localStorage.getItem('clawie-workspace-view') === 'instance' ? 'instance' : 'code');
+    const savedWorkspaceView = localStorage.getItem('clawie-workspace-view');
+    setWorkspaceView(['code', 'instance', 'automations'].includes(savedWorkspaceView) ? savedWorkspaceView : 'code');
     initializeAgentDragging();
     setInterval(tickElapsedTimers, 1000);
     setInterval(() => {
