@@ -3216,7 +3216,7 @@ impl LiveCli {
 
         let right_lines = [
             "".to_string(),
-            format!("  {}", greetings[index].clone().italic().yellow()),
+            format!("  {}", greetings[index].clone().italic().white()),
             "".to_string(),
             "".to_string(),
         ];
