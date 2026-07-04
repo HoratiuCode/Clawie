@@ -4882,7 +4882,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     }
 
     function applyAppTheme(themeName) {
-      const supportedThemes = new Set(['dark', 'light', 'graphite', 'contrast']);
+      const supportedThemes = new Set([
+        'dark', 'light', 'graphite', 'contrast',
+        'tokyo-night', 'dracula', 'nord', 'synthwave'
+      ]);
       const nextTheme = supportedThemes.has(themeName) ? themeName : 'dark';
       document.documentElement.dataset.appTheme = nextTheme;
       localStorage.setItem('clawie-app-theme', nextTheme);
@@ -4890,7 +4893,17 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       if (settingsAppTheme) {
         settingsAppTheme.value = nextTheme;
       }
-      const themeColor = nextTheme === 'light' ? '#f8fafc' : nextTheme === 'graphite' ? '#111113' : '#09090b';
+      const bgColors = {
+        light: '#f8fafc',
+        graphite: '#111113',
+        'tokyo-night': '#1a1b26',
+        dracula: '#282a36',
+        nord: '#2e3440',
+        synthwave: '#2b213a',
+        contrast: '#000000',
+        dark: '#09090b'
+      };
+      const themeColor = bgColors[nextTheme] || '#09090b';
       const themeColorMeta = document.querySelector('meta[name="theme-color"]');
       if (themeColorMeta) {
         themeColorMeta.setAttribute('content', themeColor);
