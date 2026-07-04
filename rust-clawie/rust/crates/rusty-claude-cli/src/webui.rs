@@ -1136,7 +1136,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
   <meta name="theme-color" content="#09090b">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Clawie">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Fira+Code:wght@400;500;600&family=Source+Code+Pro:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
       color-scheme: dark;
@@ -2948,9 +2948,260 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         grid-template-columns: 1fr;
       }
     }
+
+    /* CURATED DESIGNER THEMES */
+    :root[data-app-theme="tokyo-night"] {
+      color-scheme: dark;
+      --bg-main: #1a1b26;
+      --bg-sidebar: #16161e;
+      --bg-card: #24283b;
+      --bg-input: #16161e;
+      --bg-code: #16161f;
+      --header-bg: rgba(26, 27, 38, 0.88);
+      --panel-overlay: rgba(0, 0, 0, 0.2);
+      --subtle-bg: rgba(255, 255, 255, 0.02);
+      --hover-bg: rgba(255, 255, 255, 0.04);
+      --inline-code-bg: rgba(255, 255, 255, 0.06);
+      --modal-backdrop: rgba(0, 0, 0, 0.65);
+      --panel-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+      --modal-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+      --editor-text: #a9b1d6;
+      --border: #383e5a;
+      --border-hover: #414868;
+      --text-primary: #c0caf5;
+      --text-secondary: #a9b1d6;
+      --text-muted: #565f89;
+      --text-disabled: #444b6a;
+    }
+
+    :root[data-app-theme="dracula"] {
+      color-scheme: dark;
+      --bg-main: #282a36;
+      --bg-sidebar: #21222c;
+      --bg-card: #2d313f;
+      --bg-input: #1e1f29;
+      --bg-code: #1e1f29;
+      --header-bg: rgba(33, 34, 44, 0.88);
+      --panel-overlay: rgba(0, 0, 0, 0.2);
+      --subtle-bg: rgba(255, 255, 255, 0.02);
+      --hover-bg: rgba(255, 255, 255, 0.04);
+      --inline-code-bg: rgba(255, 255, 255, 0.06);
+      --modal-backdrop: rgba(0, 0, 0, 0.65);
+      --panel-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+      --modal-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+      --editor-text: #f8f8f2;
+      --border: #44475a;
+      --border-hover: #6272a4;
+      --text-primary: #f8f8f2;
+      --text-secondary: #e2e2dc;
+      --text-muted: #6272a4;
+      --text-disabled: #44475a;
+    }
+
+    :root[data-app-theme="nord"] {
+      color-scheme: dark;
+      --bg-main: #2e3440;
+      --bg-sidebar: #242933;
+      --bg-card: #3b4252;
+      --bg-input: #242933;
+      --bg-code: #20242c;
+      --header-bg: rgba(36, 41, 51, 0.88);
+      --panel-overlay: rgba(0, 0, 0, 0.2);
+      --subtle-bg: rgba(255, 255, 255, 0.02);
+      --hover-bg: rgba(255, 255, 255, 0.04);
+      --inline-code-bg: rgba(255, 255, 255, 0.06);
+      --modal-backdrop: rgba(0, 0, 0, 0.65);
+      --panel-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+      --modal-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+      --editor-text: #eceff4;
+      --border: #4c566a;
+      --border-hover: #81a1c1;
+      --text-primary: #eceff4;
+      --text-secondary: #e5e9f0;
+      --text-muted: #8892b0;
+      --text-disabled: #4c566a;
+    }
+
+    :root[data-app-theme="synthwave"] {
+      color-scheme: dark;
+      --bg-main: #2b213a;
+      --bg-sidebar: #241b2f;
+      --bg-card: #34294f;
+      --bg-input: #241b2f;
+      --bg-code: #1c1424;
+      --header-bg: rgba(36, 27, 47, 0.88);
+      --panel-overlay: rgba(0, 0, 0, 0.2);
+      --subtle-bg: rgba(255, 255, 255, 0.02);
+      --hover-bg: rgba(255, 255, 255, 0.04);
+      --inline-code-bg: rgba(255, 255, 255, 0.06);
+      --modal-backdrop: rgba(0, 0, 0, 0.65);
+      --panel-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+      --modal-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+      --editor-text: #fede5d;
+      --border: #523c75;
+      --border-hover: #f92aad;
+      --text-primary: #f0efe2;
+      --text-secondary: #b3a7d4;
+      --text-muted: #8473a5;
+      --text-disabled: #523c75;
+    }
+
+    /* CUSTOM DYNAMIC FONTS */
+    :root[data-font-ui="inter"] {
+      --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+    }
+    :root[data-font-ui="outfit"] {
+      --font-ui: "Outfit", system-ui, -apple-system, sans-serif;
+    }
+    :root[data-font-ui="fira-sans"] {
+      --font-ui: "Fira Sans", system-ui, -apple-system, sans-serif;
+    }
+    :root[data-font-ui="system"] {
+      --font-ui: system-ui, -apple-system, sans-serif;
+    }
+
+    :root[data-font-code="jetbrains"] {
+      --font-code: "JetBrains Mono", ui-monospace, monospace;
+    }
+    :root[data-font-code="fira-code"] {
+      --font-code: "Fira Code", ui-monospace, monospace;
+    }
+    :root[data-font-code="source-code"] {
+      --font-code: "Source Code Pro", ui-monospace, monospace;
+    }
+    :root[data-font-code="monospace"] {
+      --font-code: ui-monospace, monospace;
+    }
+
+    /* COMPACT DENSITY SETTINGS */
+    :root[data-layout-density="compact"] {
+      --radius-lg: 6px;
+      --radius-md: 4px;
+      --radius-sm: 3px;
+    }
+    :root[data-layout-density="compact"] body {
+      font-size: 13px;
+    }
+    :root[data-layout-density="compact"] .sidebar {
+      width: 220px;
+    }
+    :root[data-layout-density="compact"] .file {
+      padding: 0.35rem 0.5rem !important;
+      font-size: 0.75rem;
+    }
+    :root[data-layout-density="compact"] .message {
+      padding: 0.5rem 0.75rem !important;
+    }
+    :root[data-layout-density="compact"] .message-content {
+      font-size: 0.82rem;
+    }
+    :root[data-layout-density="compact"] header {
+      padding: 0.5rem 1rem !important;
+      height: 48px;
+    }
+    :root[data-layout-density="compact"] .editor-header {
+      padding: 0.35rem 0.75rem !important;
+    }
+
+    /* SLIM SIDEBAR SETTINGS */
+    :root[data-sidebar-layout="slim"] .sidebar {
+      width: 68px !important;
+      padding: 1.25rem 0.5rem !important;
+      align-items: center;
+    }
+    :root[data-sidebar-layout="slim"] .sidebar-title h2,
+    :root[data-sidebar-layout="slim"] #current-folder span,
+    :root[data-sidebar-layout="slim"] .file span {
+      display: none !important;
+    }
+    :root[data-sidebar-layout="slim"] #current-folder {
+      justify-content: center;
+      padding: 0.5rem 0 !important;
+    }
+    :root[data-sidebar-layout="slim"] .file {
+      justify-content: center !important;
+      padding: 0.5rem 0 !important;
+    }
+    :root[data-sidebar-layout="slim"] .file svg {
+      width: 18px !important;
+      height: 18px !important;
+    }
+
+    /* AMBIENT GLOW ANIMATION */
+    .ambient-glow {
+      position: fixed;
+      width: 500px;
+      height: 500px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(var(--accent-rgb), 0.08) 0%, rgba(var(--accent-rgb), 0) 70%);
+      filter: blur(80px);
+      z-index: -1;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+    :root[data-ambient-glow="true"] .ambient-glow {
+      opacity: 1;
+    }
+    #ambient-glow-1 {
+      top: -150px;
+      left: -150px;
+      animation: float-glow-1 25s infinite alternate ease-in-out;
+    }
+    #ambient-glow-2 {
+      bottom: -200px;
+      right: -150px;
+      animation: float-glow-2 30s infinite alternate ease-in-out;
+    }
+    #ambient-glow-3 {
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 700px;
+      height: 700px;
+      background: radial-gradient(circle, rgba(var(--accent-rgb), 0.03) 0%, rgba(var(--accent-rgb), 0) 75%);
+    }
+    @keyframes float-glow-1 {
+      0% { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(150px, 100px) scale(1.15); }
+    }
+    @keyframes float-glow-2 {
+      0% { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(-120px, -100px) scale(0.9); }
+    }
+
+    /* RETRO CRT TERMINAL SCANLINES & GLOW */
+    :root[data-terminal-glow="true"] .log-body {
+      position: relative;
+      text-shadow: 0 0 4px rgba(134, 239, 172, 0.45);
+    }
+    :root[data-terminal-glow="true"] .log-body::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; bottom: 0; right: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.18) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* PULSATING STATUS AURA */
+    :root[data-status-pulsate="true"] #status.busy,
+    :root[data-status-pulsate="true"] #status.thinking {
+      animation: pulse-status-aura 1.5s infinite alternate ease-in-out;
+      box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.5);
+    }
+    @keyframes pulse-status-aura {
+      0% { box-shadow: 0 0 4px rgba(var(--accent-rgb), 0.3); }
+      100% { box-shadow: 0 0 16px rgba(var(--accent-rgb), 0.7); }
+    }
   </style>
 </head>
 <body>
+  <!-- Ambient background glow elements -->
+  <div class="ambient-glow" id="ambient-glow-1"></div>
+  <div class="ambient-glow" id="ambient-glow-2"></div>
+  <div class="ambient-glow" id="ambient-glow-3"></div>
   <div class="app">
     <!-- Sidebar -->
     <aside class="sidebar">
@@ -3212,15 +3463,75 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 <option value="light">Light</option>
                 <option value="graphite">Graphite</option>
                 <option value="contrast">High Contrast</option>
+                <option value="tokyo-night">Tokyo Night</option>
+                <option value="dracula">Dracula</option>
+                <option value="nord">Nord</option>
+                <option value="synthwave">Synthwave '84</option>
               </select>
             </div>
             <div class="settings-group">
               <label>Accent Color</label>
-              <div class="theme-options">
-                <button class="theme-opt orange active" type="button" data-color="orange" title="Orange"></button>
-                <button class="theme-opt blue" type="button" data-color="blue" title="Blue"></button>
-                <button class="theme-opt purple" type="button" data-color="purple" title="Purple"></button>
-                <button class="theme-opt green" type="button" data-color="green" title="Green"></button>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <div class="theme-options">
+                  <button class="theme-opt orange active" type="button" data-color="orange" title="Orange"></button>
+                  <button class="theme-opt blue" type="button" data-color="blue" title="Blue"></button>
+                  <button class="theme-opt purple" type="button" data-color="purple" title="Purple"></button>
+                  <button class="theme-opt green" type="button" data-color="green" title="Green"></button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
+                  <input type="checkbox" id="settings-custom-accent-toggle">
+                  <label for="settings-custom-accent-toggle" style="font-size: 0.65rem; text-transform: none; font-weight: normal; margin: 0; color: var(--text-muted);">Custom Color</label>
+                  <input type="color" id="settings-custom-accent-color" value="#f97316" style="width: 28px; height: 20px; padding: 0; border: none; border-radius: 3px; cursor: pointer; background: transparent;">
+                </div>
+              </div>
+            </div>
+            <div class="settings-group">
+              <label for="settings-font-ui">UI Font</label>
+              <select id="settings-font-ui">
+                <option value="inter">Inter (Default)</option>
+                <option value="outfit">Outfit</option>
+                <option value="fira-sans">Fira Sans</option>
+                <option value="system">System UI</option>
+              </select>
+            </div>
+            <div class="settings-group">
+              <label for="settings-font-code">Code Editor Font</label>
+              <select id="settings-font-code">
+                <option value="jetbrains">JetBrains Mono</option>
+                <option value="fira-code">Fira Code</option>
+                <option value="source-code">Source Code Pro</option>
+                <option value="monospace">System Monospace</option>
+              </select>
+            </div>
+            <div class="settings-group">
+              <label for="settings-layout-density">Layout Density</label>
+              <select id="settings-layout-density">
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </div>
+            <div class="settings-group">
+              <label for="settings-sidebar-layout">Sidebar Layout</label>
+              <select id="settings-sidebar-layout">
+                <option value="expanded">Expanded Sidebar</option>
+                <option value="slim">Slim Sidebar</option>
+              </select>
+            </div>
+            <div class="settings-group settings-wide" style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <label>Effects & Animations</label>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.25rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <input type="checkbox" id="settings-ambient-glow" checked>
+                  <label for="settings-ambient-glow" style="font-size: 0.72rem; text-transform: none; font-weight: normal; margin: 0; color: var(--text-secondary);">Ambient Background Glow Orbs</label>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <input type="checkbox" id="settings-terminal-glow">
+                  <label for="settings-terminal-glow" style="font-size: 0.72rem; text-transform: none; font-weight: normal; margin: 0; color: var(--text-secondary);">Terminal CRT Glow & Scanlines</label>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <input type="checkbox" id="settings-status-pulsate" checked>
+                  <label for="settings-status-pulsate" style="font-size: 0.72rem; text-transform: none; font-weight: normal; margin: 0; color: var(--text-secondary);">Pulsating Status Indicator Aura</label>
+                </div>
               </div>
             </div>
           </div>
@@ -4047,6 +4358,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         result.files.forEach(name => {
           const item = document.createElement('button');
           item.className = 'file';
+          item.title = name;
           if (activeFileName === name) item.classList.add('active');
           item.innerHTML = getFileIcon(name) + `<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${name}</span>`;
           item.addEventListener('click', () => loadFile(name, item));
@@ -4314,6 +4626,16 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const settingsConnStatusContainer = document.querySelector('#settings-conn-status-container');
     const settingsConnStatusText = document.querySelector('#settings-conn-status-text');
 
+    const settingsFontUi = document.querySelector('#settings-font-ui');
+    const settingsFontCode = document.querySelector('#settings-font-code');
+    const settingsLayoutDensity = document.querySelector('#settings-layout-density');
+    const settingsSidebarLayout = document.querySelector('#settings-sidebar-layout');
+    const settingsCustomAccentToggle = document.querySelector('#settings-custom-accent-toggle');
+    const settingsCustomAccentColor = document.querySelector('#settings-custom-accent-color');
+    const settingsAmbientGlow = document.querySelector('#settings-ambient-glow');
+    const settingsTerminalGlow = document.querySelector('#settings-terminal-glow');
+    const settingsStatusPulsate = document.querySelector('#settings-status-pulsate');
+
     const themes = {
       orange: { rgb: '249, 115, 22', hover: '#ea580c' },
       blue: { rgb: '37, 99, 235', hover: '#1d4ed8' },
@@ -4328,7 +4650,119 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     let selectedLeanMode = localStorage.getItem('clawie-lean-mode') || 'full';
     let selectedMaxTurns = parseInt(localStorage.getItem('clawie-max-turns') || '64', 10);
     let selectedTokenBudget = parseInt(localStorage.getItem('clawie-token-budget') || '12000', 10);
+
+    let selectedFontUi = localStorage.getItem('clawie-font-ui') || 'inter';
+    let selectedFontCode = localStorage.getItem('clawie-font-code') || 'jetbrains';
+    let selectedLayoutDensity = localStorage.getItem('clawie-layout-density') || 'comfortable';
+    let selectedSidebarLayout = localStorage.getItem('clawie-sidebar-layout') || 'expanded';
+    let selectedCustomAccentToggle = localStorage.getItem('clawie-custom-accent-toggle') === "true";
+    let selectedCustomAccentColor = localStorage.getItem('clawie-custom-accent-color') || '#f97316';
+    let selectedAmbientGlow = localStorage.getItem('clawie-ambient-glow') !== "false";
+    let selectedTerminalGlow = localStorage.getItem('clawie-terminal-glow') === "true";
+    let selectedStatusPulsate = localStorage.getItem('clawie-status-pulsate') !== "false";
+
     let deferredInstallPrompt = null;
+
+    // Appearance helpers
+    function applyFontUi(font) {
+      document.documentElement.dataset.fontUi = font;
+      localStorage.setItem('clawie-font-ui', font);
+      selectedFontUi = font;
+      if (settingsFontUi) settingsFontUi.value = font;
+    }
+
+    function applyFontCode(font) {
+      document.documentElement.dataset.fontCode = font;
+      localStorage.setItem('clawie-font-code', font);
+      selectedFontCode = font;
+      if (settingsFontCode) settingsFontCode.value = font;
+    }
+
+    function applyLayoutDensity(density) {
+      document.documentElement.dataset.layoutDensity = density;
+      localStorage.setItem('clawie-layout-density', density);
+      selectedLayoutDensity = density;
+      if (settingsLayoutDensity) settingsLayoutDensity.value = density;
+    }
+
+    function applySidebarLayout(layout) {
+      document.documentElement.dataset.sidebarLayout = layout;
+      localStorage.setItem('clawie-sidebar-layout', layout);
+      selectedSidebarLayout = layout;
+      if (settingsSidebarLayout) settingsSidebarLayout.value = layout;
+    }
+
+    function applyAmbientGlow(enabled) {
+      document.documentElement.dataset.ambientGlow = enabled ? "true" : "false";
+      localStorage.setItem('clawie-ambient-glow', enabled ? "true" : "false");
+      selectedAmbientGlow = enabled;
+      if (settingsAmbientGlow) settingsAmbientGlow.checked = enabled;
+    }
+
+    function applyTerminalGlow(enabled) {
+      document.documentElement.dataset.terminalGlow = enabled ? "true" : "false";
+      localStorage.setItem('clawie-terminal-glow', enabled ? "true" : "false");
+      selectedTerminalGlow = enabled;
+      if (settingsTerminalGlow) settingsTerminalGlow.checked = enabled;
+    }
+
+    function applyStatusPulsate(enabled) {
+      document.documentElement.dataset.statusPulsate = enabled ? "true" : "false";
+      localStorage.setItem('clawie-status-pulsate', enabled ? "true" : "false");
+      selectedStatusPulsate = enabled;
+      if (settingsStatusPulsate) settingsStatusPulsate.checked = enabled;
+    }
+
+    function applyCustomAccent(enabled, hexColor) {
+      selectedCustomAccentToggle = enabled;
+      selectedCustomAccentColor = hexColor;
+      localStorage.setItem('clawie-custom-accent-toggle', enabled ? "true" : "false");
+      localStorage.setItem('clawie-custom-accent-color', hexColor);
+
+      if (settingsCustomAccentToggle) settingsCustomAccentToggle.checked = enabled;
+      if (settingsCustomAccentColor) settingsCustomAccentColor.value = hexColor;
+
+      if (enabled && hexColor) {
+        const r = parseInt(hexColor.slice(1, 3), 16);
+        const g = parseInt(hexColor.slice(3, 5), 16);
+        const b = parseInt(hexColor.slice(5, 7), 16);
+        
+        document.documentElement.style.setProperty('--accent-rgb', `${r}, ${g}, ${b}`);
+        document.documentElement.style.setProperty('--accent-hover', adjustColorBrightness(hexColor, -15));
+        
+        document.querySelectorAll('.theme-opt').forEach(opt => opt.classList.remove('active'));
+      } else {
+        applyTheme(selectedTheme);
+      }
+    }
+
+    function adjustColorBrightness(hex, percent) {
+      let r = parseInt(hex.slice(1, 3), 16);
+      let g = parseInt(hex.slice(3, 5), 16);
+      let b = parseInt(hex.slice(5, 7), 16);
+
+      r = Math.min(255, Math.max(0, r + (r * percent / 100)));
+      g = Math.min(255, Math.max(0, g + (g * percent / 100)));
+      b = Math.min(255, Math.max(0, b + (b * percent / 100)));
+
+      const rHex = Math.round(r).toString(16).padStart(2, '0');
+      const gHex = Math.round(g).toString(16).padStart(2, '0');
+      const bHex = Math.round(b).toString(16).padStart(2, '0');
+      
+      return `#${rHex}${gHex}${bHex}`;
+    }
+
+    // INITIAL APPLICATION OF THEMES & APPEARANCE
+    applyAppTheme(selectedAppTheme);
+    applyTheme(selectedTheme);
+    applyFontUi(selectedFontUi);
+    applyFontCode(selectedFontCode);
+    applyLayoutDensity(selectedLayoutDensity);
+    applySidebarLayout(selectedSidebarLayout);
+    applyAmbientGlow(selectedAmbientGlow);
+    applyTerminalGlow(selectedTerminalGlow);
+    applyStatusPulsate(selectedStatusPulsate);
+    applyCustomAccent(selectedCustomAccentToggle, selectedCustomAccentColor);
 
     async function openSettingsPanel(focusTarget = 'openai') {
       try {
@@ -4360,8 +4794,17 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       settingsOpenAiKey.value = localStorage.getItem('clawie-openai-key') || '';
       settingsAnthropicKey.value = localStorage.getItem('clawie-anthropic-key') || '';
       settingsOpenAiUrl.value = localStorage.getItem('clawie-openai-url') || '';
+      
       applyAppTheme(selectedAppTheme);
       applyTheme(selectedTheme);
+      applyFontUi(selectedFontUi);
+      applyFontCode(selectedFontCode);
+      applyLayoutDensity(selectedLayoutDensity);
+      applySidebarLayout(selectedSidebarLayout);
+      applyAmbientGlow(selectedAmbientGlow);
+      applyTerminalGlow(selectedTerminalGlow);
+      applyStatusPulsate(selectedStatusPulsate);
+      applyCustomAccent(selectedCustomAccentToggle, selectedCustomAccentColor);
 
       settingsConnStatusContainer.style.display = 'none';
       settingsModal.hidden = false;
@@ -4539,6 +4982,15 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       }
     });
 
+    // Custom Accent Color listeners
+    settingsCustomAccentToggle.addEventListener('change', () => {
+      applyCustomAccent(settingsCustomAccentToggle.checked, settingsCustomAccentColor.value);
+    });
+
+    settingsCustomAccentColor.addEventListener('input', () => {
+      applyCustomAccent(settingsCustomAccentToggle.checked, settingsCustomAccentColor.value);
+    });
+
     settingsToggle.addEventListener('click', () => openSettingsPanel());
 
     settingsClose.addEventListener('click', () => {
@@ -4554,6 +5006,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     document.querySelectorAll('.theme-opt').forEach(opt => {
       opt.addEventListener('click', () => {
         applyTheme(opt.dataset.color);
+        applyCustomAccent(false, selectedCustomAccentColor);
       });
     });
 
@@ -4577,6 +5030,16 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-lean-mode', selectedLeanMode);
       localStorage.setItem('clawie-max-turns', selectedMaxTurns.toString());
       localStorage.setItem('clawie-token-budget', selectedTokenBudget.toString());
+
+      // Save appearance fields
+      applyFontUi(settingsFontUi.value);
+      applyFontCode(settingsFontCode.value);
+      applyLayoutDensity(settingsLayoutDensity.value);
+      applySidebarLayout(settingsSidebarLayout.value);
+      applyAmbientGlow(settingsAmbientGlow.checked);
+      applyTerminalGlow(settingsTerminalGlow.checked);
+      applyStatusPulsate(settingsStatusPulsate.checked);
+      applyCustomAccent(settingsCustomAccentToggle.checked, settingsCustomAccentColor.value);
 
       try {
         const payload = {
