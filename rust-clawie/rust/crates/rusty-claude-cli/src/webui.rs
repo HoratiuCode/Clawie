@@ -3195,6 +3195,302 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       0% { box-shadow: 0 0 4px rgba(var(--accent-rgb), 0.3); }
       100% { box-shadow: 0 0 16px rgba(var(--accent-rgb), 0.7); }
     }
+
+    /* AUTOMATION FLOW BUILDER STYLE */
+    .automations-page {
+      display: block !important;
+      padding: 1.5rem;
+      height: calc(100vh - 64px);
+      overflow: hidden;
+    }
+    .automation-builder-container {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 1.5rem;
+      height: 100%;
+      align-items: start;
+    }
+    .automation-canvas {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+      box-shadow: var(--panel-shadow);
+    }
+    .canvas-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255,255,255,0.01);
+    }
+    .canvas-header h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin: 0;
+    }
+    .canvas-subtitle {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+    .canvas-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .flow-nodes-list {
+      padding: 2rem;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+    }
+    .flow-node {
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      width: 480px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      overflow: hidden;
+      transition: border-color 0.2s ease, transform 0.2s ease;
+      animation: node-fade-in 0.25s ease-out;
+    }
+    @keyframes node-fade-in {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .flow-node:hover {
+      border-color: var(--border-hover);
+    }
+    .flow-node.trigger-node {
+      border-left: 4px solid var(--accent);
+    }
+    .flow-node.action-node {
+      border-left: 4px solid #3b82f6;
+    }
+    .node-header {
+      padding: 0.75rem 1rem;
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .node-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      background: rgba(var(--accent-rgb), 0.1);
+      color: var(--accent);
+      display: grid;
+      place-items: center;
+      font-size: 0.95rem;
+    }
+    .node-title-wrap {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
+    }
+    .node-label {
+      font-size: 0.6rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.05em;
+    }
+    .node-name {
+      font-size: 0.82rem;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .node-remove-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 0.25rem;
+      transition: color 0.15s ease;
+    }
+    .node-remove-btn:hover {
+      color: #ef4444;
+    }
+    .node-body {
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .node-body label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .node-body input, .node-body textarea {
+      width: 100%;
+      font-size: 0.78rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0.4rem 0.65rem;
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    .node-body input:focus, .node-body textarea:focus {
+      border-color: var(--accent);
+    }
+    
+    /* FLOW CONNECTOR ELEMENTS */
+    .flow-connector {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 64px;
+      position: relative;
+    }
+    .connector-line {
+      width: 2px;
+      height: 100%;
+      background: var(--border);
+    }
+    .add-node-btn {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: bold;
+      transition: all 0.15s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    .add-node-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      transform: translateY(-50%) scale(1.15);
+    }
+
+    /* RIGHT SIDEBAR: TOOLBOX */
+    .automation-toolbox {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      height: 100%;
+      overflow-y: auto;
+      box-shadow: var(--panel-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    .automation-toolbox h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin: 0;
+    }
+    .toolbox-desc {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin: 0;
+      line-height: 1.4;
+    }
+    .toolbox-section h4 {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin: 0 0 0.75rem 0;
+    }
+    .template-presets-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.5rem;
+    }
+    .template-chip {
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 0.65rem 0.85rem;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      width: 100%;
+    }
+    .template-chip:hover {
+      border-color: var(--accent);
+      transform: translateX(2px);
+      background: rgba(var(--accent-rgb), 0.02);
+    }
+    .template-chip strong {
+      font-size: 0.78rem;
+      color: var(--text-primary);
+    }
+    .template-chip span {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+    }
+    .tools-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .tool-item {
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 0.65rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tool-item:hover {
+      border-color: var(--border-hover);
+      transform: scale(1.02);
+    }
+    .tool-icon {
+      font-size: 1.15rem;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.02);
+      display: grid;
+      place-items: center;
+    }
+    .tool-item strong {
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      display: block;
+    }
+    .tool-item span {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -3388,10 +3684,141 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           </aside>
         </section>
         <section class="automations-page" id="automations-page" hidden>
-          <div class="automations-coming-soon">
-            <div class="automations-emoji" aria-hidden="true">🦐</div>
-            <h2>Automations</h2>
-            <p>Coming soon</p>
+          <div class="automation-builder-container">
+            <!-- Left Panel: Flow Canvas -->
+            <div class="automation-canvas">
+              <div class="canvas-header">
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <h3>Automation Flow Builder</h3>
+                  <span class="canvas-subtitle">Design your code guards, agents task-flows, and cron schedulers</span>
+                </div>
+                <div class="canvas-actions">
+                  <button class="settings-btn-secondary" id="auto-btn-clear" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Reset Flow</button>
+                  <button class="settings-btn-save" id="auto-btn-save" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Save Workflow</button>
+                </div>
+              </div>
+              
+              <!-- Flow Nodes List -->
+              <div class="flow-nodes-list" id="flow-nodes-list">
+                <!-- Trigger Node -->
+                <div class="flow-node trigger-node">
+                  <div class="node-header">
+                    <div class="node-icon">⚡</div>
+                    <div class="node-title-wrap">
+                      <span class="node-label">TRIGGER</span>
+                      <strong class="node-name" id="auto-trigger-name">On File Save</strong>
+                    </div>
+                  </div>
+                  <div class="node-body" id="auto-trigger-body">
+                    <label>File Glob Path Match</label>
+                    <input type="text" value="**/*.rs" placeholder="e.g. **/*.rs, **/*.py" id="auto-input-trigger-glob">
+                  </div>
+                </div>
+                
+                <!-- Connector Line -->
+                <div class="flow-connector" id="flow-connector-1">
+                  <div class="connector-line"></div>
+                  <button class="add-node-btn" type="button" id="btn-add-action-node" title="Add action block">+</button>
+                </div>
+
+                <!-- Action Node 1 -->
+                <div class="flow-node action-node" id="action-node-1">
+                  <div class="node-header">
+                    <div class="node-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;">🤖</div>
+                    <div class="node-title-wrap">
+                      <span class="node-label" style="color: #3b82f6;">ACTION (AI RUNNER)</span>
+                      <strong class="node-name">Clawie Code Auditor</strong>
+                    </div>
+                    <button class="node-remove-btn" type="button" onclick="removeActionNode('action-node-1', 'flow-connector-1')">&times;</button>
+                  </div>
+                  <div class="node-body">
+                    <label>AI Prompt Goal</label>
+                    <textarea rows="2" placeholder="Explain the goal for the agent..." id="auto-input-action-prompt">Audits the saved Rust file for code quality issues and ensures it complies with CLAWIE.md coding standards.</textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Panel: Toolbox -->
+            <div class="automation-toolbox">
+              <h3>Workflow Toolbox</h3>
+              <p class="toolbox-desc">Click template blocks below to inject them into the active canvas.</p>
+              
+              <!-- Preset Templates -->
+              <div class="toolbox-section">
+                <h4>1. Preset Quick Flows</h4>
+                <div class="template-presets-grid">
+                  <button class="template-chip" type="button" id="tpl-code-guard">
+                    <strong>Code Guard</strong>
+                    <span>Test and fix on save</span>
+                  </button>
+                  <button class="template-chip" type="button" id="tpl-auto-sync">
+                    <strong>Daily Commit Sync</strong>
+                    <span>Auto-commit summaries</span>
+                  </button>
+                  <button class="template-chip" type="button" id="tpl-cron-runner">
+                    <strong>Cron Runner</strong>
+                    <span>Timed folder tasks</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Available Triggers -->
+              <div class="toolbox-section" style="margin-top: 1.25rem;">
+                <h4>2. Triggers</h4>
+                <div class="tools-grid">
+                  <div class="tool-item" id="tool-trigger-file">
+                    <span class="tool-icon">📁</span>
+                    <div>
+                      <strong>On File Save</strong>
+                      <span>Triggers on file edits</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-trigger-cron">
+                    <span class="tool-icon">⏱️</span>
+                    <div>
+                      <strong>Cron Schedule</strong>
+                      <span>Interval-based task</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-trigger-git">
+                    <span class="tool-icon">🐙</span>
+                    <div>
+                      <strong>Git Pre-commit</strong>
+                      <span>Guard local commits</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Available Actions -->
+              <div class="toolbox-section" style="margin-top: 1.25rem;">
+                <h4>3. Actions</h4>
+                <div class="tools-grid">
+                  <div class="tool-item" id="tool-action-agent">
+                    <span class="tool-icon" style="color: #3b82f6;">🤖</span>
+                    <div>
+                      <strong>Clawie AI Agent</strong>
+                      <span>Instruct autonomous coder</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-bash">
+                    <span class="tool-icon" style="color: #10b981;">💻</span>
+                    <div>
+                      <strong>Shell Script</strong>
+                      <span>Execute a terminal command</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-notify">
+                    <span class="tool-icon" style="color: #f59e0b;">✉️</span>
+                    <div>
+                      <strong>Send Notification</strong>
+                      <span>Emit system sound or alert</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </main>
@@ -5426,6 +5853,197 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     if (localStorage.getItem('clawie-folders-collapsed') === 'true') {
       rightSidebar.classList.add('collapsed');
     }
+
+    // AUTOMATIONS FLOW BUILDER INTERACTIVE CONTROLLER
+    const flowNodesList = document.querySelector('#flow-nodes-list');
+    const autoTriggerName = document.querySelector('#auto-trigger-name');
+    const autoTriggerBody = document.querySelector('#auto-trigger-body');
+    const autoBtnClear = document.querySelector('#auto-btn-clear');
+    const autoBtnSave = document.querySelector('#auto-btn-save');
+    const btnAddActionNode = document.querySelector('#btn-add-action-node');
+
+    let actionNodeCounter = 1;
+
+    // Helper: Remove action node
+    window.removeActionNode = function(nodeId, connectorId) {
+      const node = document.getElementById(nodeId);
+      const conn = document.getElementById(connectorId);
+      if (node) node.remove();
+      if (conn) conn.remove();
+    };
+
+    // Helper: Append Action Node
+    window.appendActionNode = function(type, value = '', customTitle = '') {
+      actionNodeCounter++;
+      const currentId = `action-node-${actionNodeCounter}`;
+      const connId = `flow-connector-${actionNodeCounter}`;
+      
+      // Connector HTML
+      const connector = document.createElement('div');
+      connector.className = 'flow-connector';
+      connector.id = connId;
+      connector.innerHTML = `
+        <div class="connector-line"></div>
+        <button class="add-node-btn" type="button" onclick="appendActionNode('ai-agent')" title="Add action block">+</button>
+      `;
+
+      // Node HTML
+      const node = document.createElement('div');
+      node.className = 'flow-node action-node';
+      node.id = currentId;
+
+      let icon = '🤖';
+      let title = customTitle || 'Clawie AI Agent';
+      let label = 'ACTION (AI RUNNER)';
+      let labelColor = '#3b82f6';
+      let bodyHtml = '';
+
+      if (type === 'ai-agent') {
+        icon = '🤖';
+        title = customTitle || 'Clawie AI Agent';
+        label = 'ACTION (AI RUNNER)';
+        labelColor = '#3b82f6';
+        bodyHtml = `
+          <label>AI Prompt Goal</label>
+          <textarea rows="2" placeholder="Explain the goal for the agent..." class="auto-node-val">${value || 'Audits code changes and fixes quality warnings.'}</textarea>
+        `;
+      } else if (type === 'bash') {
+        icon = '💻';
+        title = customTitle || 'Execute Shell Script';
+        label = 'ACTION (SHELL COMMAND)';
+        labelColor = '#10b981';
+        bodyHtml = `
+          <label>Bash Command</label>
+          <input type="text" placeholder="e.g. cargo test, npm test" class="auto-node-val" value="${value || 'cargo test'}">
+        `;
+      } else if (type === 'notify') {
+        icon = '✉️';
+        title = customTitle || 'Send Notification';
+        label = 'ACTION (NOTIFICATION)';
+        labelColor = '#f59e0b';
+        bodyHtml = `
+          <label>Notification Message</label>
+          <input type="text" placeholder="e.g. Workflow complete!" class="auto-node-val" value="${value || 'Automation workflow executed successfully!'}">
+        `;
+      }
+
+      node.innerHTML = `
+        <div class="node-header">
+          <div class="node-icon" style="background: rgba(255,255,255,0.03); color: ${labelColor};">${icon}</div>
+          <div class="node-title-wrap">
+            <span class="node-label" style="color: ${labelColor};">${label}</span>
+            <strong class="node-name">${title}</strong>
+          </div>
+          <button class="node-remove-btn" type="button" onclick="removeActionNode('${currentId}', '${connId}')">&times;</button>
+        </div>
+        <div class="node-body">
+          ${bodyHtml}
+        </div>
+      `;
+
+      flowNodesList.appendChild(connector);
+      flowNodesList.appendChild(node);
+      node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+
+    // Set Trigger Type
+    function setTriggerType(type) {
+      if (type === 'file') {
+        autoTriggerName.textContent = 'On File Save';
+        autoTriggerBody.innerHTML = `
+          <label>File Glob Path Match</label>
+          <input type="text" value="**/*.rs" placeholder="e.g. **/*.rs, **/*.py" id="auto-input-trigger-glob">
+        `;
+      } else if (type === 'cron') {
+        autoTriggerName.textContent = 'Cron Schedule';
+        autoTriggerBody.innerHTML = `
+          <label>Cron Expression</label>
+          <input type="text" value="*/30 * * * *" placeholder="e.g. */15 * * * *" id="auto-input-trigger-cron">
+        `;
+      } else if (type === 'git') {
+        autoTriggerName.textContent = 'Git Pre-commit';
+        autoTriggerBody.innerHTML = `
+          <label>Git Hook Stage</label>
+          <input type="text" value="pre-commit" readonly id="auto-input-trigger-git">
+        `;
+      }
+    }
+
+    // Bind Add Node Button
+    if (btnAddActionNode) {
+      btnAddActionNode.addEventListener('click', () => {
+        appendActionNode('ai-agent');
+      });
+    }
+
+    // Bind Tools Trigger clicks
+    document.querySelector('#tool-trigger-file').addEventListener('click', () => setTriggerType('file'));
+    document.querySelector('#tool-trigger-cron').addEventListener('click', () => setTriggerType('cron'));
+    document.querySelector('#tool-trigger-git').addEventListener('click', () => setTriggerType('git'));
+
+    // Bind Tools Action clicks
+    document.querySelector('#tool-action-agent').addEventListener('click', () => appendActionNode('ai-agent'));
+    document.querySelector('#tool-action-bash').addEventListener('click', () => appendActionNode('bash'));
+    document.querySelector('#tool-action-notify').addEventListener('click', () => appendActionNode('notify'));
+
+    // Bind Clear button
+    autoBtnClear.addEventListener('click', () => {
+      // Remove all elements after the first trigger node
+      const children = Array.from(flowNodesList.children);
+      for (let i = 1; i < children.length; i++) {
+        children[i].remove();
+      }
+      
+      // Re-create connector
+      const connector = document.createElement('div');
+      connector.className = 'flow-connector';
+      connector.id = 'flow-connector-1';
+      connector.innerHTML = `
+        <div class="connector-line"></div>
+        <button class="add-node-btn" type="button" id="btn-add-action-node" title="Add action block">+</button>
+      `;
+      flowNodesList.appendChild(connector);
+      
+      // Rebind newly created btnAddActionNode
+      document.querySelector('#btn-add-action-node').addEventListener('click', () => {
+        appendActionNode('ai-agent');
+      });
+
+      setStatus('Automation canvas reset', 'saved');
+    });
+
+    // Preset Templates Loader
+    document.querySelector('#tpl-code-guard').addEventListener('click', () => {
+      autoBtnClear.click();
+      setTriggerType('file');
+      document.querySelector('#auto-input-trigger-glob').value = '**/*.rs';
+      appendActionNode('bash', 'cargo test', 'Run Tests');
+      appendActionNode('ai-agent', 'Fix all compile errors and failing cargo test warnings found in the repository.', 'Clawie Auto-Fixer');
+      setStatus('Loaded "Code Guard" template', 'saved');
+    });
+
+    document.querySelector('#tpl-auto-sync').addEventListener('click', () => {
+      autoBtnClear.click();
+      setTriggerType('git');
+      appendActionNode('ai-agent', 'Analyze all staged files in git and generate a detailed commit description using standard conventional commits guidelines.', 'Clawie Commit Summarizer');
+      appendActionNode('notify', 'Commit description generated and staged.', 'Emit Alert Notification');
+      setStatus('Loaded "Daily Commit Sync" template', 'saved');
+    });
+
+    document.querySelector('#tpl-cron-runner').addEventListener('click', () => {
+      autoBtnClear.click();
+      setTriggerType('cron');
+      document.querySelector('#auto-input-trigger-cron').value = '0 9 * * *';
+      appendActionNode('bash', './scripts/daily-backup.sh', 'Execute Backup Script');
+      appendActionNode('notify', 'Daily file sync completed successfully.', 'Emit Alert Notification');
+      setStatus('Loaded "Cron Runner" template', 'saved');
+    });
+
+    // Save Button
+    autoBtnSave.addEventListener('click', () => {
+      const triggerName = autoTriggerName.textContent;
+      setStatus(`Automation workflow "${triggerName}" activated successfully!`, 'saved');
+    });
   </script>
 </body>
 </html>"##;
