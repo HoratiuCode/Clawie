@@ -107,6 +107,12 @@ pub enum SlashCommand {
         target: Option<String>,
     },
     Chat,
+    Steer {
+        message: String,
+    },
+    FollowUp {
+        message: String,
+    },
     Memory,
     Init,
     WebUi,
@@ -341,6 +347,12 @@ pub fn validate_slash_command_input(
             validate_no_args(command, &args)?;
             SlashCommand::Chat
         }
+        "steer" => SlashCommand::Steer {
+            message: require_remainder(command, remainder, "<message>")?,
+        },
+        "follow-up" | "followup" => SlashCommand::FollowUp {
+            message: require_remainder(command, remainder, "<message>")?,
+        },
         "memory" => {
             validate_no_args(command, &args)?;
             SlashCommand::Memory
@@ -2496,6 +2508,8 @@ pub fn handle_slash_command(
         | SlashCommand::Config { .. }
         | SlashCommand::Mcp { .. }
         | SlashCommand::Chat
+        | SlashCommand::Steer { .. }
+        | SlashCommand::FollowUp { .. }
         | SlashCommand::Memory
         | SlashCommand::Init
         | SlashCommand::WebUi
@@ -2799,6 +2813,24 @@ mod tests {
         );
         assert_eq!(SlashCommand::parse("/chat"), Ok(Some(SlashCommand::Chat)));
         assert_eq!(
+            SlashCommand::parse("/steer add tests next"),
+            Ok(Some(SlashCommand::Steer {
+                message: "add tests next".to_string()
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/follow-up then run tests"),
+            Ok(Some(SlashCommand::FollowUp {
+                message: "then run tests".to_string()
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/followup then commit"),
+            Ok(Some(SlashCommand::FollowUp {
+                message: "then commit".to_string()
+            }))
+        );
+        assert_eq!(
             SlashCommand::parse("/memory"),
             Ok(Some(SlashCommand::Memory))
         );
@@ -3001,6 +3033,9 @@ mod tests {
         assert!(help.contains("/resume <session-path>"));
         assert!(help.contains("/config [env|hooks|model|provider|plugins]"));
         assert!(help.contains("/mcp [list|show <server>|help]"));
+        assert!(help.contains("/steer <message>"));
+        assert!(help.contains("/follow-up <message>"));
+        assert!(help.contains("aliases: /followup"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
         assert!(help.contains("/webui"));
@@ -3017,7 +3052,7 @@ mod tests {
         assert!(help.contains("/skills [list|install <path>|add <name> :: <instructions>|help]"));
         assert!(help.contains("/lean [lite|full|ultra|off]"));
         assert!(help.contains("/lean-review"));
-        assert_eq!(slash_command_specs().len(), 150);
+        assert_eq!(slash_command_specs().len(), 152);
         assert!(resume_supported_slash_commands().len() >= 42);
     }
 

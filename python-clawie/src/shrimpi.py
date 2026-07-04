@@ -8,8 +8,6 @@ from pathlib import Path
 
 DEFAULT_SCAN_ROOT = Path('.')
 _MARKER_PATTERN = re.compile(r'\b(TODO|FIXME)\b', re.IGNORECASE)
-_BROAD_EXCEPTION_MESSAGE = 'Broad exception handler should be narrowed and preserve context'
-_TODO_MESSAGE = 'Marker should be resolved before ship'
 
 
 @dataclass(frozen=True)
@@ -37,16 +35,16 @@ class ShrimpiReport:
 
     def as_markdown(self, limit: int = 20) -> str:
         lines = [
-            '# Shrimpi Report',
+            '# Shrimpi Shipie Notes',
             '',
-            '## Pre-ship',
+            '## Before Ship',
             f'- Scan roots: {", ".join(self.roots) if self.roots else "none"}',
             f'- Files scanned: {self.scanned_files}',
             f'- Clean files: {self.clean_files}',
             f'- Findings: {len(self.findings)}',
-            f'- Ship-ready: {self.ready_to_ship}',
+            f'- Ready to ship: {self.ready_to_ship}',
             '',
-            '## Findings',
+            '## What Found',
         ]
         if self.findings:
             for finding in self.findings[:limit]:
@@ -56,7 +54,7 @@ class ShrimpiReport:
                 )
         else:
             lines.append('- none')
-        lines.extend(['', '## Checks Passed'])
+        lines.extend(['', '## What Not Found'])
         if self.passed_checks:
             lines.extend(f'- {check}' for check in self.passed_checks)
         else:
@@ -64,16 +62,16 @@ class ShrimpiReport:
         suggestions = _dedupe(
             finding.suggestion for finding in self.findings if finding.suggestion
         )
-        lines.extend(['', '## Recommended Fixes'])
+        lines.extend(['', '## Modifications'])
         if suggestions:
             lines.extend(f'- {suggestion}' for suggestion in suggestions[:limit])
         else:
             lines.append('- none')
-        lines.extend(['', '## Status'])
+        lines.extend(['', '## After Ship'])
         if self.ready_to_ship:
-            lines.append('- Ready for ship: yes')
+            lines.append('- Shipie status: ready')
         else:
-            lines.append('- Ready for ship: no')
+            lines.append('- Shipie status: blocked until the findings above are cleared')
         if self.blocked_checks:
             lines.extend(['', 'Blocked checks:'])
             lines.extend(f'- {check}' for check in self.blocked_checks)

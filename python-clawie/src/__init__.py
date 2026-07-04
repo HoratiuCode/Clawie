@@ -2,8 +2,8 @@
 
 from .commands import PORTED_COMMANDS, build_command_backlog
 from .artifact_store import Artifact, ArtifactMetadata, ArtifactStore
-from .parity_audit import ParityAuditResult, run_parity_audit
 from .memory_store import WorkspaceMemory
+from .parity_audit import ParityAuditResult, run_parity_audit
 from .permissions import PermissionAction, PermissionGrant, PermissionStore
 from .port_manifest import PortManifest, build_port_manifest
 from .query_engine import QueryEnginePort, TurnResult

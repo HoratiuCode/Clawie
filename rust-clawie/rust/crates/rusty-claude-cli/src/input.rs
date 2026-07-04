@@ -23,6 +23,7 @@ use rustyline::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadOutcome {
     Submit(String),
+    FollowUp(String),
     Cancel,
     Exit,
 }
@@ -34,6 +35,7 @@ struct SlashMenuItem {
 }
 
 static SLASH_MENU_REQUESTED: AtomicBool = AtomicBool::new(false);
+static FOLLOW_UP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub fn prompt_prefix() -> &'static str {
     "📁 clawie › "
@@ -54,6 +56,7 @@ pub fn render_prompt_banner() -> String {
         "📁 Clawie v2".to_string(),
         format!("Prompt              {}", prompt_prefix()),
         "Tab                 opens the slash menu".to_string(),
+        "Alt+Enter           queues a follow-up".to_string(),
         "Shift+Enter         inserts a newline".to_string(),
         "Ctrl+J              inserts a newline".to_string(),
     ];
@@ -190,6 +193,21 @@ impl ConditionalEventHandler for SlashTabMenuEventHandler {
     }
 }
 
+struct FollowUpEventHandler;
+
+impl ConditionalEventHandler for FollowUpEventHandler {
+    fn handle(
+        &self,
+        _evt: &Event,
+        _n: rustyline::RepeatCount,
+        _positive: bool,
+        _ctx: &EventContext,
+    ) -> Option<Cmd> {
+        FOLLOW_UP_REQUESTED.store(true, Ordering::Relaxed);
+        Some(Cmd::AcceptLine)
+    }
+}
+
 pub struct LineEditor {
     prompt: String,
     model: String,
@@ -208,6 +226,10 @@ impl LineEditor {
         editor.set_helper(Some(SlashCommandHelper::new(completions)));
         editor.bind_sequence(KeyEvent(KeyCode::Char('J'), Modifiers::CTRL), Cmd::Newline);
         editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::SHIFT), Cmd::Newline);
+        editor.bind_sequence(
+            KeyEvent(KeyCode::Enter, Modifiers::ALT),
+            EventHandler::Conditional(Box::new(FollowUpEventHandler)),
+        );
         editor.bind_sequence(
             KeyEvent::from('/'),
             EventHandler::Conditional(Box::new(SlashMenuEventHandler)),
@@ -262,6 +284,7 @@ impl LineEditor {
             };
 
             SLASH_MENU_REQUESTED.store(false, Ordering::Relaxed);
+            FOLLOW_UP_REQUESTED.store(false, Ordering::Relaxed);
             if let Some(helper) = self.editor.helper_mut() {
                 helper.reset_current_line();
             }
@@ -274,7 +297,12 @@ impl LineEditor {
             };
 
             match readline_res {
-                Ok(line) => return Ok(ReadOutcome::Submit(line)),
+                Ok(line) => {
+                    if FOLLOW_UP_REQUESTED.swap(false, Ordering::Relaxed) {
+                        return Ok(ReadOutcome::FollowUp(line));
+                    }
+                    return Ok(ReadOutcome::Submit(line));
+                }
                 Err(ReadlineError::Interrupted) => {
                     if SLASH_MENU_REQUESTED.swap(false, Ordering::Relaxed) {
                         match self.open_slash_command_picker()? {
@@ -614,7 +642,7 @@ impl LineEditor {
 
         disable_raw_mode()?;
         match picker? {
-            ReadOutcome::Submit(value) => Ok(Some(value)),
+            ReadOutcome::Submit(value) | ReadOutcome::FollowUp(value) => Ok(Some(value)),
             ReadOutcome::Cancel | ReadOutcome::Exit => Ok(None),
         }
     }

@@ -68,8 +68,8 @@ class RuntimeSession:
         if self.memory_code_references:
             lines.extend(f'- code ref: {reference}' for reference in self.memory_code_references)
         lines.extend([
-            '',
             '## Routed Matches',
+            '',
         ])
         if self.routed_matches:
             lines.extend(

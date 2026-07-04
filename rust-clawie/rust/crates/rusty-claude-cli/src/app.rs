@@ -206,6 +206,12 @@ impl CliApp {
                     }
                     self.handle_submission(&input, &mut io::stdout())?;
                 }
+                ReadOutcome::FollowUp(input) => {
+                    if input.trim().is_empty() {
+                        continue;
+                    }
+                    self.handle_submission(&input, &mut io::stdout())?;
+                }
                 ReadOutcome::Cancel => continue,
                 ReadOutcome::Exit => break,
             }

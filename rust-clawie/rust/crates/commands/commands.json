@@ -977,6 +977,24 @@
     "category": "Other"
   },
   {
+    "name": "steer",
+    "aliases": [],
+    "summary": "Queue a message for the next immediate agent turn",
+    "argument_hint": "<message>",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "follow-up",
+    "aliases": [
+      "followup"
+    ],
+    "summary": "Queue a message to run after the agent finishes",
+    "argument_hint": "<message>",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
     "name": "focus",
     "aliases": [],
     "summary": "Focus context on specific files or directories",

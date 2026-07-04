@@ -12,7 +12,7 @@ mod render;
 mod setup_wizard;
 mod webui;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -2097,6 +2097,8 @@ fn run_resume_command(
         | SlashCommand::Ultraplan { .. }
         | SlashCommand::Teleport { .. }
         | SlashCommand::DebugToolCall { .. }
+        | SlashCommand::Steer { .. }
+        | SlashCommand::FollowUp { .. }
         | SlashCommand::LeanReview
         | SlashCommand::LeanAudit
         | SlashCommand::LeanDebt
@@ -2212,6 +2214,16 @@ fn run_repl(
                 }
                 editor.push_history(input);
                 cli.run_turn(&trimmed)?;
+                cli.drain_queued_turns()?;
+            }
+            input::ReadOutcome::FollowUp(input) => {
+                let trimmed = input.trim().to_string();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                editor.push_history(input);
+                cli.enqueue_follow_up(trimmed);
+                cli.drain_queued_turns()?;
             }
             input::ReadOutcome::Cancel => {}
             input::ReadOutcome::Exit => {
@@ -2247,6 +2259,8 @@ struct LiveCli {
     system_prompt: Vec<String>,
     runtime: BuiltRuntime,
     session: SessionHandle,
+    steer_queue: VecDeque<String>,
+    follow_up_queue: VecDeque<String>,
 }
 
 struct RuntimePluginState {
@@ -3135,6 +3149,8 @@ impl LiveCli {
             system_prompt,
             runtime,
             session,
+            steer_queue: VecDeque::new(),
+            follow_up_queue: VecDeque::new(),
         };
         cli.persist_session()?;
         Ok(cli)
@@ -3400,6 +3416,49 @@ impl LiveCli {
         }
     }
 
+    fn enqueue_steer(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        if message.trim().is_empty() {
+            return;
+        }
+        self.steer_queue.push_back(message);
+        self.print_queue_status();
+    }
+
+    fn enqueue_follow_up(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        if message.trim().is_empty() {
+            return;
+        }
+        self.follow_up_queue.push_back(message);
+        self.print_queue_status();
+    }
+
+    fn print_queue_status(&self) {
+        println!(
+            "Queued messages\n  Steer            {}\n  Follow-up        {}",
+            self.steer_queue.len(),
+            self.follow_up_queue.len()
+        );
+    }
+
+    fn drain_queued_turns(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        while let Some(message) = self.steer_queue.pop_front() {
+            println!("Steer\n  Running queued message");
+            self.run_turn(&message)?;
+        }
+
+        while self.steer_queue.is_empty() {
+            let Some(message) = self.follow_up_queue.pop_front() else {
+                break;
+            };
+            println!("Follow-up\n  Running queued message");
+            self.run_turn(&message)?;
+        }
+
+        Ok(())
+    }
+
     fn run_turn_with_output(
         &mut self,
         input: &str,
@@ -3607,6 +3666,16 @@ impl LiveCli {
                     self.permission_mode.as_str()
                 );
                 false
+            }
+            SlashCommand::Steer { message } => {
+                self.enqueue_steer(message);
+                self.drain_queued_turns()?;
+                true
+            }
+            SlashCommand::FollowUp { message } => {
+                self.enqueue_follow_up(message);
+                self.drain_queued_turns()?;
+                true
             }
             SlashCommand::Memory => {
                 Self::print_memory()?;
