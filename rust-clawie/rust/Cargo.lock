@@ -1954,6 +1954,7 @@ dependencies = [
  "crossterm",
  "plugins",
  "pulldown-cmark",
+ "reqwest",
  "ring",
  "runtime",
  "rustyline",

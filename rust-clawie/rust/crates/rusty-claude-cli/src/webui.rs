@@ -39,6 +39,17 @@ struct ChatRequest {
     openai_api_key: Option<String>,
     anthropic_api_key: Option<String>,
     openai_base_url: Option<String>,
+    lean_mode: Option<String>,
+    max_turns: Option<u32>,
+    token_budget: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TestConnectionRequest {
+    provider: String,
+    api_key: String,
+    base_url: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,6 +310,56 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                 .to_string(),
             )
         }
+        line if line.starts_with("GET /api/settings ") => {
+            let config_home = runtime::default_config_home();
+            let settings_path = config_home.join("settings.json");
+            let content = if settings_path.exists() {
+                fs::read_to_string(&settings_path).unwrap_or_else(|_| "{}".to_string())
+            } else {
+                "{}".to_string()
+            };
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({
+                    "ok": true,
+                    "settings": serde_json::from_str::<serde_json::Value>(&content).unwrap_or(json!({}))
+                }).to_string(),
+            )
+        }
+        line if line.starts_with("POST /api/settings ") => {
+            let payload: serde_json::Value = parse_json_body(&request, header_end, "save settings")?;
+            let config_home = runtime::default_config_home();
+            fs::create_dir_all(&config_home)?;
+            let settings_path = config_home.join("settings.json");
+            let mut current = if settings_path.exists() {
+                let content = fs::read_to_string(&settings_path)?;
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content).unwrap_or_default()
+            } else {
+                serde_json::Map::new()
+            };
+            if let Some(obj) = payload.as_object() {
+                for (k, v) in obj {
+                    current.insert(k.clone(), v.clone());
+                }
+            }
+            fs::write(
+                &settings_path,
+                serde_json::to_string_pretty(&serde_json::Value::Object(current))?,
+            )?;
+            write_json_response(stream, "200 OK", r#"{"ok":true}"#)
+        }
+        line if line.starts_with("POST /test-connection ") => {
+            let payload: TestConnectionRequest = parse_json_body(&request, header_end, "test connection")?;
+            match test_api_connection(&payload) {
+                Ok(_) => write_json_response(stream, "200 OK", r#"{"ok":true}"#),
+                Err(e) => write_json_response(
+                    stream,
+                    "200 OK",
+                    &json!({"ok": false, "error": e.to_string()}).to_string(),
+                ),
+            }
+        }
         line if line.starts_with("POST /chat ") => {
             let payload: ChatRequest = parse_json_body(&request, header_end, "chat")?;
             let response_data = run_clawie_prompt(
@@ -307,6 +368,9 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                 payload.openai_api_key.as_deref(),
                 payload.anthropic_api_key.as_deref(),
                 payload.openai_base_url.as_deref(),
+                payload.lean_mode.as_deref(),
+                payload.max_turns,
+                payload.token_budget,
             )?;
             write_json_response(
                 stream,
@@ -849,12 +913,86 @@ fn safe_relative_path(input: &str) -> io::Result<PathBuf> {
     Ok(safe)
 }
 
+fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    if req.provider == "anthropic" {
+        let url = req.base_url.as_deref()
+            .unwrap_or("https://api.anthropic.com")
+            .trim_end_matches('/');
+        let url = format!("{}/v1/messages", url);
+        let model = req.model.as_deref().unwrap_or("claude-3-5-sonnet-20240620");
+
+        let response = client.post(&url)
+            .header("x-api-key", &req.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}]
+            }))
+            .send()?;
+
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                    .unwrap_or(text)
+            } else {
+                text
+            };
+            Err(format!("Anthropic API returned status {}: {}", status.as_u16(), err_msg).into())
+        }
+    } else if req.provider == "openai" {
+        let url = req.base_url.as_deref()
+            .unwrap_or("https://api.openai.com/v1")
+            .trim_end_matches('/');
+        let url = format!("{}/chat/completions", url);
+        let model = req.model.as_deref().unwrap_or("gpt-4o");
+
+        let response = client.post(&url)
+            .header("Authorization", format!("Bearer {}", req.api_key))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}]
+            }))
+            .send()?;
+
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                    .unwrap_or(text)
+            } else {
+                text
+            };
+            Err(format!("OpenAI API returned status {}: {}", status.as_u16(), err_msg).into())
+        }
+    } else {
+        Err("Unsupported provider".into())
+    }
+}
+
 fn run_clawie_prompt(
     message: &str,
     model: Option<&str>,
     openai_api_key: Option<&str>,
     anthropic_api_key: Option<&str>,
     openai_base_url: Option<&str>,
+    lean_mode: Option<&str>,
+    max_turns: Option<u32>,
+    token_budget: Option<u32>,
 ) -> io::Result<serde_json::Value> {
     let prompt = message.trim();
     if prompt.is_empty() {
@@ -884,6 +1022,17 @@ fn run_clawie_prompt(
         if !url.trim().is_empty() {
             cmd.env("OPENAI_BASE_URL", url.trim());
         }
+    }
+    if let Some(lm) = lean_mode {
+        if !lm.trim().is_empty() {
+            cmd.env("CLAWIE_LEAN_MODE", lm);
+        }
+    }
+    if let Some(mt) = max_turns {
+        cmd.env("CLAWIE_MAX_TURNS", mt.to_string());
+    }
+    if let Some(tb) = token_budget {
+        cmd.env("CLAWIE_MAX_BUDGET_TOKENS", tb.to_string());
     }
     let output = cmd
         .arg("--output-format")
@@ -2519,7 +2668,12 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       width: min(720px, calc(100vw - 32px));
       height: min(720px, calc(100vh - 32px));
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto auto 1fr auto;
+      background: rgba(18, 18, 24, 0.75);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
     }
     #instance-log-modal .modal-content {
       width: min(760px, calc(100vw - 32px));
@@ -2579,12 +2733,119 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       gap: 1.25rem;
     }
     #settings-modal .modal-body {
+      padding: 0;
+      overflow: hidden;
+      display: block;
+    }
+    .settings-tabs {
+      display: flex;
+      gap: 1.5rem;
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+      background: rgba(255, 255, 255, 0.01);
+    }
+    .settings-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 1rem 0;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s ease;
+    }
+    .settings-tab-btn:hover {
+      color: var(--text-primary);
+    }
+    .settings-tab-btn.active {
+      color: var(--accent);
+    }
+    .settings-tab-btn.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+    .settings-tab-content {
+      display: none;
+      height: 100%;
+      overflow-y: auto;
+      padding: 1.5rem;
+    }
+    .settings-tab-content.active {
+      display: block;
+    }
+    .settings-pane-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      grid-auto-rows: minmax(112px, auto);
       gap: 1rem;
-      overflow-y: auto;
       align-content: start;
+    }
+    .password-input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+    .password-input-wrapper input {
+      width: 100%;
+      padding-right: 2.25rem !important;
+    }
+    .password-toggle-btn {
+      position: absolute;
+      right: 0.75rem;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: color 0.15s ease;
+    }
+    .password-toggle-btn:hover {
+      color: var(--text-primary);
+    }
+    .password-toggle-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+    .settings-connection-status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      display: inline-block;
+    }
+    .status-dot.success {
+      background: #10b981;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+    }
+    .status-dot.error {
+      background: #ef4444;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+    }
+    .status-dot.testing {
+      background: #3b82f6;
+      box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+      animation: pulse-status 1s infinite alternate;
+    }
+    @keyframes pulse-status {
+      from { opacity: 0.5; }
+      to { opacity: 1; }
     }
     .settings-group {
       display: flex;
@@ -2928,59 +3189,125 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
   <!-- Settings Modal Overlay -->
   <div id="settings-modal" class="modal-overlay" hidden>
     <div class="modal-content">
-      <div class="modal-header">
+      <div class="modal-header" style="border-bottom: none; padding-bottom: 0.5rem;">
         <h3>Settings</h3>
         <button id="settings-close" class="close-btn">&times;</button>
       </div>
+      
+      <!-- Tab Buttons Header -->
+      <div class="settings-tabs">
+        <button class="settings-tab-btn active" type="button" data-tab="tab-appearance">Appearance</button>
+        <button class="settings-tab-btn" type="button" data-tab="tab-provider">AI Provider</button>
+        <button class="settings-tab-btn" type="button" data-tab="tab-limits">Lean & Limits</button>
+      </div>
+
       <div class="modal-body">
-        <div class="settings-group">
-          <label for="settings-app-theme">App Theme</label>
-          <select id="settings-app-theme">
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="graphite">Graphite</option>
-            <option value="contrast">High Contrast</option>
-          </select>
-        </div>
-        <div class="settings-group">
-          <label>Accent Color</label>
-          <div class="theme-options">
-            <button class="theme-opt orange active" data-color="orange" title="Orange"></button>
-            <button class="theme-opt blue" data-color="blue" title="Blue"></button>
-            <button class="theme-opt purple" data-color="purple" title="Purple"></button>
-            <button class="theme-opt green" data-color="green" title="Green"></button>
-          </div>
-        </div>
-        <div class="settings-group">
-          <label for="settings-model">Active AI Model</label>
-          <select id="settings-model">
-            <option value="gpt-4.1">gpt-4.1 (Default)</option>
-            <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
-            <option value="gpt-4o">gpt-4o</option>
-            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-          </select>
-        </div>
-        <div class="settings-group settings-wide">
-          <label style="margin-bottom: 0.25rem;">Connections</label>
-          <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.25rem;">
-            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-              <label for="settings-openai-key" style="font-size: 0.65rem; color: var(--text-muted);">OpenAI API Key</label>
-              <input id="settings-openai-key" type="password" placeholder="sk-..." autocomplete="off">
+        <!-- Appearance Tab Pane -->
+        <div id="tab-appearance" class="settings-tab-content active">
+          <div class="settings-pane-grid">
+            <div class="settings-group">
+              <label for="settings-app-theme">App Theme</label>
+              <select id="settings-app-theme">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="graphite">Graphite</option>
+                <option value="contrast">High Contrast</option>
+              </select>
             </div>
-            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-              <label for="settings-anthropic-key" style="font-size: 0.65rem; color: var(--text-muted);">Anthropic API Key</label>
-              <input id="settings-anthropic-key" type="password" placeholder="sk-ant-..." autocomplete="off">
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-              <label for="settings-openai-url" style="font-size: 0.65rem; color: var(--text-muted);">Custom OpenAI Base URL (optional)</label>
-              <input id="settings-openai-url" placeholder="https://api.openai.com/v1" autocomplete="off">
+            <div class="settings-group">
+              <label>Accent Color</label>
+              <div class="theme-options">
+                <button class="theme-opt orange active" type="button" data-color="orange" title="Orange"></button>
+                <button class="theme-opt blue" type="button" data-color="blue" title="Blue"></button>
+                <button class="theme-opt purple" type="button" data-color="purple" title="Purple"></button>
+                <button class="theme-opt green" type="button" data-color="green" title="Green"></button>
+              </div>
             </div>
           </div>
         </div>
-        <div class="settings-group settings-wide">
-          <label>Web App</label>
-          <button id="settings-install-app" class="settings-btn-secondary" type="button">Install Web App</button>
-          <p id="settings-install-status" class="settings-help">Install Clawie as a browser app for quick access from your dock or app launcher. We will launch an IDE soon.</p>
+
+        <!-- AI Provider Tab Pane -->
+        <div id="tab-provider" class="settings-tab-content">
+          <div class="settings-pane-grid">
+            <div class="settings-group">
+              <label for="settings-provider">Active Provider</label>
+              <select id="settings-provider">
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="openai">OpenAI (ChatGPT)</option>
+              </select>
+            </div>
+            <div class="settings-group">
+              <label for="settings-model">Active AI Model</label>
+              <select id="settings-model">
+                <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
+                <option value="gpt-4o">gpt-4o</option>
+                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                <option value="gpt-4.1">gpt-4.1</option>
+              </select>
+            </div>
+            <div class="settings-group settings-wide">
+              <label>Connections</label>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.25rem;">
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-openai-key" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">OpenAI API Key</label>
+                  <div class="password-input-wrapper">
+                    <input id="settings-openai-key" type="password" placeholder="sk-..." autocomplete="off">
+                    <button class="password-toggle-btn" type="button" data-target="settings-openai-key" title="Toggle visibility">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-anthropic-key" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Anthropic API Key</label>
+                  <div class="password-input-wrapper">
+                    <input id="settings-anthropic-key" type="password" placeholder="sk-ant-..." autocomplete="off">
+                    <button class="password-toggle-btn" type="button" data-target="settings-anthropic-key" title="Toggle visibility">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-openai-url" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Custom OpenAI Base URL (optional)</label>
+                  <input id="settings-openai-url" placeholder="https://api.openai.com/v1" autocomplete="off">
+                </div>
+                <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.25rem;">
+                  <button id="settings-test-conn-btn" class="settings-btn-secondary" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Test Connection</button>
+                  <div id="settings-conn-status-container" class="settings-connection-status" style="display: none;">
+                    <span class="status-dot"></span>
+                    <span id="settings-conn-status-text">Disconnected</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lean & Limits Tab Pane -->
+        <div id="tab-limits" class="settings-tab-content">
+          <div class="settings-pane-grid">
+            <div class="settings-group">
+              <label for="settings-lean-mode">Lean Mode Level</label>
+              <select id="settings-lean-mode">
+                <option value="full">Full (Enforced)</option>
+                <option value="lite">Lite (Mild checks)</option>
+                <option value="ultra">Ultra (Strict constraints)</option>
+                <option value="off">Off (Allow exploration)</option>
+              </select>
+            </div>
+            <div class="settings-group">
+              <label for="settings-max-turns">Max Turns: <span id="max-turns-val" style="color: var(--accent); font-weight: bold;">64</span></label>
+              <input type="range" id="settings-max-turns" min="1" max="150" value="64" style="margin-top: 0.25rem;">
+            </div>
+            <div class="settings-group">
+              <label for="settings-token-budget">Token Budget Constraints</label>
+              <input type="number" id="settings-token-budget" min="1" max="100000" placeholder="12000" style="width: 100%;">
+            </div>
+            <div class="settings-group settings-wide" style="min-height: 0;">
+              <label>Web App</label>
+              <button id="settings-install-app" class="settings-btn-secondary" type="button" style="align-self: flex-start;">Install Web App</button>
+              <p id="settings-install-status" class="settings-help" style="margin-top: 0.25rem;">Install Clawie as a browser app for quick access from your dock or app launcher. We will launch an IDE soon.</p>
+            </div>
+          </div>
         </div>
       </div>
       <div class="modal-footer">
@@ -3558,7 +3885,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             model: selectedModel,
             openai_api_key: localStorage.getItem('clawie-openai-key') || '',
             anthropic_api_key: localStorage.getItem('clawie-anthropic-key') || '',
-            openai_base_url: localStorage.getItem('clawie-openai-url') || ''
+            openai_base_url: localStorage.getItem('clawie-openai-url') || '',
+            lean_mode: selectedLeanMode,
+            max_turns: selectedMaxTurns,
+            token_budget: selectedTokenBudget
           })
         });
         const result = await response.json();
@@ -3975,6 +4305,15 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const settingsInstallApp = document.querySelector('#settings-install-app');
     const settingsInstallStatus = document.querySelector('#settings-install-status');
 
+    const settingsProvider = document.querySelector('#settings-provider');
+    const settingsLeanMode = document.querySelector('#settings-lean-mode');
+    const settingsMaxTurns = document.querySelector('#settings-max-turns');
+    const maxTurnsVal = document.querySelector('#max-turns-val');
+    const settingsTokenBudget = document.querySelector('#settings-token-budget');
+    const settingsTestConnBtn = document.querySelector('#settings-test-conn-btn');
+    const settingsConnStatusContainer = document.querySelector('#settings-conn-status-container');
+    const settingsConnStatusText = document.querySelector('#settings-conn-status-text');
+
     const themes = {
       orange: { rgb: '249, 115, 22', hover: '#ea580c' },
       blue: { rgb: '37, 99, 235', hover: '#1d4ed8' },
@@ -3984,18 +4323,53 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     let selectedTheme = localStorage.getItem('clawie-theme') || 'orange';
     let selectedAppTheme = localStorage.getItem('clawie-app-theme') || 'dark';
-    let selectedModel = localStorage.getItem('clawie-model-setting') || 'gpt-4.1';
+    let selectedModel = localStorage.getItem('clawie-model-setting') || 'claude-3-5-sonnet';
+    let selectedProvider = localStorage.getItem('clawie-provider') || 'anthropic';
+    let selectedLeanMode = localStorage.getItem('clawie-lean-mode') || 'full';
+    let selectedMaxTurns = parseInt(localStorage.getItem('clawie-max-turns') || '64', 10);
+    let selectedTokenBudget = parseInt(localStorage.getItem('clawie-token-budget') || '12000', 10);
     let deferredInstallPrompt = null;
 
-    function openSettingsPanel(focusTarget = 'openai') {
+    async function openSettingsPanel(focusTarget = 'openai') {
+      try {
+        const response = await fetch('/api/settings');
+        const res = await response.json();
+        if (response.ok && res.ok && res.settings) {
+          const s = res.settings;
+          if (s.provider) selectedProvider = s.provider;
+          if (s.model) selectedModel = s.model;
+          if (s.OPENAI_API_KEY) localStorage.setItem('clawie-openai-key', s.OPENAI_API_KEY);
+          if (s.ANTHROPIC_API_KEY) localStorage.setItem('clawie-anthropic-key', s.ANTHROPIC_API_KEY);
+          if (s.OPENAI_BASE_URL) localStorage.setItem('clawie-openai-url', s.OPENAI_BASE_URL);
+          if (s.CLAWIE_LEAN_MODE) selectedLeanMode = s.CLAWIE_LEAN_MODE;
+          if (s.CLAWIE_MAX_TURNS) selectedMaxTurns = parseInt(s.CLAWIE_MAX_TURNS, 10);
+          if (s.CLAWIE_MAX_BUDGET_TOKENS) selectedTokenBudget = parseInt(s.CLAWIE_MAX_BUDGET_TOKENS, 10);
+        }
+      } catch (e) {
+        console.warn('Failed to load settings from backend, using local defaults', e);
+      }
+
+      settingsProvider.value = selectedProvider;
       settingsAppTheme.value = selectedAppTheme;
       settingsModel.value = selectedModel;
+      settingsLeanMode.value = selectedLeanMode;
+      settingsMaxTurns.value = selectedMaxTurns;
+      maxTurnsVal.textContent = selectedMaxTurns;
+      settingsTokenBudget.value = selectedTokenBudget || '';
+
       settingsOpenAiKey.value = localStorage.getItem('clawie-openai-key') || '';
       settingsAnthropicKey.value = localStorage.getItem('clawie-anthropic-key') || '';
       settingsOpenAiUrl.value = localStorage.getItem('clawie-openai-url') || '';
       applyAppTheme(selectedAppTheme);
       applyTheme(selectedTheme);
+
+      settingsConnStatusContainer.style.display = 'none';
       settingsModal.hidden = false;
+
+      // Select active tab button and content
+      document.querySelectorAll('.settings-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'tab-appearance'));
+      document.querySelectorAll('.settings-tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-appearance'));
+
       const target = focusTarget === 'anthropic'
         ? settingsAnthropicKey
         : focusTarget === 'base-url'
@@ -4091,6 +4465,80 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       });
     }
 
+    // Tab switching event listener
+    document.querySelectorAll('.settings-tabs .settings-tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.settings-tabs .settings-tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('#settings-modal .settings-tab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelector('#' + btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    // Password fields show/hide toggles
+    document.querySelectorAll('.password-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const input = document.getElementById(btn.dataset.target);
+        if (input.type === 'password') {
+          input.type = 'text';
+          btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+        } else {
+          input.type = 'password';
+          btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+        }
+      });
+    });
+
+    // Update max turns slider span value on slide
+    settingsMaxTurns.addEventListener('input', () => {
+      maxTurnsVal.textContent = settingsMaxTurns.value;
+    });
+
+    // Test Connection listener
+    settingsTestConnBtn.addEventListener('click', async () => {
+      const provider = settingsProvider.value;
+      const key = provider === 'anthropic' ? settingsAnthropicKey.value.trim() : settingsOpenAiKey.value.trim();
+      const baseUrl = settingsOpenAiUrl.value.trim();
+      const model = settingsModel.value;
+
+      if (!key) {
+        settingsConnStatusContainer.style.display = 'flex';
+        const dot = settingsConnStatusContainer.querySelector('.status-dot');
+        dot.className = 'status-dot error';
+        settingsConnStatusText.textContent = 'API Key is empty';
+        return;
+      }
+
+      settingsConnStatusContainer.style.display = 'flex';
+      const dot = settingsConnStatusContainer.querySelector('.status-dot');
+      dot.className = 'status-dot testing';
+      settingsConnStatusText.textContent = 'Testing connection...';
+
+      try {
+        const response = await fetch('/test-connection', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            provider: provider,
+            api_key: key,
+            base_url: baseUrl || null,
+            model: model || null
+          })
+        });
+        const result = await response.json();
+        if (response.ok && result.ok) {
+          dot.className = 'status-dot success';
+          settingsConnStatusText.textContent = 'Connected successfully';
+        } else {
+          dot.className = 'status-dot error';
+          settingsConnStatusText.textContent = result.error || 'Connection failed';
+        }
+      } catch (e) {
+        dot.className = 'status-dot error';
+        settingsConnStatusText.textContent = e.message || 'Connection failed';
+      }
+    });
+
     settingsToggle.addEventListener('click', () => openSettingsPanel());
 
     settingsClose.addEventListener('click', () => {
@@ -4113,13 +4561,43 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       applyAppTheme(settingsAppTheme.value);
     });
 
-    settingsSaveBtn.addEventListener('click', () => {
+    settingsSaveBtn.addEventListener('click', async () => {
       applyAppTheme(settingsAppTheme.value);
       selectedModel = settingsModel.value;
+      selectedProvider = settingsProvider.value;
+      selectedLeanMode = settingsLeanMode.value;
+      selectedMaxTurns = parseInt(settingsMaxTurns.value, 10) || 64;
+      selectedTokenBudget = parseInt(settingsTokenBudget.value, 10) || 12000;
+
       localStorage.setItem('clawie-model-setting', selectedModel);
+      localStorage.setItem('clawie-provider', selectedProvider);
       localStorage.setItem('clawie-openai-key', settingsOpenAiKey.value.trim());
       localStorage.setItem('clawie-anthropic-key', settingsAnthropicKey.value.trim());
       localStorage.setItem('clawie-openai-url', settingsOpenAiUrl.value.trim());
+      localStorage.setItem('clawie-lean-mode', selectedLeanMode);
+      localStorage.setItem('clawie-max-turns', selectedMaxTurns.toString());
+      localStorage.setItem('clawie-token-budget', selectedTokenBudget.toString());
+
+      try {
+        const payload = {
+          provider: selectedProvider,
+          model: selectedModel,
+          OPENAI_API_KEY: settingsOpenAiKey.value.trim() || null,
+          ANTHROPIC_API_KEY: settingsAnthropicKey.value.trim() || null,
+          OPENAI_BASE_URL: settingsOpenAiUrl.value.trim() || null,
+          CLAWIE_LEAN_MODE: selectedLeanMode,
+          CLAWIE_MAX_TURNS: selectedMaxTurns,
+          CLAWIE_MAX_BUDGET_TOKENS: selectedTokenBudget
+        };
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+      } catch (e) {
+        console.error('Failed to persist settings to backend disk', e);
+      }
+
       settingsModal.hidden = true;
       syncInstancePanel();
       setStatus('Settings applied successfully', 'saved');
