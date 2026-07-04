@@ -3195,6 +3195,11 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       0% { box-shadow: 0 0 4px rgba(var(--accent-rgb), 0.3); }
       100% { box-shadow: 0 0 16px rgba(var(--accent-rgb), 0.7); }
     }
+    @keyframes float-shrimp {
+      0% { transform: translateY(0) rotate(0deg); }
+      50% { transform: translateY(-15px) rotate(10deg); }
+      100% { transform: translateY(0) rotate(0deg); }
+    }
 
     /* AUTOMATION FLOW BUILDER STYLE */
     .automations-page {
@@ -3819,6 +3824,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 </div>
               </div>
             </div>
+          </div>
+          <!-- Secret coming soon mode overlay -->
+          <div class="automations-coming-soon" id="automations-coming-soon" style="display: none; margin: 4rem auto; max-width: 480px; text-align: center; background: var(--bg-card); border: 1px solid var(--border); padding: 3rem 2rem; border-radius: var(--radius-lg); box-shadow: var(--panel-shadow);">
+            <div class="automations-emoji" aria-hidden="true" style="font-size: 6rem; line-height: 1; margin-bottom: 1.5rem; animation: float-shrimp 3s infinite ease-in-out;">🦐</div>
+            <h2 style="font-size: 1.5rem; color: var(--text-primary); margin: 0;">Automations</h2>
+            <p style="font-size: 1rem; margin-top: 0.5rem; color: var(--text-secondary);">Shrimp and more coming soon...</p>
+            <button class="settings-btn-secondary" onclick="resetSecretMode()" style="margin-top: 1.5rem; padding: 0.5rem 1rem;">Back to Builder</button>
           </div>
         </section>
       </main>
@@ -6044,6 +6056,33 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       const triggerName = autoTriggerName.textContent;
       setStatus(`Automation workflow "${triggerName}" activated successfully!`, 'saved');
     });
+
+    // SECRET EASTER EGG MODE (3 BUTTON PRESSES -> SHRIMP COMING SOON SCREEN)
+    let secretClickCount = 0;
+    const automationsPageNode = document.querySelector('#automations-page');
+    const autoBuilderContainer = document.querySelector('.automation-builder-container');
+    const automationsComingSoon = document.querySelector('#automations-coming-soon');
+
+    automationsPageNode.addEventListener('click', (e) => {
+      if (e.target.tagName === 'BUTTON' && !e.target.classList.contains('close-btn') && e.target.id !== 'reset-secret-btn') {
+        secretClickCount++;
+        if (secretClickCount === 3) {
+          autoBuilderContainer.style.display = 'none';
+          automationsComingSoon.style.display = 'flex';
+          automationsComingSoon.style.flexDirection = 'column';
+          automationsComingSoon.style.alignItems = 'center';
+          automationsComingSoon.style.justifyContent = 'center';
+          setStatus('🦐 Shrimp mode activated!', 'saved');
+        }
+      }
+    });
+
+    window.resetSecretMode = function() {
+      secretClickCount = 0;
+      automationsComingSoon.style.display = 'none';
+      autoBuilderContainer.style.display = 'grid';
+      setStatus('Returned to Builder', 'saved');
+    };
   </script>
 </body>
 </html>"##;
