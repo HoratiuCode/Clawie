@@ -1584,9 +1584,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     }
 
     .automations-page {
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: block;
     }
 
     .automations-coming-soon {
@@ -3203,7 +3201,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     /* AUTOMATION FLOW BUILDER STYLE */
     .automations-page {
-      display: block !important;
+      display: block;
       padding: 1.5rem;
       height: calc(100vh - 64px);
       overflow: hidden;
@@ -3799,7 +3797,19 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 </div>
                 <div class="canvas-actions">
                   <button class="settings-btn-secondary" id="auto-btn-clear" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Reset Flow</button>
-                  <button class="settings-btn-save" id="auto-btn-save" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Save Workflow</button>
+                  <div class="dropdown-container" style="position: relative; display: inline-block;">
+                    <button class="settings-btn-save" id="auto-btn-save" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem;">
+                      Save Workflow <span style="font-size: 0.6rem;">▼</span>
+                    </button>
+                    <div class="dropdown-menu" id="workflow-save-dropdown" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 0.5rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--panel-shadow); z-index: 100; min-width: 160px; overflow: hidden;">
+                      <button class="dropdown-item" type="button" id="btn-save-json" style="width: 100%; text-align: left; background: none; border: none; padding: 0.6rem 1rem; color: var(--text-primary); font-size: 0.75rem; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; gap: 0.5rem;">
+                        📁 Save as JSON File
+                      </button>
+                      <button class="dropdown-item" type="button" id="btn-save-clawie" style="width: 100%; text-align: left; background: none; border: none; padding: 0.6rem 1rem; color: var(--text-primary); font-size: 0.75rem; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; gap: 0.5rem; border-top: 1px solid var(--border);">
+                        🧠 Save in Clawie
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
               
@@ -4320,6 +4330,25 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       </div>
       <div class="log-body" id="instance-log-body">
         <div class="log-line">Select a room PC to inspect that Clawie instance.</div>
+      </div>
+    </div>
+  <!-- Save Path Modal -->
+  <div id="save-path-modal" class="modal-overlay" hidden>
+    <div class="modal-content" style="width: min(400px, 95%); padding: 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--panel-shadow); overflow: hidden;">
+      <div class="modal-header" style="padding: 1.25rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+        <strong style="font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary);">📁 Save JSON Workflow</strong>
+        <button style="background: none; border: none; font-size: 1.2rem; color: var(--text-muted); cursor: pointer;" id="save-path-cancel-x">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem;">
+        <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">Select or type the destination path (relative to workspace root):</label>
+        <input type="text" id="save-path-input" value="workflow.json" style="width: 100%; padding: 0.6rem 0.75rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.75rem; outline: none; transition: border-color 0.2s;">
+        <div style="font-size: 0.68rem; color: var(--text-muted); line-height: 1.3; margin-top: 0.5rem;">
+          Workspace Root: <code id="modal-workspace-path" style="color: var(--text-secondary); word-break: break-all;"></code>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 1rem 1.25rem; background: rgba(0,0,0,0.1); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.75rem;">
+        <button type="button" id="save-path-cancel" class="settings-btn-secondary" style="padding: 0.4rem 1rem; font-size: 0.75rem; cursor: pointer; transition: all 0.2s;">Cancel</button>
+        <button type="button" id="save-path-confirm" class="settings-btn-save" style="padding: 0.4rem 1rem; font-size: 0.75rem; cursor: pointer; transition: all 0.2s;">Save</button>
       </div>
     </div>
   </div>
@@ -6093,43 +6122,38 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       rightSidebar.classList.add('collapsed');
     }
 
+
+
     // AUTOMATIONS FLOW BUILDER INTERACTIVE CONTROLLER
-    const flowNodesList = document.querySelector('#flow-nodes-list');
+    const flowNodesList = document.querySelector('#nodes-layer');
     const autoTriggerName = document.querySelector('#auto-trigger-name');
     const autoTriggerBody = document.querySelector('#auto-trigger-body');
     const autoBtnClear = document.querySelector('#auto-btn-clear');
     const autoBtnSave = document.querySelector('#auto-btn-save');
-    const btnAddActionNode = document.querySelector('#btn-add-action-node');
 
     let actionNodeCounter = 1;
-
-    // Helper: Remove action node
-    window.removeActionNode = function(nodeId, connectorId) {
-      const node = document.getElementById(nodeId);
-      const conn = document.getElementById(connectorId);
-      if (node) node.remove();
-      if (conn) conn.remove();
-    };
+    let currentZoom = 1.0;
+    let panX = 0;
+    let panY = 0;
 
     // Helper: Append Action Node
     window.appendActionNode = function(type, value = '', customTitle = '', value2 = '') {
       actionNodeCounter++;
       const currentId = `action-node-${actionNodeCounter}`;
-      const connId = `flow-connector-${actionNodeCounter}`;
       
-      // Connector HTML
-      const connector = document.createElement('div');
-      connector.className = 'flow-connector';
-      connector.id = connId;
-      connector.innerHTML = `
-        <div class="connector-line"></div>
-        <button class="add-node-btn" type="button" onclick="appendActionNode('ai-agent')" title="Add action block">+</button>
-      `;
-
       // Node HTML
       const node = document.createElement('div');
       node.className = `flow-node action-node ${type}-node`;
       node.id = currentId;
+
+      // Layout cascade (auto-calculate coordinate based on node count to lay out horizontally)
+      const existingNodes = flowNodesList.querySelectorAll('.flow-node');
+      const count = Array.from(existingNodes).filter(n => !n.classList.contains('sticky-note')).length;
+      const left = 50 + count * 310;
+      const top = 120;
+      node.style.left = `${left}px`;
+      node.style.top = `${top}px`;
+      node.style.position = 'absolute';
 
       let icon = '🤖';
       let title = customTitle || 'Clawie AI Agent';
@@ -6282,7 +6306,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             <span class="node-label" style="color: ${labelColor};">${label}</span>
             <strong class="node-name">${title}</strong>
           </div>
-          <button class="node-remove-btn" type="button" onclick="removeActionNode('${currentId}', '${connId}')">&times;</button>
+          <button class="node-remove-btn" type="button" onclick="removeActionNode('${currentId}')">&times;</button>
         </div>
         <div class="node-body">
           ${bodyHtml}
@@ -6320,18 +6344,6 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       
       redrawConnections();
     };
-
-    // AUTOMATIONS FLOW BUILDER INTERACTIVE CONTROLLER
-    const flowNodesList = document.querySelector('#nodes-layer');
-    const autoTriggerName = document.querySelector('#auto-trigger-name');
-    const autoTriggerBody = document.querySelector('#auto-trigger-body');
-    const autoBtnClear = document.querySelector('#auto-btn-clear');
-    const autoBtnSave = document.querySelector('#auto-btn-save');
-
-    let actionNodeCounter = 1;
-    let currentZoom = 1.0;
-    let panX = 0;
-    let panY = 0;
 
     // Helper: Remove action node
     window.removeActionNode = function(nodeId) {
@@ -6718,17 +6730,135 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       setStatus('Loaded "Cron Runner" template', 'saved');
     });
 
-    // Save Button
-    autoBtnSave.addEventListener('click', () => {
-      const triggerName = autoTriggerName.textContent;
+    // Save Button Dropdown Toggle
+    const saveDropdown = document.querySelector('#workflow-save-dropdown');
+    autoBtnSave.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isVisible = saveDropdown.style.display === 'block';
+      saveDropdown.style.display = isVisible ? 'none' : 'block';
+    });
+
+    // Close dropdown on click outside
+    document.addEventListener('click', () => {
+      if (saveDropdown) saveDropdown.style.display = 'none';
+    });
+
+    // Extract workflow JSON representation
+    window.getWorkflowJson = function() {
+      const triggerType = autoTriggerName.textContent;
+      let triggerVal = '';
+      const globInput = document.getElementById('auto-input-trigger-glob');
+      const cronInput = document.getElementById('auto-input-trigger-cron');
+      const gitInput = document.getElementById('auto-input-trigger-git');
+      const webhookInput = document.getElementById('auto-input-trigger-webhook');
+      if (globInput) triggerVal = globInput.value;
+      else if (cronInput) triggerVal = cronInput.value;
+      else if (gitInput) triggerVal = gitInput.value;
+      else if (webhookInput) triggerVal = webhookInput.value;
+
       const nodes = Array.from(flowNodesList.querySelectorAll('.flow-node'));
-      const flowDescription = nodes.map(n => {
+      const actions = [];
+      const stickyNotes = [];
+
+      nodes.forEach(n => {
+        if (n.id === 'trigger-node-main') return;
+        
+        if (n.classList.contains('sticky-note')) {
+          const textarea = n.querySelector('textarea');
+          stickyNotes.push({
+            id: n.id,
+            text: textarea ? textarea.value : '',
+            left: n.style.left,
+            top: n.style.top
+          });
+          return;
+        }
+
         const title = n.querySelector('.node-name').textContent;
-        const icon = n.querySelector('.node-icon').textContent;
-        return `${icon} ${title}`;
-      }).join(' → ');
+        const type = Array.from(n.classList).find(c => c.endsWith('-node'))?.replace('-node', '') || 'unknown';
+        
+        // Find input values
+        const inputs = Array.from(n.querySelectorAll('.auto-node-val, .auto-node-val-2, .auto-node-val-select'));
+        const values = inputs.map(inp => inp.value);
+        
+        const optRetry = n.querySelector('.node-opt-retry')?.checked || false;
+        const optContinue = n.querySelector('.node-opt-continue')?.checked || false;
+
+        actions.push({
+          id: n.id,
+          type: type,
+          title: title,
+          values: values,
+          settings: {
+            retryOnFailure: optRetry,
+            continueOnError: optContinue
+          },
+          left: n.style.left,
+          top: n.style.top
+        });
+      });
+
+      return JSON.stringify({
+        trigger: {
+          type: triggerType,
+          value: triggerVal
+        },
+        actions: actions,
+        stickyNotes: stickyNotes,
+        zoom: currentZoom,
+        panX: panX,
+        panY: panY
+      }, null, 2);
+    };
+
+    // Save in Clawie Action
+    document.querySelector('#btn-save-clawie').addEventListener('click', () => {
+      const workflowData = getWorkflowJson();
+      localStorage.setItem('clawie-saved-workflow', workflowData);
+      setStatus('Workflow successfully saved in Clawie config!', 'saved');
+    });
+
+    // Save as JSON Action (Open custom modal)
+    const savePathModal = document.querySelector('#save-path-modal');
+    const savePathInput = document.querySelector('#save-path-input');
+
+    document.querySelector('#btn-save-json').addEventListener('click', () => {
+      document.querySelector('#modal-workspace-path').textContent = locationPath.value || '/Users/horatiubudai';
+      savePathModal.hidden = false;
+      savePathInput.focus();
+    });
+
+    // Modal Cancel Handlers
+    const closeSaveModal = () => {
+      savePathModal.hidden = true;
+    };
+    document.querySelector('#save-path-cancel').addEventListener('click', closeSaveModal);
+    document.querySelector('#save-path-cancel-x').addEventListener('click', closeSaveModal);
+
+    // Modal Save Confirm Handler
+    document.querySelector('#save-path-confirm').addEventListener('click', async () => {
+      const filename = savePathInput.value.trim() || 'workflow.json';
+      const workflowData = getWorkflowJson();
       
-      setStatus(`Activated Workflow: ${flowDescription}`, 'saved');
+      try {
+        setStatus('Saving workflow to JSON file...', 'uploading');
+        const response = await fetch('/upload', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            directory: locationPath.value,
+            filename: filename,
+            content: workflowData
+          })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Upload failed');
+        
+        setStatus(`Workflow successfully saved to ${filename}!`, 'saved');
+        closeSaveModal();
+      } catch (error) {
+        setStatus(`Failed to save JSON: ${error.message}`, 'error');
+      }
     });
 
     // Node Simulator Logic
