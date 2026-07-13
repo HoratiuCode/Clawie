@@ -7616,11 +7616,51 @@ mod tests {
         );
     }
 
-    fn env_lock() -> MutexGuard<'static, ()> {
+    struct EnvGuard {
+        _mutex_guard: std::sync::MutexGuard<'static, ()>,
+        original_config_home: Option<String>,
+        original_permission_mode: Option<String>,
+        temp_dir_path: Option<std::path::PathBuf>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(ref val) = self.original_config_home {
+                std::env::set_var("CLAW_CONFIG_HOME", val);
+            } else {
+                std::env::remove_var("CLAW_CONFIG_HOME");
+            }
+            if let Some(ref val) = self.original_permission_mode {
+                std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", val);
+            } else {
+                std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+            }
+            if let Some(ref path) = self.temp_dir_path {
+                let _ = std::fs::remove_dir_all(path);
+            }
+        }
+    }
+
+    fn env_lock() -> EnvGuard {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        let guard = LOCK.get_or_init(|| Mutex::new(()))
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_permission_mode = std::env::var("RUSTY_CLAUDE_PERMISSION_MODE").ok();
+
+        let tdir = temp_dir();
+        let _ = std::fs::create_dir_all(&tdir);
+
+        std::env::set_var("CLAW_CONFIG_HOME", &tdir);
+        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+
+        EnvGuard {
+            _mutex_guard: guard,
+            original_config_home,
+            original_permission_mode,
+            temp_dir_path: Some(tdir),
+        }
     }
 
     fn with_current_dir<T>(cwd: &Path, f: impl FnOnce() -> T) -> T {
@@ -7849,6 +7889,7 @@ mod tests {
 
     #[test]
     fn parses_permission_mode_flag() {
+        let _guard = env_lock();
         let args = vec!["--permission-mode=read-only".to_string()];
         assert_eq!(
             parse_args(&args).expect("args should parse"),
@@ -7862,6 +7903,7 @@ mod tests {
 
     #[test]
     fn parses_theme_flag() {
+        let _guard = env_lock();
         set_active_terminal_theme(TerminalTheme::Emoji);
         let args = vec!["--theme=chrome".to_string()];
         assert_eq!(
@@ -8965,6 +9007,7 @@ UU conflicted.rs",
 
     #[test]
     fn managed_sessions_default_to_jsonl_and_resolve_legacy_json() {
+        let _env_guard = env_lock();
         let _guard = cwd_lock().lock().expect("cwd lock");
         let workspace = temp_workspace("session-resolution");
         std::fs::create_dir_all(&workspace).expect("workspace should create");
@@ -9007,6 +9050,7 @@ UU conflicted.rs",
 
     #[test]
     fn latest_session_alias_resolves_most_recent_managed_session() {
+        let _env_guard = env_lock();
         let _guard = cwd_lock().lock().expect("cwd lock");
         let workspace = temp_workspace("latest-session-alias");
         std::fs::create_dir_all(&workspace).expect("workspace should create");

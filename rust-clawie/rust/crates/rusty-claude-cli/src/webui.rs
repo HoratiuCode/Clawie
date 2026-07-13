@@ -3259,11 +3259,16 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       background: var(--bg-main);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
-      width: 480px;
+      width: 260px;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
       overflow: hidden;
-      transition: border-color 0.2s ease, transform 0.2s ease;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
       animation: node-fade-in 0.25s ease-out;
+      cursor: grab;
+      position: absolute;
+    }
+    .flow-node:active {
+      cursor: grabbing;
     }
     @keyframes node-fade-in {
       from { opacity: 0; transform: translateY(10px); }
@@ -3271,12 +3276,107 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     }
     .flow-node:hover {
       border-color: var(--border-hover);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
     }
     .flow-node.trigger-node {
       border-left: 4px solid var(--accent);
     }
     .flow-node.action-node {
       border-left: 4px solid #3b82f6;
+    }
+    .flow-node input,
+    .flow-node textarea,
+    .flow-node select {
+      font-size: 0.7rem;
+      padding: 0.3rem 0.5rem;
+    }
+    .node-port {
+      width: 10px;
+      height: 10px;
+      background: var(--border);
+      border: 2px solid var(--bg-card);
+      border-radius: 50%;
+      position: absolute;
+      z-index: 10;
+      transition: background-color 0.2s, transform 0.2s;
+    }
+    .node-port:hover {
+      background: var(--accent) !important;
+      transform: translateY(-50%) scale(1.3);
+    }
+    .input-port {
+      left: -6px;
+      top: 35px; /* middle of header */
+      transform: translateY(-50%);
+    }
+    .output-port {
+      right: -6px;
+      top: 35px; /* middle of header */
+      transform: translateY(-50%);
+    }
+    @keyframes stroke-pulse {
+      to {
+        stroke-dashoffset: -20;
+      }
+    }
+    .connection-path.simulating {
+      stroke: #10b981 !important;
+      stroke-dasharray: 6, 4;
+      animation: stroke-pulse 1s infinite linear;
+    }
+    .drawer-field-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      margin-bottom: 0.5rem;
+    }
+    .drawer-field-wrap label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .drawer-field-wrap input,
+    .drawer-field-wrap textarea,
+    .drawer-field-wrap select {
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      padding: 0.5rem;
+      font-size: 0.8rem;
+    }
+    .flow-node.action-node.ai-agent-node {
+      border-left-color: #3b82f6;
+    }
+    .flow-node.action-node.simple-agent-node {
+      border-left-color: #8b5cf6;
+    }
+    .flow-node.action-node.email-node {
+      border-left-color: #ea580c;
+    }
+    .flow-node.action-node.summarize-node {
+      border-left-color: #06b6d4;
+    }
+    .flow-node.action-node.slack-node {
+      border-left-color: #ec4899;
+    }
+    .flow-node.action-node.bash-node {
+      border-left-color: #10b981;
+    }
+    .flow-node.action-node.notify-node {
+      border-left-color: #f59e0b;
+    }
+    .flow-node.action-node.http-node {
+      border-left-color: #38bdf8;
+    }
+    .flow-node.action-node.nested-node {
+      border-left-color: #fb7185;
+    }
+    .flow-node.action-node.routing-node {
+      border-left-color: #fbbf24;
+    }
+    .flow-node.action-node.iterator-node {
+      border-left-color: #34d399;
     }
     .node-header {
       padding: 0.75rem 1rem;
@@ -3694,8 +3794,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             <div class="automation-canvas">
               <div class="canvas-header">
                 <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                  <h3>Automation Flow Builder</h3>
-                  <span class="canvas-subtitle">Design your code guards, agents task-flows, and cron schedulers</span>
+                  <h3>Automation Flow Canvas</h3>
+                  <span class="canvas-subtitle">Drag blocks to position, pan/zoom canvas, and click any block to configure settings.</span>
                 </div>
                 <div class="canvas-actions">
                   <button class="settings-btn-secondary" id="auto-btn-clear" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Reset Flow</button>
@@ -3703,43 +3803,79 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 </div>
               </div>
               
-              <!-- Flow Nodes List -->
-              <div class="flow-nodes-list" id="flow-nodes-list">
-                <!-- Trigger Node -->
-                <div class="flow-node trigger-node">
-                  <div class="node-header">
-                    <div class="node-icon">⚡</div>
-                    <div class="node-title-wrap">
-                      <span class="node-label">TRIGGER</span>
-                      <strong class="node-name" id="auto-trigger-name">On File Save</strong>
+              <!-- 2D Canvas Workspace -->
+              <div class="automation-workspace-container" style="position: relative; width: 100%; height: 580px; background: #070708; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; user-select: none;">
+                <!-- Grid background overlay -->
+                <div id="canvas-grid-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: auto; background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 0); background-size: 20px 20px; z-index: 0; cursor: grab;"></div>
+                
+                <div class="automation-canvas-viewport" id="canvas-viewport" style="width: 100%; height: 100%; overflow: hidden; position: relative;">
+                  <!-- SVG Connection Layer -->
+                  <svg id="connection-svg" style="position: absolute; top: 0; left: 0; width: 3000px; height: 3000px; pointer-events: none; z-index: 1; transform-origin: 0 0; transition: transform 0.05s ease-out;">
+                  </svg>
+                  
+                  <!-- Draggable Node Layer -->
+                  <div id="nodes-layer" style="position: absolute; width: 3000px; height: 3000px; top: 0; left: 0; transform-origin: 0 0; z-index: 2; transition: transform 0.05s ease-out;">
+                    <!-- Trigger Node -->
+                    <div class="flow-node trigger-node" id="trigger-node-main" style="position: absolute; left: 50px; top: 120px;">
+                      <div class="node-header">
+                        <div class="node-icon">⚡</div>
+                        <div class="node-title-wrap">
+                          <span class="node-label">TRIGGER</span>
+                          <strong class="node-name" id="auto-trigger-name">On File Save</strong>
+                        </div>
+                      </div>
+                      <div class="node-body" id="auto-trigger-body">
+                        <label>File Glob Path Match</label>
+                        <input type="text" value="**/*.rs" placeholder="e.g. **/*.rs" id="auto-input-trigger-glob">
+                      </div>
                     </div>
-                  </div>
-                  <div class="node-body" id="auto-trigger-body">
-                    <label>File Glob Path Match</label>
-                    <input type="text" value="**/*.rs" placeholder="e.g. **/*.rs, **/*.py" id="auto-input-trigger-glob">
+
+                    <!-- Action Node 1 -->
+                    <div class="flow-node action-node ai-agent-node" id="action-node-1" style="position: absolute; left: 360px; top: 120px;">
+                      <div class="node-header">
+                        <div class="node-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;">🤖</div>
+                        <div class="node-title-wrap">
+                          <span class="node-label" style="color: #3b82f6;">ACTION (AI RUNNER)</span>
+                          <strong class="node-name">Clawie Code Auditor</strong>
+                        </div>
+                        <button class="node-remove-btn" type="button" onclick="removeActionNode('action-node-1')">&times;</button>
+                      </div>
+                      <div class="node-body">
+                        <label>AI Prompt Goal</label>
+                        <textarea rows="2" placeholder="Explain the goal for the agent..." class="auto-node-val">Audits the saved Rust file for code quality issues and ensures it complies with CLAWIE.md coding standards.</textarea>
+                        
+                        <!-- Expandable Settings -->
+                        <details class="node-settings-details" style="margin-top: 0.5rem; font-size: 0.7rem; border-top: 1px dashed var(--border); padding-top: 0.5rem;">
+                          <summary style="cursor: pointer; color: var(--text-muted); user-select: none;">⚙️ Fail-safe Guards & Settings</summary>
+                          <div style="margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.25rem; padding-left: 0.5rem;">
+                            <label style="display: flex; align-items: center; gap: 0.35rem; color: var(--text-muted);">
+                              <input type="checkbox" class="node-opt-retry" style="margin: 0;"> Auto-retry on failure (up to 3 times)
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 0.35rem; color: var(--text-muted);">
+                              <input type="checkbox" class="node-opt-continue" style="margin: 0;"> Continue workflow on error
+                            </label>
+                          </div>
+                        </details>
+
+                        <!-- Node Simulation & Payload Inspector -->
+                        <div class="node-simulator" style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; border-top: 1px dashed var(--border); padding-top: 0.5rem;">
+                          <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-size: 0.7rem; color: var(--text-muted);">🔬 Payload Inspector</span>
+                            <button class="node-sim-btn" type="button" style="padding: 0.15rem 0.4rem; font-size: 0.65rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; color: var(--text-primary); transition: all 0.2s;" onclick="simulateNode('action-node-1')">▶️ Simulate Node</button>
+                          </div>
+                          <div class="node-inspector-payload" style="display: none; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.4rem; font-family: monospace; font-size: 0.65rem; color: #10b981; max-height: 100px; overflow-y: auto; margin-top: 0.25rem;">
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 
-                <!-- Connector Line -->
-                <div class="flow-connector" id="flow-connector-1">
-                  <div class="connector-line"></div>
-                  <button class="add-node-btn" type="button" id="btn-add-action-node" title="Add action block">+</button>
-                </div>
-
-                <!-- Action Node 1 -->
-                <div class="flow-node action-node" id="action-node-1">
-                  <div class="node-header">
-                    <div class="node-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;">🤖</div>
-                    <div class="node-title-wrap">
-                      <span class="node-label" style="color: #3b82f6;">ACTION (AI RUNNER)</span>
-                      <strong class="node-name">Clawie Code Auditor</strong>
-                    </div>
-                    <button class="node-remove-btn" type="button" onclick="removeActionNode('action-node-1', 'flow-connector-1')">&times;</button>
-                  </div>
-                  <div class="node-body">
-                    <label>AI Prompt Goal</label>
-                    <textarea rows="2" placeholder="Explain the goal for the agent..." id="auto-input-action-prompt">Audits the saved Rust file for code quality issues and ensures it complies with CLAWIE.md coding standards.</textarea>
-                  </div>
+                <!-- Zoom Controls Overlay -->
+                <div style="position: absolute; bottom: 1rem; left: 1rem; z-index: 10; display: flex; gap: 0.35rem;">
+                  <button class="settings-btn-secondary" onclick="adjustZoom(0.1)" type="button" style="padding: 0.4rem 0.6rem; font-size: 0.7rem; font-weight: bold; background: var(--bg-card);">➕ Zoom In</button>
+                  <button class="settings-btn-secondary" onclick="adjustZoom(-0.1)" type="button" style="padding: 0.4rem 0.6rem; font-size: 0.7rem; font-weight: bold; background: var(--bg-card);">➖ Zoom Out</button>
+                  <button class="settings-btn-secondary" onclick="resetZoom()" type="button" style="padding: 0.4rem 0.6rem; font-size: 0.7rem; font-weight: bold; background: var(--bg-card);">🔄 Center</button>
                 </div>
               </div>
             </div>
@@ -3754,15 +3890,27 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 <h4>1. Preset Quick Flows</h4>
                 <div class="template-presets-grid">
                   <button class="template-chip" type="button" id="tpl-code-guard">
-                    <strong>Code Guard</strong>
+                    <strong>🛡️ Code Guard</strong>
                     <span>Test and fix on save</span>
                   </button>
                   <button class="template-chip" type="button" id="tpl-auto-sync">
-                    <strong>Daily Commit Sync</strong>
+                    <strong>🔄 Daily Commit Sync</strong>
                     <span>Auto-commit summaries</span>
                   </button>
+                  <button class="template-chip" type="button" id="tpl-email-responder">
+                    <strong>📧 AI Email Support</strong>
+                    <span>Auto-answer support queries</span>
+                  </button>
+                  <button class="template-chip" type="button" id="tpl-custom-agent">
+                    <strong>🧠 AI Custom Agent</strong>
+                    <span>Provision simple support agent</span>
+                  </button>
+                  <button class="template-chip" type="button" id="tpl-webhook-http">
+                    <strong>🔌 API Webhook Sync</strong>
+                    <span>Webhook triggering REST call</span>
+                  </button>
                   <button class="template-chip" type="button" id="tpl-cron-runner">
-                    <strong>Cron Runner</strong>
+                    <strong>⏱️ Cron Runner</strong>
                     <span>Timed folder tasks</span>
                   </button>
                 </div>
@@ -3793,6 +3941,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                       <span>Guard local commits</span>
                     </div>
                   </div>
+                  <div class="tool-item" id="tool-trigger-webhook">
+                    <span class="tool-icon">🔌</span>
+                    <div>
+                      <strong>Webhook Endpoint</strong>
+                      <span>Trigger via HTTP requests</span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -3805,6 +3960,62 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                     <div>
                       <strong>Clawie AI Agent</strong>
                       <span>Instruct autonomous coder</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-custom-agent">
+                    <span class="tool-icon" style="color: #8b5cf6;">🧠</span>
+                    <div>
+                      <strong>Create Simple Agent</strong>
+                      <span>Define custom persona & tasks</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-email">
+                    <span class="tool-icon" style="color: #ea580c;">📧</span>
+                    <div>
+                      <strong>Answer Email</strong>
+                      <span>Auto-respond with AI draft</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-summarize">
+                    <span class="tool-icon" style="color: #06b6d4;">📝</span>
+                    <div>
+                      <strong>Summarize Text</strong>
+                      <span>Extract highlights or items</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-slack">
+                    <span class="tool-icon" style="color: #ec4899;">💬</span>
+                    <div>
+                      <strong>Draft Slack Message</strong>
+                      <span>Send alerts to Slack channels</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-http">
+                    <span class="tool-icon" style="color: #38bdf8;">🌐</span>
+                    <div>
+                      <strong>API Request</strong>
+                      <span>Call external REST APIs</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-nested">
+                    <span class="tool-icon" style="color: #fb7185;">📦</span>
+                    <div>
+                      <strong>Nested Flow</strong>
+                      <span>Invoke another task-flow</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-routing">
+                    <span class="tool-icon" style="color: #fbbf24;">🔀</span>
+                    <div>
+                      <strong>Routing Guard</strong>
+                      <span>Conditional branch splitter</span>
+                    </div>
+                  </div>
+                  <div class="tool-item" id="tool-action-iterator">
+                    <span class="tool-icon" style="color: #34d399;">🔄</span>
+                    <div>
+                      <strong>Batch Iterator</strong>
+                      <span>Loop over items or files</span>
                     </div>
                   </div>
                   <div class="tool-item" id="tool-action-bash">
@@ -3821,16 +4032,32 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                       <span>Emit system sound or alert</span>
                     </div>
                   </div>
+                  <div class="tool-item" id="tool-action-sticky">
+                    <span class="tool-icon" style="color: #fde047;">📌</span>
+                    <div>
+                      <strong>Add Sticky Note</strong>
+                      <span>Annotate your flow canvas</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-          <!-- Secret coming soon mode overlay -->
-          <div class="automations-coming-soon" id="automations-coming-soon" style="display: none; margin: 4rem auto; max-width: 480px; text-align: center; background: var(--bg-card); border: 1px solid var(--border); padding: 3rem 2rem; border-radius: var(--radius-lg); box-shadow: var(--panel-shadow);">
-            <div class="automations-emoji" aria-hidden="true" style="font-size: 6rem; line-height: 1; margin-bottom: 1.5rem; animation: float-shrimp 3s infinite ease-in-out;">🦐</div>
-            <h2 style="font-size: 1.5rem; color: var(--text-primary); margin: 0;">Automations</h2>
-            <p style="font-size: 1rem; margin-top: 0.5rem; color: var(--text-secondary);">Shrimp and more coming soon...</p>
-            <button class="settings-btn-secondary" onclick="resetSecretMode()" style="margin-top: 1.5rem; padding: 0.5rem 1rem;">Back to Builder</button>
+          <!-- Secret coming soon mode overlay removed -->
+          
+          <!-- Slide-out Configuration Drawer Panel -->
+          <div id="node-config-drawer" style="position: absolute; top: 0; right: -400px; width: 380px; height: 100%; background: var(--bg-card); border-left: 1px solid var(--border); z-index: 1000; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: -10px 0 30px rgba(0,0,0,0.6); padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem;">
+              <h3 id="drawer-node-title" style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">Configure Node</h3>
+              <button onclick="closeDrawer()" type="button" style="background: none; border: none; font-size: 1.5rem; color: var(--text-muted); cursor: pointer; transition: color 0.2s;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">&times;</button>
+            </div>
+            <div id="drawer-node-body" style="flex: 1; display: flex; flex-direction: column; gap: 1rem;">
+              <!-- Config inputs go here -->
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 0.75rem;">
+              <button onclick="closeDrawer()" type="button" class="settings-btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.75rem;">Cancel</button>
+              <button onclick="saveDrawerSettings()" type="button" class="settings-btn-save" style="padding: 0.5rem 1rem; font-size: 0.75rem;">Apply Changes</button>
+            </div>
           </div>
         </section>
       </main>
@@ -5885,7 +6112,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     };
 
     // Helper: Append Action Node
-    window.appendActionNode = function(type, value = '', customTitle = '') {
+    window.appendActionNode = function(type, value = '', customTitle = '', value2 = '') {
       actionNodeCounter++;
       const currentId = `action-node-${actionNodeCounter}`;
       const connId = `flow-connector-${actionNodeCounter}`;
@@ -5901,7 +6128,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
       // Node HTML
       const node = document.createElement('div');
-      node.className = 'flow-node action-node';
+      node.className = `flow-node action-node ${type}-node`;
       node.id = currentId;
 
       let icon = '🤖';
@@ -5918,6 +6145,115 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         bodyHtml = `
           <label>AI Prompt Goal</label>
           <textarea rows="2" placeholder="Explain the goal for the agent..." class="auto-node-val">${value || 'Audits code changes and fixes quality warnings.'}</textarea>
+        `;
+      } else if (type === 'simple-agent') {
+        icon = '🧠';
+        title = customTitle || 'Create Simple Agent';
+        label = 'ACTION (CUSTOM AGENT)';
+        labelColor = '#8b5cf6';
+        bodyHtml = `
+          <label>Agent Name / Persona</label>
+          <input type="text" placeholder="e.g. Support Helper Agent" class="auto-node-val" value="${value || 'Support Helper Agent'}">
+          <label>System Instructions</label>
+          <textarea rows="2" placeholder="Instructions for the agent..." class="auto-node-val-2">${value2 || 'You are a helpful customer support agent for Clawie. Be polite and concise.'}</textarea>
+        `;
+      } else if (type === 'email') {
+        icon = '📧';
+        title = customTitle || 'Answer Email';
+        label = 'ACTION (EMAIL AUTO-RESPONDER)';
+        labelColor = '#ea580c';
+        bodyHtml = `
+          <label>Email Filter (e.g. subject:support)</label>
+          <input type="text" placeholder="e.g. subject:support" class="auto-node-val" value="${value || 'subject:support'}">
+          <label>Response Template & AI Instructions</label>
+          <textarea rows="2" placeholder="Draft rules for responding..." class="auto-node-val-2">${value2 || 'Draft a polite response answering the customer\'s technical query.'}</textarea>
+        `;
+      } else if (type === 'summarize') {
+        icon = '📝';
+        title = customTitle || 'Summarize Text';
+        label = 'ACTION (TEXT SUMMARIZATION)';
+        labelColor = '#06b6d4';
+        bodyHtml = `
+          <label>Summary Length & Focus</label>
+          <input type="text" placeholder="e.g. 3 bullet points" class="auto-node-val" value="${value || '3 concise bullet points outlining key requests'}">
+          <label>Input Source</label>
+          <select class="auto-node-val-select" style="width: 100%; padding: 0.4rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); margin-top: 0.25rem;">
+            <option value="trigger-output" ${value2 === 'trigger-output' ? 'selected' : ''}>Output from previous node</option>
+            <option value="email-body" ${value2 === 'email-body' ? 'selected' : ''}>Raw Email Body</option>
+            <option value="file-content" ${value2 === 'file-content' ? 'selected' : ''}>File Contents</option>
+          </select>
+        `;
+      } else if (type === 'slack') {
+        icon = '💬';
+        title = customTitle || 'Draft Slack Message';
+        label = 'ACTION (SLACK INTEG)';
+        labelColor = '#ec4899';
+        bodyHtml = `
+          <label>Target Channel</label>
+          <input type="text" placeholder="e.g. #support-alerts" class="auto-node-val" value="${value || '#support-alerts'}">
+          <label>Slack Message Template</label>
+          <textarea rows="2" placeholder="Draft slack message..." class="auto-node-val-2">${value2 || '📢 *New Support Alert!* Info: {summarize.output}'}</textarea>
+        `;
+      } else if (type === 'http') {
+        icon = '🌐';
+        title = customTitle || 'API Request';
+        label = 'ACTION (REST API)';
+        labelColor = '#38bdf8';
+        bodyHtml = `
+          <label>Request Method & URL</label>
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.25rem;">
+            <select class="auto-node-val-select" style="width: auto; padding: 0.4rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary);">
+              <option>POST</option>
+              <option>GET</option>
+              <option>PUT</option>
+            </select>
+            <input type="text" placeholder="https://api.example.com/v1/alert" class="auto-node-val" style="flex: 1;" value="${value || 'https://api.example.com/v1/alert'}">
+          </div>
+          <label>Headers (JSON)</label>
+          <input type="text" placeholder='{"Content-Type": "application/json"}' class="auto-node-val-2" value='{"Content-Type": "application/json"}'>
+        `;
+      } else if (type === 'nested') {
+        icon = '📦';
+        title = customTitle || 'Nested Flow';
+        label = 'ACTION (SUB-WORKFLOW)';
+        labelColor = '#fb7185';
+        bodyHtml = `
+          <label>Select Target Flow</label>
+          <select class="auto-node-val-select" style="width: 100%; padding: 0.4rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary);">
+            <option value="commit-sync">Daily Commit Sync</option>
+            <option value="code-fix">Code Guard Auto-Fix</option>
+            <option value="notifications">Broadcaster System</option>
+          </select>
+          <label>Pass Input Data</label>
+          <input type="text" class="auto-node-val" value="${value || '{trigger.data}'}">
+        `;
+      } else if (type === 'routing') {
+        icon = '🔀';
+        title = customTitle || 'Routing Guard';
+        label = 'ACTION (CONDITIONAL)';
+        labelColor = '#fbbf24';
+        bodyHtml = `
+          <label>Check Condition</label>
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.25rem;">
+            <input type="text" placeholder="Variable" class="auto-node-val" style="width: 40%;" value="${value || '{agent.exit_code}'}">
+            <select class="auto-node-val-select" style="width: auto; padding: 0.4rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary);">
+              <option value="eq">equals</option>
+              <option value="ne">not equals</option>
+              <option value="contains">contains</option>
+            </select>
+            <input type="text" placeholder="Value" class="auto-node-val-2" style="width: 40%;" value="${value2 || '0'}">
+          </div>
+        `;
+      } else if (type === 'iterator') {
+        icon = '🔄';
+        title = customTitle || 'Batch Iterator';
+        label = 'ACTION (LOOP)';
+        labelColor = '#34d399';
+        bodyHtml = `
+          <label>Input Items Array</label>
+          <input type="text" placeholder="e.g. {trigger.changed_files}" class="auto-node-val" value="${value || '{trigger.changed_files}'}">
+          <label>Batch Size (Parallel execution)</label>
+          <input type="number" class="auto-node-val-2" style="width: 80px;" value="${value2 || '1'}">
         `;
       } else if (type === 'bash') {
         icon = '💻';
@@ -5950,16 +6286,316 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         </div>
         <div class="node-body">
           ${bodyHtml}
+          
+          <!-- Expandable Fail-safe & Settings -->
+          <details class="node-settings-details" style="margin-top: 0.5rem; font-size: 0.7rem; border-top: 1px dashed var(--border); padding-top: 0.5rem;">
+            <summary style="cursor: pointer; color: var(--text-muted); user-select: none;">⚙️ Fail-safe Guards & Settings</summary>
+            <div style="margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.25rem; padding-left: 0.5rem;">
+              <label style="display: flex; align-items: center; gap: 0.35rem; color: var(--text-muted);">
+                <input type="checkbox" class="node-opt-retry" style="margin: 0;"> Auto-retry on failure (up to 3 times)
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.35rem; color: var(--text-muted);">
+                <input type="checkbox" class="node-opt-continue" style="margin: 0;"> Continue workflow on error
+              </label>
+            </div>
+          </details>
+
+          <!-- Node Simulation & Payload Inspector -->
+          <div class="node-simulator" style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; border-top: 1px dashed var(--border); padding-top: 0.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 0.7rem; color: var(--text-muted);">🔬 Payload Inspector</span>
+              <button class="node-sim-btn" type="button" style="padding: 0.15rem 0.4rem; font-size: 0.65rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; color: var(--text-primary); transition: all 0.2s;" onclick="simulateNode('${currentId}')">▶️ Simulate Node</button>
+            </div>
+            <div class="node-inspector-payload" style="display: none; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.4rem; font-family: monospace; font-size: 0.65rem; color: #10b981; max-height: 100px; overflow-y: auto; margin-top: 0.25rem;">
+            </div>
+          </div>
         </div>
       `;
 
-      flowNodesList.appendChild(connector);
       flowNodesList.appendChild(node);
-      node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      
+      initDraggable(node);
+      addPorts(node, true, true);
+      setupNodeClick(node);
+      
+      redrawConnections();
+    };
+
+    // AUTOMATIONS FLOW BUILDER INTERACTIVE CONTROLLER
+    const flowNodesList = document.querySelector('#nodes-layer');
+    const autoTriggerName = document.querySelector('#auto-trigger-name');
+    const autoTriggerBody = document.querySelector('#auto-trigger-body');
+    const autoBtnClear = document.querySelector('#auto-btn-clear');
+    const autoBtnSave = document.querySelector('#auto-btn-save');
+
+    let actionNodeCounter = 1;
+    let currentZoom = 1.0;
+    let panX = 0;
+    let panY = 0;
+
+    // Helper: Remove action node
+    window.removeActionNode = function(nodeId) {
+      const node = document.getElementById(nodeId);
+      if (node) node.remove();
+      redrawConnections();
+    };
+
+    // Helper: Add connection ports (bullets) to a node
+    window.addPorts = function(node, hasInput, hasOutput) {
+      if (hasInput && !node.querySelector('.input-port')) {
+        const inputPort = document.createElement('div');
+        inputPort.className = 'node-port input-port';
+        node.appendChild(inputPort);
+      }
+      if (hasOutput && !node.querySelector('.output-port')) {
+        const outputPort = document.createElement('div');
+        outputPort.className = 'node-port output-port';
+        node.appendChild(outputPort);
+      }
+    };
+
+    // Helper: Setup click to open configuration drawer
+    window.setupNodeClick = function(node) {
+      node.addEventListener('click', (e) => {
+        if (e.target.closest('.node-sim-btn') || e.target.closest('.node-remove-btn') || e.target.closest('.node-settings-details') || e.target.closest('input') || e.target.closest('textarea') || e.target.closest('select')) {
+          return;
+        }
+        openNodeDrawer(node.id);
+      });
+    };
+
+    // Helper: Initialize dragging for a node
+    let activeDragNode = null;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let nodeStartX = 0;
+    let nodeStartY = 0;
+
+    window.initDraggable = function(node) {
+      const header = node.querySelector('.node-header');
+      if (!header) return;
+      header.style.cursor = 'move';
+      header.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.node-remove-btn')) return;
+        activeDragNode = node;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        nodeStartX = parseInt(node.style.left) || 0;
+        nodeStartY = parseInt(node.style.top) || 0;
+        node.style.zIndex = 100;
+        e.preventDefault();
+      });
+    };
+
+    // Mouse Move listener for node drag & canvas pan
+    let isPanning = false;
+    let panStartX = 0;
+    let panStartY = 0;
+
+    document.addEventListener('mousemove', (e) => {
+      if (activeDragNode) {
+        const dx = (e.clientX - dragStartX) / currentZoom;
+        const dy = (e.clientY - dragStartY) / currentZoom;
+        activeDragNode.style.left = `${nodeStartX + dx}px`;
+        activeDragNode.style.top = `${nodeStartY + dy}px`;
+        redrawConnections();
+      } else if (isPanning) {
+        panX = e.clientX - panStartX;
+        panY = e.clientY - panStartY;
+        updateCanvasTransform();
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (activeDragNode) {
+        activeDragNode.style.zIndex = 2;
+        activeDragNode = null;
+      }
+      if (isPanning) {
+        isPanning = false;
+        document.getElementById('canvas-viewport').style.cursor = 'grab';
+      }
+    });
+
+    // Panning bindings on viewport background
+    setTimeout(() => {
+      const gridOverlay = document.getElementById('canvas-grid-overlay');
+      if (gridOverlay) {
+        gridOverlay.addEventListener('mousedown', (e) => {
+          isPanning = true;
+          panStartX = e.clientX - panX;
+          panStartY = e.clientY - panY;
+          document.getElementById('canvas-viewport').style.cursor = 'grabbing';
+        });
+      }
+      
+      const viewport = document.getElementById('canvas-viewport');
+      if (viewport) {
+        viewport.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          const zoomFactor = 0.05;
+          const amount = e.deltaY < 0 ? zoomFactor : -zoomFactor;
+          adjustZoom(amount);
+        }, { passive: false });
+      }
+    }, 500);
+
+    // Zoom handlers
+    window.adjustZoom = function(amount) {
+      currentZoom = Math.min(Math.max(currentZoom + amount, 0.4), 1.8);
+      updateCanvasTransform();
+    };
+
+    window.resetZoom = function() {
+      currentZoom = 1.0;
+      panX = 0;
+      panY = 0;
+      updateCanvasTransform();
+    };
+
+    window.updateCanvasTransform = function() {
+      const nodesLayer = document.getElementById('nodes-layer');
+      const connectionSvg = document.getElementById('connection-svg');
+      if (nodesLayer) nodesLayer.style.transform = `translate(${panX}px, ${panY}px) scale(${currentZoom})`;
+      if (connectionSvg) connectionSvg.style.transform = `translate(${panX}px, ${panY}px) scale(${currentZoom})`;
+    };
+
+    // SVG S-Curve Path Calculator
+    window.drawCurve = function(x1, y1, x2, y2) {
+      const ctrlX1 = x1 + 100;
+      const ctrlY1 = y1;
+      const ctrlX2 = x2 - 100;
+      const ctrlY2 = y2;
+      return `M ${x1} ${y1} C ${ctrlX1} ${ctrlY1}, ${ctrlX2} ${ctrlY2}, ${x2} ${y2}`;
+    };
+
+    // Redraw SVG connections between adjacent nodes in flowNodesList
+    window.redrawConnections = function() {
+      const svg = document.getElementById('connection-svg');
+      if (!svg) return;
+      svg.innerHTML = '';
+      
+      const nodes = Array.from(flowNodesList.querySelectorAll('.flow-node'));
+      if (nodes.length < 2) return;
+      
+      for (let i = 0; i < nodes.length - 1; i++) {
+        const nodeA = nodes[i];
+        const nodeB = nodes[i+1];
+        
+        // Skip sticky notes in paths
+        if (nodeA.classList.contains('sticky-note') || nodeB.classList.contains('sticky-note')) {
+          continue;
+        }
+        
+        const x1 = parseInt(nodeA.style.left) + 260; // Node Width is 260px
+        const y1 = parseInt(nodeA.style.top) + 35;  // Middle of header
+        
+        const x2 = parseInt(nodeB.style.left);
+        const y2 = parseInt(nodeB.style.top) + 35;
+        
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const d = drawCurve(x1, y1, x2, y2);
+        path.setAttribute('d', d);
+        path.setAttribute('stroke', 'var(--border)');
+        path.setAttribute('stroke-width', '3');
+        path.setAttribute('fill', 'none');
+        path.setAttribute('class', 'connection-path');
+        svg.appendChild(path);
+      }
+    };
+
+    // Configuration drawer controls
+    let activeConfigNodeId = null;
+
+    window.openNodeDrawer = function(nodeId) {
+      activeConfigNodeId = nodeId;
+      const node = document.getElementById(nodeId);
+      const title = node.querySelector('.node-name').textContent;
+      const body = node.querySelector('.node-body');
+      
+      document.getElementById('drawer-node-title').innerHTML = `⚙️ Configure ${title}`;
+      
+      const drawerBody = document.getElementById('drawer-node-body');
+      drawerBody.innerHTML = '';
+      
+      const inputs = body.querySelectorAll('input, textarea, select');
+      inputs.forEach(input => {
+        if (input.closest('.node-simulator') || input.closest('.node-settings-details')) return;
+        
+        const labelText = input.previousElementSibling ? input.previousElementSibling.textContent : '';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'drawer-field-wrap';
+        wrapper.innerHTML = `<label>${labelText}</label>`;
+        
+        const clonedInput = input.cloneNode(true);
+        clonedInput.value = input.value;
+        clonedInput.dataset.targetClass = Array.from(input.classList).join('.');
+        
+        wrapper.appendChild(clonedInput);
+        drawerBody.appendChild(wrapper);
+      });
+      
+      document.getElementById('node-config-drawer').style.right = '0';
+    };
+
+    window.closeDrawer = function() {
+      document.getElementById('node-config-drawer').style.right = '-400px';
+      activeConfigNodeId = null;
+    };
+
+    window.saveDrawerSettings = function() {
+      if (!activeConfigNodeId) return;
+      const node = document.getElementById(activeConfigNodeId);
+      const body = node.querySelector('.node-body');
+      const drawerBody = document.getElementById('drawer-node-body');
+      
+      const drawerInputs = drawerBody.querySelectorAll('input, textarea, select');
+      drawerInputs.forEach(dInput => {
+        const targetClass = dInput.dataset.targetClass;
+        const targetInput = body.querySelector(`.${targetClass}`);
+        if (targetInput) {
+          targetInput.value = dInput.value;
+        }
+      });
+      
+      setStatus('Node configurations saved', 'saved');
+      closeDrawer();
+    };
+
+    // Helper: Append Sticky Note
+    window.appendStickyNote = function() {
+      actionNodeCounter++;
+      const currentId = `sticky-note-${actionNodeCounter}`;
+      
+      const note = document.createElement('div');
+      note.className = 'flow-node sticky-note';
+      note.id = currentId;
+      note.style.position = 'absolute';
+      note.style.left = '150px';
+      note.style.top = '280px';
+      note.style.width = '200px';
+      note.style.background = '#fef08a';
+      note.style.color = '#1e293b';
+      note.style.padding = '0.75rem';
+      note.style.borderRadius = 'var(--radius-sm)';
+      note.style.boxShadow = 'var(--panel-shadow)';
+      note.style.border = '1px solid #fde047';
+      note.style.zIndex = 10;
+      
+      note.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(0,0,0,0.1); padding-bottom: 0.25rem; margin-bottom: 0.5rem; font-size: 0.65rem; color: #64748b;">
+          <strong>📌 NOTE</strong>
+          <button style="background: none; border: none; font-size: 1rem; color: #64748b; cursor: pointer;" onclick="document.getElementById('${currentId}').remove()">&times;</button>
+        </div>
+        <textarea style="width: 100%; border: none; background: transparent; resize: none; font-size: 0.75rem; color: #1e293b; outline: none;" rows="3" placeholder="Type notes here..."></textarea>
+      `;
+      
+      flowNodesList.appendChild(note);
+      initDraggable(note);
     };
 
     // Set Trigger Type
-    function setTriggerType(type) {
+    window.setTriggerType = function(type) {
       if (type === 'file') {
         autoTriggerName.textContent = 'On File Save';
         autoTriggerBody.innerHTML = `
@@ -5978,49 +6614,49 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           <label>Git Hook Stage</label>
           <input type="text" value="pre-commit" readonly id="auto-input-trigger-git">
         `;
+      } else if (type === 'webhook') {
+        autoTriggerName.textContent = 'Webhook Listener';
+        autoTriggerBody.innerHTML = `
+          <label>Webhook URL (Endpoint path)</label>
+          <input type="text" value="/webhooks/clawie-receive" readonly id="auto-input-trigger-webhook">
+          <div style="font-size: 0.68rem; color: var(--text-muted); margin-top: 0.25rem;">Triggers when POST request is sent to http://127.0.0.1:port/webhooks/clawie-receive</div>
+        `;
       }
-    }
-
-    // Bind Add Node Button
-    if (btnAddActionNode) {
-      btnAddActionNode.addEventListener('click', () => {
-        appendActionNode('ai-agent');
-      });
-    }
+    };
 
     // Bind Tools Trigger clicks
     document.querySelector('#tool-trigger-file').addEventListener('click', () => setTriggerType('file'));
     document.querySelector('#tool-trigger-cron').addEventListener('click', () => setTriggerType('cron'));
     document.querySelector('#tool-trigger-git').addEventListener('click', () => setTriggerType('git'));
+    document.querySelector('#tool-trigger-webhook').addEventListener('click', () => setTriggerType('webhook'));
 
     // Bind Tools Action clicks
     document.querySelector('#tool-action-agent').addEventListener('click', () => appendActionNode('ai-agent'));
+    document.querySelector('#tool-action-custom-agent').addEventListener('click', () => appendActionNode('simple-agent'));
+    document.querySelector('#tool-action-email').addEventListener('click', () => appendActionNode('email'));
+    document.querySelector('#tool-action-summarize').addEventListener('click', () => appendActionNode('summarize'));
+    document.querySelector('#tool-action-slack').addEventListener('click', () => appendActionNode('slack'));
+    document.querySelector('#tool-action-http').addEventListener('click', () => appendActionNode('http'));
+    document.querySelector('#tool-action-nested').addEventListener('click', () => appendActionNode('nested'));
+    document.querySelector('#tool-action-routing').addEventListener('click', () => appendActionNode('routing'));
+    document.querySelector('#tool-action-iterator').addEventListener('click', () => appendActionNode('iterator'));
     document.querySelector('#tool-action-bash').addEventListener('click', () => appendActionNode('bash'));
     document.querySelector('#tool-action-notify').addEventListener('click', () => appendActionNode('notify'));
+    document.querySelector('#tool-action-sticky').addEventListener('click', () => appendStickyNote());
 
     // Bind Clear button
     autoBtnClear.addEventListener('click', () => {
-      // Remove all elements after the first trigger node
-      const children = Array.from(flowNodesList.children);
-      for (let i = 1; i < children.length; i++) {
-        children[i].remove();
-      }
-      
-      // Re-create connector
-      const connector = document.createElement('div');
-      connector.className = 'flow-connector';
-      connector.id = 'flow-connector-1';
-      connector.innerHTML = `
-        <div class="connector-line"></div>
-        <button class="add-node-btn" type="button" id="btn-add-action-node" title="Add action block">+</button>
-      `;
-      flowNodesList.appendChild(connector);
-      
-      // Rebind newly created btnAddActionNode
-      document.querySelector('#btn-add-action-node').addEventListener('click', () => {
-        appendActionNode('ai-agent');
+      const trigger = document.getElementById('trigger-node-main');
+      const nodes = Array.from(flowNodesList.children);
+      nodes.forEach(node => {
+        if (node !== trigger) {
+          node.remove();
+        }
       });
-
+      
+      setTriggerType('file');
+      resetZoom();
+      redrawConnections();
       setStatus('Automation canvas reset', 'saved');
     });
 
@@ -6042,6 +6678,37 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       setStatus('Loaded "Daily Commit Sync" template', 'saved');
     });
 
+    document.querySelector('#tpl-email-responder').addEventListener('click', () => {
+      autoBtnClear.click();
+      setTriggerType('cron');
+      document.querySelector('#auto-input-trigger-cron').value = '*/15 * * * *';
+      appendActionNode('simple-agent', 'Support Helper Agent', 'You are a helpful customer support agent for Clawie. Be polite and concise.');
+      appendActionNode('summarize', '3 concise bullet points outlining key requests', 'trigger-output');
+      appendActionNode('email', 'subject:support', 'Draft a polite response answering the customer\'s technical query.');
+      appendActionNode('slack', '#support-alerts', '📢 *New Support Alert!* Email summarized and responded.');
+      setStatus('Loaded "AI Email Support" template', 'saved');
+    });
+
+    document.querySelector('#tpl-custom-agent').addEventListener('click', () => {
+      autoBtnClear.click();
+      setTriggerType('file');
+      document.querySelector('#auto-input-trigger-glob').value = '**/*.rs';
+      appendActionNode('simple-agent', 'Rust Expert Auditor', 'You are a Senior Rust compiler specialist. Review the code for safety and performance.');
+      appendActionNode('ai-agent', 'Run the custom auditor agent to perform linting.', 'Clawie AI Agent');
+      appendActionNode('notify', 'Custom agent execution complete.', 'Emit Alert Notification');
+      setStatus('Loaded "AI Custom Agent" template', 'saved');
+    });
+
+    document.querySelector('#tpl-webhook-http').addEventListener('click', () => {
+      autoBtnClear.click();
+      setTriggerType('webhook');
+      appendActionNode('routing', '{agent.exit_code}', 'Conditional Branch', '0');
+      appendActionNode('iterator', '{trigger.changed_files}', 'Loop Over Files', '1');
+      appendActionNode('http', 'https://api.example.com/v1/alert', 'Call API Endpoint');
+      appendActionNode('slack', '#support-alerts', 'Notify Team on Slack');
+      setStatus('Loaded "API Webhook Sync" template', 'saved');
+    });
+
     document.querySelector('#tpl-cron-runner').addEventListener('click', () => {
       autoBtnClear.click();
       setTriggerType('cron');
@@ -6054,35 +6721,117 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     // Save Button
     autoBtnSave.addEventListener('click', () => {
       const triggerName = autoTriggerName.textContent;
-      setStatus(`Automation workflow "${triggerName}" activated successfully!`, 'saved');
+      const nodes = Array.from(flowNodesList.querySelectorAll('.flow-node'));
+      const flowDescription = nodes.map(n => {
+        const title = n.querySelector('.node-name').textContent;
+        const icon = n.querySelector('.node-icon').textContent;
+        return `${icon} ${title}`;
+      }).join(' → ');
+      
+      setStatus(`Activated Workflow: ${flowDescription}`, 'saved');
     });
 
-    // SECRET EASTER EGG MODE (3 BUTTON PRESSES -> SHRIMP COMING SOON SCREEN)
-    let secretClickCount = 0;
-    const automationsPageNode = document.querySelector('#automations-page');
-    const autoBuilderContainer = document.querySelector('.automation-builder-container');
-    const automationsComingSoon = document.querySelector('#automations-coming-soon');
-
-    automationsPageNode.addEventListener('click', (e) => {
-      if (e.target.tagName === 'BUTTON' && !e.target.classList.contains('close-btn') && e.target.id !== 'reset-secret-btn') {
-        secretClickCount++;
-        if (secretClickCount === 3) {
-          autoBuilderContainer.style.display = 'none';
-          automationsComingSoon.style.display = 'flex';
-          automationsComingSoon.style.flexDirection = 'column';
-          automationsComingSoon.style.alignItems = 'center';
-          automationsComingSoon.style.justifyContent = 'center';
-          setStatus('🦐 Shrimp mode activated!', 'saved');
+    // Node Simulator Logic
+    window.simulateNode = function(nodeId) {
+      const node = document.getElementById(nodeId);
+      if (!node) return;
+      const simBtn = node.querySelector('.node-sim-btn');
+      const inspector = node.querySelector('.node-inspector-payload');
+      
+      const originalText = simBtn.innerHTML;
+      simBtn.innerHTML = '⏳ Simulating...';
+      simBtn.disabled = true;
+      
+      const paths = document.querySelectorAll('.connection-path');
+      paths.forEach(p => p.classList.add('simulating'));
+      
+      setTimeout(() => {
+        simBtn.innerHTML = '✅ Done';
+        inspector.style.display = 'block';
+        
+        let mockOutput = {};
+        const nodeNameElement = node.querySelector('.node-name');
+        const nodeName = nodeNameElement ? nodeNameElement.textContent : 'Node';
+        
+        if (node.classList.contains('ai-agent-node')) {
+          mockOutput = {
+            "status": "success",
+            "findings": 0,
+            "actions_taken": "Audited local files. No security compliance issues found.",
+            "output_tokens": 348
+          };
+        } else if (node.classList.contains('simple-agent-node')) {
+          mockOutput = {
+            "agent_id": "agent_" + Math.floor(Math.random() * 1000),
+            "status": "active",
+            "persona": "Customer Support Helper",
+            "instructions_applied": true
+          };
+        } else if (node.classList.contains('email-node')) {
+          mockOutput = {
+            "email_id": "msg_938127",
+            "status": "draft_created",
+            "to": "customer@example.com",
+            "draft_body": "Hello! Thank you for reaching out. We have received your request..."
+          };
+        } else if (node.classList.contains('summarize-node')) {
+          mockOutput = {
+            "source_type": "trigger-output",
+            "bullet_points": [
+              "User is requesting technical documentation access",
+              "Action: Email responder agent initiated",
+              "Severity: Normal"
+            ]
+          };
+        } else if (node.classList.contains('slack-node')) {
+          mockOutput = {
+            "channel": "#support-alerts",
+            "delivered": true,
+            "timestamp": new Date().toISOString()
+          };
+        } else if (node.classList.contains('http-node')) {
+          mockOutput = {
+            "response_code": 200,
+            "response_body": {
+              "ok": true,
+              "message": "API call completed successfully."
+            }
+          };
+        } else if (node.classList.contains('nested-node')) {
+          mockOutput = {
+            "sub_workflow_id": "wf_daily_sync",
+            "status": "triggered_async",
+            "execution_id": "exec_847192"
+          };
+        } else if (node.classList.contains('routing-node')) {
+          mockOutput = {
+            "evaluated_condition": "{agent.exit_code} == 0",
+            "result": true,
+            "routed_branch": "success"
+          };
+        } else if (node.classList.contains('iterator-node')) {
+          mockOutput = {
+            "loop_count": 3,
+            "active_item": "src/main.rs",
+            "status": "iterating"
+          };
+        } else {
+          mockOutput = {
+            "exit_code": 0,
+            "stdout": "Command completed successfully."
+          };
         }
-      }
-    });
-
-    window.resetSecretMode = function() {
-      secretClickCount = 0;
-      automationsComingSoon.style.display = 'none';
-      autoBuilderContainer.style.display = 'grid';
-      setStatus('Returned to Builder', 'saved');
+        
+        inspector.innerHTML = `<strong>Input:</strong> { ... }<br><strong>Output:</strong> ${JSON.stringify(mockOutput, null, 2)}`;
+        
+        setTimeout(() => {
+          simBtn.innerHTML = originalText;
+          simBtn.disabled = false;
+        }, 1500);
+      }, 800);
     };
+
+    // Easter egg mode disabled - builder remains fully active
   </script>
 </body>
 </html>"##;

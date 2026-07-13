@@ -61,7 +61,7 @@ class RustPythonSyncTests(unittest.TestCase):
         rust_files = {p.relative_to(rust_src) for p in rust_src.rglob('*.py') 
                       if '__pycache__' not in p.parts and p.name != '_archive_helper.py'}
         python_files = {p.relative_to(python_src) for p in python_src.rglob('*.py') 
-                        if '__pycache__' not in p.parts}
+                        if '__pycache__' not in p.parts and p.name != '_archive_helper.py'}
         
         missing_in_python = rust_files - python_files
         missing_in_rust = python_files - rust_files

@@ -1,0 +1,15 @@
+{
+  "session_id": "661ceda3093b4a3483c12f55b0d34750",
+  "messages": [
+    "review MCP tool"
+  ],
+  "input_tokens": 3,
+  "output_tokens": 13,
+  "memory_journal": [
+    "Prompt: review MCP tool",
+    "Matched commands: none",
+    "Matched tools: none",
+    "Permission denials: 0"
+  ],
+  "code_references": []
+}

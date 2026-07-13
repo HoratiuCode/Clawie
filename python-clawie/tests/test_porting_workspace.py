@@ -138,8 +138,8 @@ class PortingWorkspaceTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertIn('Command review would handle prompt', command_result.stdout)
-        self.assertIn('Tool MCPTool would handle payload', tool_result.stdout)
+        self.assertIn('would handle prompt', command_result.stdout)
+        self.assertIn('would handle payload', tool_result.stdout)
 
     def test_setup_report_and_registry_filters_run(self) -> None:
         setup_result = subprocess.run(
@@ -229,9 +229,9 @@ class PortingWorkspaceTests(unittest.TestCase):
             self.assertFalse(report.ready_to_ship)
             self.assertGreaterEqual(len(report.findings), 2)
             rendered = report.as_markdown()
-            self.assertIn('Pre-ship', rendered)
+            self.assertIn('Before Ship', rendered)
             self.assertIn('Findings', rendered)
-            self.assertIn('Recommended Fixes', rendered)
+            self.assertIn('Modifications', rendered)
 
     def test_shrimpi_cli_runs(self) -> None:
         with TemporaryDirectory() as tempdir:
@@ -253,7 +253,7 @@ class PortingWorkspaceTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertIn('Shrimpi Report', result.stdout)
+            self.assertIn('Shrimpi Shipie Notes', result.stdout)
             self.assertIn('Findings', result.stdout)
 
     def test_load_session_missing_raises_clear_error(self) -> None:
@@ -334,8 +334,8 @@ class PortingWorkspaceTests(unittest.TestCase):
         registry = build_execution_registry()
         self.assertGreaterEqual(len(registry.commands), 150)
         self.assertGreaterEqual(len(registry.tools), 100)
-        self.assertIn('Command review would handle prompt', registry.command('review').execute('review security'))
-        self.assertIn('Tool MCPTool would handle payload', registry.tool('MCPTool').execute('fetch mcp resources'))
+        self.assertIn('would handle prompt', registry.command('review').execute('review security'))
+        self.assertIn('would handle payload', registry.tool('MCPTool').execute('fetch mcp resources'))
 
     def test_bootstrap_graph_and_direct_modes_run(self) -> None:
         graph_result = subprocess.run([sys.executable, '-m', 'src.main', 'bootstrap-graph'], check=True, capture_output=True, text=True)

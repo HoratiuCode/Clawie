@@ -1,0 +1,40 @@
+{
+  "notes": [
+    "Prompt: review MCP tool | Matched commands: UltrareviewOverageDialog | Matched tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool |...",
+    "review MCP tool",
+    "Prompt: review MCP tool\nMatched commands: UltrareviewOverageDialog\nMatched tools: ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool\nPermission denials: 0",
+    "UltrareviewOverageDialog",
+    "ListMcpResourcesTool",
+    "MCPTool",
+    "McpAuthTool",
+    "ReadMcpResourceTool",
+    "Prompt: review MCP tool | Matched commands: none | Matched tools: none | Permission denials: 0",
+    "Prompt: review MCP tool\nMatched commands: none\nMatched tools: none\nPermission denials: 0",
+    "Prompt: review python-clawie/src/query_engine.py and python-clawie/src/session_store.py | Matched commands: none | Matched tools: none | Permission denials:...",
+    "review python-clawie/src/query_engine.py and python-clawie/src/session_store.py",
+    "Prompt: review python-clawie/src/query_engine.py and python-clawie/src/session_store.py\nMatched commands: none\nMatched tools: none\nPermission denials: 0",
+    "Prompt: continue reviewing the same code paths | Matched commands: theme, theme | Matched tools: SyntheticOutputTool...",
+    "continue reviewing the same code paths",
+    "Prompt: continue reviewing the same code paths Matched commands: theme, theme Matched tools: SyntheticOutputTool Permission denials:...",
+    "theme",
+    "SyntheticOutputTool"
+  ],
+  "code_references": [
+    "python-clawie/src/query_engine.py",
+    "python-clawie/src/session_store.py"
+  ],
+  "session_ids": [
+    "92cb21d618f5444aa85befc9cd91c8d3",
+    "2635b361cebf46d2949b9c2062dcb607",
+    "661ceda3093b4a3483c12f55b0d34750",
+    "8fd50f8edafe496fa68622d313517796",
+    "f1adf2c954524376a7c3f46681ee33b0",
+    "b5c20ef7ccc24fc99534ac4e42bb8c95",
+    "746438cd1e014f40a6fc9cc1af896a18",
+    "524cc1fc4a084807a66c5a0b6be4f592",
+    "4bf7bb44a92c4c019b49452210c31504",
+    "c67d27b992714cc2a337b1a83f8d1121",
+    "53fa290039cd420f8754a81d891c6e76",
+    "6208afb23fd94a0ca6d1ca4960c255ea"
+  ]
+}

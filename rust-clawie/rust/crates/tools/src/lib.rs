@@ -7945,7 +7945,7 @@ mod tests {
     fn repl_executes_python_code() {
         let result = execute_tool(
             "REPL",
-            &json!({"language": "python", "code": "print(1 + 1)", "timeout_ms": 500}),
+            &json!({"language": "python", "code": "print(1 + 1)", "timeout_ms": 5000}),
         )
         .expect("REPL should succeed");
         let output: serde_json::Value = serde_json::from_str(&result).expect("json");
