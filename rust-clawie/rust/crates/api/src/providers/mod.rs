@@ -30,6 +30,8 @@ pub enum ProviderKind {
     Anthropic,
     Xai,
     OpenAi,
+    Gemini,
+    Kimi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +86,20 @@ pub const XAI_PROVIDER_DEFINITION: ProviderDefinition = ProviderDefinition {
 pub const OPENAI_PROVIDER_DEFINITION: ProviderDefinition = ProviderDefinition {
     kind: ProviderKind::OpenAi,
     name: "OpenAI",
+    default_api: ProviderApi::Responses,
+    apis: OPENAI_COMPAT_APIS,
+};
+
+pub const GEMINI_PROVIDER_DEFINITION: ProviderDefinition = ProviderDefinition {
+    kind: ProviderKind::Gemini,
+    name: "Gemini",
+    default_api: ProviderApi::Responses,
+    apis: OPENAI_COMPAT_APIS,
+};
+
+pub const KIMI_PROVIDER_DEFINITION: ProviderDefinition = ProviderDefinition {
+    kind: ProviderKind::Kimi,
+    name: "Kimi",
     default_api: ProviderApi::Responses,
     apis: OPENAI_COMPAT_APIS,
 };
@@ -172,6 +188,69 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         },
     ),
+    (
+        "gemini-1.5-pro",
+        ProviderMetadata {
+            provider: ProviderKind::Gemini,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
+    (
+        "gemini-1.5-flash",
+        ProviderMetadata {
+            provider: ProviderKind::Gemini,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
+    (
+        "gemini-2.0-pro",
+        ProviderMetadata {
+            provider: ProviderKind::Gemini,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
+    (
+        "gemini-2.0-flash",
+        ProviderMetadata {
+            provider: ProviderKind::Gemini,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
+    (
+        "gemini-3.5-flash",
+        ProviderMetadata {
+            provider: ProviderKind::Gemini,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
+    (
+        "kimi",
+        ProviderMetadata {
+            provider: ProviderKind::Kimi,
+            auth_env: "MOONSHOT_API_KEY",
+            base_url_env: "MOONSHOT_BASE_URL",
+            default_base_url: "https://api.moonshot.cn/v1",
+        },
+    ),
+    (
+        "moonshot-v1-auto",
+        ProviderMetadata {
+            provider: ProviderKind::Kimi,
+            auth_env: "MOONSHOT_API_KEY",
+            base_url_env: "MOONSHOT_BASE_URL",
+            default_base_url: "https://api.moonshot.cn/v1",
+        },
+    ),
 ];
 
 #[must_use]
@@ -195,6 +274,11 @@ pub fn resolve_model_alias(model: &str) -> String {
                     _ => trimmed,
                 },
                 ProviderKind::OpenAi => trimmed,
+                ProviderKind::Gemini => trimmed,
+                ProviderKind::Kimi => match *alias {
+                    "kimi" => "moonshot-v1-auto",
+                    _ => trimmed,
+                },
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -230,6 +314,14 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         });
     }
+    if canonical.starts_with("gemini-") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::Gemini,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        });
+    }
     None
 }
 
@@ -239,6 +331,7 @@ pub fn parse_provider_preference(value: &str) -> Option<ProviderKind> {
         "anthropic" | "claude" => Some(ProviderKind::Anthropic),
         "xai" | "grok" => Some(ProviderKind::Xai),
         "openai" | "gpt" => Some(ProviderKind::OpenAi),
+        "gemini" | "google" => Some(ProviderKind::Gemini),
         _ => None,
     }
 }
@@ -263,6 +356,8 @@ pub const fn default_model_for_provider(provider: ProviderKind) -> &'static str 
         ProviderKind::Anthropic => "claude-sonnet-4-6",
         ProviderKind::Xai => "grok-3",
         ProviderKind::OpenAi => "gpt-4.1",
+        ProviderKind::Gemini => "gemini-1.5-pro",
+        ProviderKind::Kimi => "moonshot-v1-auto",
     }
 }
 
@@ -272,6 +367,8 @@ pub const fn definition_for_provider(provider: ProviderKind) -> ProviderDefiniti
         ProviderKind::Anthropic => ANTHROPIC_PROVIDER_DEFINITION,
         ProviderKind::Xai => XAI_PROVIDER_DEFINITION,
         ProviderKind::OpenAi => OPENAI_PROVIDER_DEFINITION,
+        ProviderKind::Gemini => GEMINI_PROVIDER_DEFINITION,
+        ProviderKind::Kimi => KIMI_PROVIDER_DEFINITION,
     }
 }
 
@@ -290,6 +387,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     }
     if let Some(preferred) = provider_preference_from_env() {
         return preferred;
+    }
+    if openai_compat::has_api_key("GEMINI_API_KEY") || openai_compat::has_api_key("GOOGLE_API_KEY") {
+        return ProviderKind::Gemini;
     }
     if openai_compat::has_api_key("OPENAI_API_KEY") {
         return ProviderKind::OpenAi;
@@ -317,6 +417,8 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
         32_000
     } else if canonical.starts_with("grok") {
         64_000
+    } else if canonical.starts_with("gemini-") {
+        65_536
     } else {
         64_000
     }

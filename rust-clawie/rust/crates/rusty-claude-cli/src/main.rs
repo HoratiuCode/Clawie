@@ -161,6 +161,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
         CliAction::Setup => setup_wizard::run_setup_wizard()?,
+        CliAction::WebUi => {
+            let (url, output_dir) = webui::launch()?;
+            println!(
+                "Web UI opened\n  URL              {url}\n  Saved files      {}",
+                output_dir.display()
+            );
+        }
         CliAction::Repl {
             model,
             allowed_tools,
@@ -222,6 +229,7 @@ enum CliAction {
     Logout,
     Init,
     Setup,
+    WebUi,
     Repl {
         model: String,
         allowed_tools: Option<AllowedToolSet>,
@@ -425,6 +433,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
         "setup" => Ok(CliAction::Setup),
+        "webui" => Ok(CliAction::WebUi),
         "prompt" => {
             let prompt = rest[1..].join(" ");
             if prompt.trim().is_empty() {
@@ -492,6 +501,7 @@ fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
             | "logout"
             | "init"
             | "setup"
+            | "webui"
             | "prompt"
     ) {
         return None;
@@ -773,6 +783,8 @@ fn fallback_model_for_preference(preference: Option<ProviderKind>) -> &'static s
         Some(ProviderKind::Anthropic) => DEFAULT_ANTHROPIC_MODEL,
         Some(ProviderKind::Xai) => DEFAULT_XAI_MODEL,
         Some(ProviderKind::OpenAi) => default_model_for_provider(ProviderKind::OpenAi),
+        Some(ProviderKind::Gemini) => "gemini-1.5-pro",
+        Some(ProviderKind::Kimi) => "moonshot-v1-auto",
         None => DEFAULT_MODEL,
     }
 }
@@ -1285,6 +1297,8 @@ fn provider_label(kind: ProviderKind) -> &'static str {
         ProviderKind::Anthropic => "Anthropic",
         ProviderKind::OpenAi => "OpenAI",
         ProviderKind::Xai => "xAI",
+        ProviderKind::Gemini => "Gemini",
+        ProviderKind::Kimi => "Kimi",
     }
 }
 

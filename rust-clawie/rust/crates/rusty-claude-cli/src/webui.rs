@@ -38,7 +38,13 @@ struct ChatRequest {
     model: Option<String>,
     openai_api_key: Option<String>,
     anthropic_api_key: Option<String>,
+    gemini_api_key: Option<String>,
+    xai_api_key: Option<String>,
+    kimi_api_key: Option<String>,
     openai_base_url: Option<String>,
+    gemini_base_url: Option<String>,
+    xai_base_url: Option<String>,
+    kimi_base_url: Option<String>,
     lean_mode: Option<String>,
     max_turns: Option<u32>,
     token_budget: Option<u32>,
@@ -75,7 +81,14 @@ pub fn launch() -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
     let port = match *server_port {
         Some(port) => port,
         None => {
-            let listener = TcpListener::bind(("127.0.0.1", 0))?;
+            let mut bound_listener = None;
+            for p in 4242..=4250 {
+                if let Ok(l) = TcpListener::bind(("127.0.0.1", p)) {
+                    bound_listener = Some(l);
+                    break;
+                }
+            }
+            let listener = bound_listener.unwrap_or_else(|| TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind any port"));
             let port = listener.local_addr()?.port();
             let server_output_dir = output_dir.clone();
             thread::Builder::new()
@@ -367,7 +380,13 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                 payload.model.as_deref(),
                 payload.openai_api_key.as_deref(),
                 payload.anthropic_api_key.as_deref(),
+                payload.gemini_api_key.as_deref(),
+                payload.xai_api_key.as_deref(),
+                payload.kimi_api_key.as_deref(),
                 payload.openai_base_url.as_deref(),
+                payload.gemini_base_url.as_deref(),
+                payload.xai_base_url.as_deref(),
+                payload.kimi_base_url.as_deref(),
                 payload.lean_mode.as_deref(),
                 payload.max_turns,
                 payload.token_budget,
@@ -979,6 +998,72 @@ fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::e
             };
             Err(format!("OpenAI API returned status {}: {}", status.as_u16(), err_msg).into())
         }
+    } else if req.provider == "gemini" {
+        let url = req.base_url.as_deref()
+            .unwrap_or("https://generativelanguage.googleapis.com/v1beta/openai")
+            .trim_end_matches('/');
+        let url = format!("{}/chat/completions", url);
+        let model = req.model.as_deref().unwrap_or("gemini-1.5-pro");
+
+        let response = client.post(&url)
+            .header("Authorization", format!("Bearer {}", req.api_key))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}]
+            }))
+            .send()?;
+
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                    .unwrap_or(text)
+            } else {
+                text
+            };
+            Err(format!("Gemini API returned status {}: {}", status.as_u16(), err_msg).into())
+        }
+    } else if req.provider == "xai" || req.provider == "kimi" {
+        let default_url = if req.provider == "xai" {
+            "https://api.x.ai/v1"
+        } else {
+            "https://api.moonshot.cn/v1"
+        };
+        let url = req.base_url.as_deref()
+            .unwrap_or(default_url)
+            .trim_end_matches('/');
+        let url = format!("{}/chat/completions", url);
+        let default_model = if req.provider == "xai" { "grok-3" } else { "moonshot-v1-auto" };
+        let model = req.model.as_deref().unwrap_or(default_model);
+
+        let response = client.post(&url)
+            .header("Authorization", format!("Bearer {}", req.api_key))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}]
+            }))
+            .send()?;
+
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                    .unwrap_or(text)
+            } else {
+                text
+            };
+            Err(format!("{} API returned status {}: {}", req.provider, status.as_u16(), err_msg).into())
+        }
     } else {
         Err("Unsupported provider".into())
     }
@@ -989,7 +1074,13 @@ fn run_clawie_prompt(
     model: Option<&str>,
     openai_api_key: Option<&str>,
     anthropic_api_key: Option<&str>,
+    gemini_api_key: Option<&str>,
+    xai_api_key: Option<&str>,
+    kimi_api_key: Option<&str>,
     openai_base_url: Option<&str>,
+    gemini_base_url: Option<&str>,
+    xai_base_url: Option<&str>,
+    kimi_base_url: Option<&str>,
     lean_mode: Option<&str>,
     max_turns: Option<u32>,
     token_budget: Option<u32>,
@@ -1018,9 +1109,39 @@ fn run_clawie_prompt(
     } else if inherited_api_key_is_placeholder("ANTHROPIC_API_KEY") {
         cmd.env_remove("ANTHROPIC_API_KEY");
     }
+    if let Some(key) = clean_api_key(gemini_api_key) {
+        cmd.env("GEMINI_API_KEY", key);
+    } else if inherited_api_key_is_placeholder("GEMINI_API_KEY") {
+        cmd.env_remove("GEMINI_API_KEY");
+    }
+    if let Some(key) = clean_api_key(xai_api_key) {
+        cmd.env("XAI_API_KEY", key);
+    } else if inherited_api_key_is_placeholder("XAI_API_KEY") {
+        cmd.env_remove("XAI_API_KEY");
+    }
+    if let Some(key) = clean_api_key(kimi_api_key) {
+        cmd.env("MOONSHOT_API_KEY", key);
+    } else if inherited_api_key_is_placeholder("MOONSHOT_API_KEY") {
+        cmd.env_remove("MOONSHOT_API_KEY");
+    }
     if let Some(url) = openai_base_url {
         if !url.trim().is_empty() {
             cmd.env("OPENAI_BASE_URL", url.trim());
+        }
+    }
+    if let Some(url) = gemini_base_url {
+        if !url.trim().is_empty() {
+            cmd.env("GEMINI_BASE_URL", url.trim());
+        }
+    }
+    if let Some(url) = xai_base_url {
+        if !url.trim().is_empty() {
+            cmd.env("XAI_BASE_URL", url.trim());
+        }
+    }
+    if let Some(url) = kimi_base_url {
+        if !url.trim().is_empty() {
+            cmd.env("MOONSHOT_BASE_URL", url.trim());
         }
     }
     if let Some(lm) = lean_mode {
@@ -2013,6 +2134,19 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     .agent.gold { --shirt: #b7791f; --hair: #d08b36; --skin: #f0b889; }
     .agent.green { --shirt: #1f8a5b; --hair: #4b2b18; --skin: #d99b75; }
     .agent.violet { --shirt: #6d4bb3; --hair: #23122f; --skin: #b9826a; }
+
+    .agent.robot-agent {
+      --shirt: #475569;
+      background: #475569;
+      border: 4px solid #0f172a;
+      box-shadow: inset 0 10px 0 rgba(255,255,255,0.2), inset 0 -8px 0 rgba(0,0,0,0.3);
+    }
+    .agent.robot-agent::before {
+      background: #64748b !important;
+      border: 4px solid #0f172a;
+      box-shadow: none !important;
+      background-image: radial-gradient(circle at 4px 6px, #22c55e 2px, transparent 2px), radial-gradient(circle at 12px 6px, #22c55e 2px, transparent 2px) !important;
+    }
 
     .server-rack {
       width: 56px;
@@ -3635,7 +3769,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           <button class="view-tab" id="instance-view-tab" type="button" data-view="instance">Instance</button>
           <button class="view-tab" id="automations-view-tab" type="button" data-view="automations">Automations</button>
         </div>
-        <div class="usage-container" id="usage-container" style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.3rem 0.6rem; background: rgba(255, 255, 255, 0.01);">
+        <div class="usage-container" id="usage-container" style="display: none; align-items: center; gap: 0.75rem; font-size: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.3rem 0.6rem; background: rgba(255, 255, 255, 0.01);">
           <span style="color: var(--text-muted);">Session Usage:</span>
           <strong id="usage-text" style="color: var(--text-secondary);">0 / 12,000</strong>
           <div class="usage-bar-bg" style="width: 60px; height: 6px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden; position: relative;">
@@ -4221,6 +4355,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
               <select id="settings-provider">
                 <option value="anthropic">Anthropic (Claude)</option>
                 <option value="openai">OpenAI (ChatGPT)</option>
+                <option value="gemini">Google (Gemini)</option>
+                <option value="xai">xAI (Grok)</option>
+                <option value="kimi">Moonshot AI (Kimi)</option>
               </select>
             </div>
             <div class="settings-group">
@@ -4229,6 +4366,15 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
                 <option value="gpt-4o">gpt-4o</option>
                 <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                <option value="gemini-2.0-pro">gemini-2.0-pro</option>
+                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                <option value="grok-3">grok-3</option>
+                <option value="grok-2">grok-2</option>
+                <option value="moonshot-v1-auto">moonshot-v1-auto</option>
+                <option value="moonshot-v1-32k">moonshot-v1-32k</option>
+                <option value="moonshot-v1-128k">moonshot-v1-128k</option>
                 <option value="gpt-4.1">gpt-4.1</option>
               </select>
             </div>
@@ -4254,8 +4400,47 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                   </div>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-gemini-key" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Gemini API Key</label>
+                  <div class="password-input-wrapper">
+                    <input id="settings-gemini-key" type="password" placeholder="AIzaSy..." autocomplete="off">
+                    <button class="password-toggle-btn" type="button" data-target="settings-gemini-key" title="Toggle visibility">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
                   <label for="settings-openai-url" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Custom OpenAI Base URL (optional)</label>
                   <input id="settings-openai-url" placeholder="https://api.openai.com/v1" autocomplete="off">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-gemini-url" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Custom Gemini Base URL (optional)</label>
+                  <input id="settings-gemini-url" placeholder="https://generativelanguage.googleapis.com/v1beta/openai" autocomplete="off">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-xai-key" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">xAI API Key (Grok)</label>
+                  <div class="password-input-wrapper">
+                    <input id="settings-xai-key" type="password" placeholder="xai-..." autocomplete="off">
+                    <button class="password-toggle-btn" type="button" data-target="settings-xai-key" title="Toggle visibility">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-xai-url" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Custom xAI Base URL (optional)</label>
+                  <input id="settings-xai-url" placeholder="https://api.x.ai/v1" autocomplete="off">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-kimi-key" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Moonshot API Key (Kimi)</label>
+                  <div class="password-input-wrapper">
+                    <input id="settings-kimi-key" type="password" placeholder="sk-..." autocomplete="off">
+                    <button class="password-toggle-btn" type="button" data-target="settings-kimi-key" title="Toggle visibility">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <label for="settings-kimi-url" style="font-size: 0.65rem; color: var(--text-muted); text-transform: none; letter-spacing: normal;">Custom Moonshot Base URL (optional)</label>
+                  <input id="settings-kimi-url" placeholder="https://api.moonshot.cn/v1" autocomplete="off">
                 </div>
                 <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.25rem;">
                   <button id="settings-test-conn-btn" class="settings-btn-secondary" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Test Connection</button>
@@ -4340,10 +4525,18 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         <button style="background: none; border: none; font-size: 1.2rem; color: var(--text-muted); cursor: pointer;" id="save-path-cancel-x">&times;</button>
       </div>
       <div class="modal-body" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem;">
-        <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">Select or type the destination path (relative to workspace root):</label>
-        <input type="text" id="save-path-input" value="workflow.json" style="width: 100%; padding: 0.6rem 0.75rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.75rem; outline: none; transition: border-color 0.2s;">
-        <div style="font-size: 0.68rem; color: var(--text-muted); line-height: 1.3; margin-top: 0.5rem;">
-          Workspace Root: <code id="modal-workspace-path" style="color: var(--text-secondary); word-break: break-all;"></code>
+        <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">Select destination:</label>
+        <select id="save-destination-select" style="width: 100%; padding: 0.6rem 0.75rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.75rem; outline: none; margin-bottom: 0.25rem;">
+          <option value="workspace">Clawie Workspace</option>
+          <option value="downloads">Browser Downloads</option>
+        </select>
+        
+        <div id="save-workspace-options">
+          <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem; margin-top: 0.5rem;">Destination path (relative to workspace root):</label>
+          <input type="text" id="save-path-input" value="workflow.json" style="width: 100%; padding: 0.6rem 0.75rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.75rem; outline: none; transition: border-color 0.2s;">
+          <div style="font-size: 0.68rem; color: var(--text-muted); line-height: 1.3; margin-top: 0.5rem;">
+            Workspace Root: <code id="modal-workspace-path" style="color: var(--text-secondary); word-break: break-all;"></code>
+          </div>
         </div>
       </div>
       <div class="modal-footer" style="padding: 1rem 1.25rem; background: rgba(0,0,0,0.1); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.75rem;">
@@ -4469,10 +4662,30 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || 'Could not scan instances');
         const instances = result.instances || [];
+
+        // Add virtual Automation Flow instance if active in last 1 hour
+        const lastActivity = Number(localStorage.getItem('clawie-last-automation-activity') || 0);
+        const isAutomationRecent = (Date.now() - lastActivity) < 3600000; // 1 hour
+        const isAutomationRunning = (Date.now() - lastActivity) < 300000; // 5 minutes
+        
+        if (isAutomationRecent) {
+          const elapsedSeconds = Math.floor((Date.now() - lastActivity) / 1000);
+          instances.push({
+            pid: 'automation-runner',
+            kind: 'Automation Flow',
+            status: isAutomationRunning ? 'running' : 'closed',
+            command: 'clawie --workflow-run',
+            elapsed_seconds: elapsedSeconds,
+            detectedAt: lastActivity,
+            lastSeen: new Date(lastActivity).toLocaleTimeString(),
+            active: isAutomationRunning
+          });
+        }
+
         const rooms = updateKnownInstanceRooms(instances);
         renderInstanceRooms(rooms);
         const closedCount = rooms.filter(instance => instance.status === 'closed').length;
-        instanceCount.textContent = `${instances.length} running · ${closedCount} closed`;
+        instanceCount.textContent = `${instances.filter(instance => instance.status === 'running').length} running · ${closedCount} closed`;
         if (rooms.length === 0) {
           processList.innerHTML = '<div class="process-empty">No Clawie CLI instances detected yet. Start a Clawie CLI session and a room will appear here.</div>';
           return;
@@ -4503,6 +4716,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     }
 
     function isCliRoom(instance) {
+      if (instance && String(instance.pid) === 'automation-runner') return true;
       const kind = String(instance?.kind || '').toLowerCase();
       const command = String(instance?.command || '').toLowerCase();
       return kind !== 'webui' && !command.includes(' webui') && !command.includes(' web-ui');
@@ -4510,24 +4724,49 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     function updateKnownInstanceRooms(runningInstances) {
       const now = new Date().toLocaleTimeString();
-      const cleanKnownRooms = knownInstanceRooms.filter(isCliRoom);
-      const cleanRunningInstances = runningInstances.filter(isCliRoom);
+      const lastActivity = Number(localStorage.getItem('clawie-last-automation-activity') || 0);
+      const isAutomationRecent = (Date.now() - lastActivity) < 3600000;
+
+      const cleanKnownRooms = knownInstanceRooms.filter(instance => {
+        if (String(instance.pid) === 'automation-runner') {
+          return isAutomationRecent;
+        }
+        return isCliRoom(instance);
+      });
+
+      const cleanRunningInstances = runningInstances.filter(instance => {
+        if (String(instance.pid) === 'automation-runner') {
+          return isAutomationRecent;
+        }
+        return isCliRoom(instance);
+      });
+
       const byPid = new Map(cleanKnownRooms.map(instance => [String(instance.pid), instance]));
       cleanRunningInstances.forEach(instance => {
         byPid.set(String(instance.pid), {
           ...byPid.get(String(instance.pid)),
           ...instance,
-          status: 'running',
-          detectedAt: Date.now(),
+          status: instance.status || 'running',
+          detectedAt: instance.detectedAt || Date.now(),
           lastSeen: now
         });
       });
-      const runningPids = new Set(cleanRunningInstances.map(instance => String(instance.pid)));
-      knownInstanceRooms = Array.from(byPid.values()).map(instance => (
-        runningPids.has(String(instance.pid))
+
+      const runningPids = new Set(cleanRunningInstances.filter(instance => instance.status === 'running').map(instance => String(instance.pid)));
+      knownInstanceRooms = Array.from(byPid.values()).map(instance => {
+        if (String(instance.pid) === 'automation-runner') {
+          return instance;
+        }
+        return runningPids.has(String(instance.pid))
           ? instance
-          : { ...instance, status: 'closed' }
-      ));
+          : { ...instance, status: 'closed' };
+      }).filter(instance => {
+        if (String(instance.pid) === 'automation-runner') {
+          return isAutomationRecent;
+        }
+        return true;
+      });
+
       localStorage.setItem('clawie-known-instances', JSON.stringify(knownInstanceRooms.slice(-24)));
       return knownInstanceRooms;
     }
@@ -4556,9 +4795,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       instanceRoomGrid.innerHTML = rooms.map((instance, index) => {
         const color = colors[index % colors.length];
         const status = instance.status || 'running';
-        const showTaskBoxes = status === 'running' && instance.active === true;
-        const roomName = `${instance.kind || 'Clawie'} ${instance.pid || ''}`;
-        const agentName = status === 'closed' ? 'Closed' : (instance.kind || 'CLI').replace(/\s+/g, '');
+        const isAutomation = instance.pid === 'automation-runner';
+        const showTaskBoxes = status === 'running' && (isAutomation ? true : instance.active === true);
+        const roomName = isAutomation ? 'Automation Flow' : `${instance.kind || 'Clawie'} ${instance.pid || ''}`;
+        const agentName = isAutomation ? 'Automation' : (status === 'closed' ? 'Closed' : (instance.kind || 'CLI').replace(/\s+/g, ''));
         const safeId = String(instance.pid ?? index).replace(/[^a-zA-Z0-9_-]/g, '-');
         return `
           <article class="instance-room ${status === 'closed' ? 'closed' : ''}">
@@ -4572,7 +4812,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             <div class="server-rack" style="right: 22px; top: 58px; transform: scale(0.82); transform-origin: top right;"></div>
             <div class="plant" style="right: 28px; bottom: 22px;"></div>
             <div class="status-beacon" style="right: 34px; top: 36px;"></div>
-            <div class="agent ${color} draggable-agent" data-agent-id="instance-${safeId}" data-name="${escapeText(agentName)}" data-pid="${escapeText(instance.pid || '')}" data-kind="${escapeText(instance.kind || 'Clawie CLI')}" data-status="${escapeText(status)}" style="left: 88px; top: 130px;"></div>
+            <div class="agent ${isAutomation ? 'green robot-agent' : color} draggable-agent" data-agent-id="instance-${safeId}" data-name="${escapeText(agentName)}" data-pid="${escapeText(instance.pid || '')}" data-kind="${escapeText(instance.kind || 'Clawie CLI')}" data-status="${escapeText(status)}" style="left: 88px; top: 130px;"></div>
             ${showTaskBoxes ? `
               <div class="task-box" style="left: 132px; top: 118px;"></div>
               <div class="task-box two" style="left: 158px; top: 138px;"></div>
@@ -4591,6 +4831,25 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       }
       instanceLogTitle.textContent = `${kind || 'Clawie Instance'} Logs`;
       instanceLogModal.hidden = false;
+
+      if (pid === 'automation-runner') {
+        instanceLogBody.innerHTML = '';
+        const logs = JSON.parse(localStorage.getItem('clawie-automation-logs') || '[]');
+        if (logs.length === 0) {
+          instanceLogBody.innerHTML = '<div class="log-line">No recent automation activity logged in the last 1 hour.</div>';
+        } else {
+          logs.forEach(log => {
+            const timeString = new Date(log.timestamp).toLocaleTimeString();
+            const logLineDiv = document.createElement('div');
+            logLineDiv.className = 'log-line';
+            logLineDiv.innerHTML = `<span style="color: var(--text-muted); font-size: 0.65rem;">[${timeString}]</span> <strong style="color: #10b981;">*</strong> ${escapeText(log.message)}`;
+            instanceLogBody.appendChild(logLineDiv);
+          });
+        }
+        instanceLogBody.scrollTop = instanceLogBody.scrollHeight;
+        return;
+      }
+
       const monitor = document.querySelector(`.instance-monitor[data-pid="${CSS.escape(String(pid || ''))}"]`);
       const monitorStatus = statusOverride || monitor?.dataset.status;
       if (monitorStatus === 'empty') {
@@ -4891,7 +5150,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             model: selectedModel,
             openai_api_key: localStorage.getItem('clawie-openai-key') || '',
             anthropic_api_key: localStorage.getItem('clawie-anthropic-key') || '',
+            gemini_api_key: localStorage.getItem('clawie-gemini-key') || '',
+            xai_api_key: localStorage.getItem('clawie-xai-key') || '',
+            kimi_api_key: localStorage.getItem('clawie-kimi-key') || '',
             openai_base_url: localStorage.getItem('clawie-openai-url') || '',
+            gemini_base_url: localStorage.getItem('clawie-gemini-url') || '',
+            xai_base_url: localStorage.getItem('clawie-xai-url') || '',
+            kimi_base_url: localStorage.getItem('clawie-kimi-url') || '',
             lean_mode: selectedLeanMode,
             max_turns: selectedMaxTurns,
             token_budget: selectedTokenBudget
@@ -5237,8 +5502,12 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     instanceRefresh.addEventListener('click', refreshInstances);
     instanceRoomGrid.addEventListener('click', event => {
       const monitor = event.target.closest('.instance-monitor');
-      if (!monitor) return;
-      openInstanceLog(monitor.dataset.pid, monitor.dataset.kind, monitor.dataset.status);
+      const agent = event.target.closest('.agent');
+      if (monitor) {
+        openInstanceLog(monitor.dataset.pid, monitor.dataset.kind, monitor.dataset.status);
+      } else if (agent) {
+        openInstanceLog(agent.dataset.pid, agent.dataset.kind, agent.dataset.status);
+      }
     });
     agentContextMenu.addEventListener('click', async event => {
       const action = event.target.closest('button')?.dataset.agentAction;
@@ -5308,7 +5577,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const settingsModel = document.querySelector('#settings-model');
     const settingsOpenAiKey = document.querySelector('#settings-openai-key');
     const settingsAnthropicKey = document.querySelector('#settings-anthropic-key');
+    const settingsGeminiKey = document.querySelector('#settings-gemini-key');
     const settingsOpenAiUrl = document.querySelector('#settings-openai-url');
+    const settingsGeminiUrl = document.querySelector('#settings-gemini-url');
+    const settingsXaiKey = document.querySelector('#settings-xai-key');
+    const settingsXaiUrl = document.querySelector('#settings-xai-url');
+    const settingsKimiKey = document.querySelector('#settings-kimi-key');
+    const settingsKimiUrl = document.querySelector('#settings-kimi-url');
     const settingsInstallApp = document.querySelector('#settings-install-app');
     const settingsInstallStatus = document.querySelector('#settings-install-status');
 
@@ -5340,8 +5615,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     let selectedTheme = localStorage.getItem('clawie-theme') || 'orange';
     let selectedAppTheme = localStorage.getItem('clawie-app-theme') || 'dark';
-    let selectedModel = localStorage.getItem('clawie-model-setting') || 'claude-3-5-sonnet';
-    let selectedProvider = localStorage.getItem('clawie-provider') || 'anthropic';
+    let selectedModel = localStorage.getItem('clawie-model-setting') || 'gemini-1.5-pro';
+    let selectedProvider = localStorage.getItem('clawie-provider') || 'gemini';
     let selectedLeanMode = localStorage.getItem('clawie-lean-mode') || 'full';
     let selectedMaxTurns = parseInt(localStorage.getItem('clawie-max-turns') || '64', 10);
     let selectedTokenBudget = parseInt(localStorage.getItem('clawie-token-budget') || '12000', 10);
@@ -5469,7 +5744,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           if (s.model) selectedModel = s.model;
           if (s.OPENAI_API_KEY) localStorage.setItem('clawie-openai-key', s.OPENAI_API_KEY);
           if (s.ANTHROPIC_API_KEY) localStorage.setItem('clawie-anthropic-key', s.ANTHROPIC_API_KEY);
+          if (s.GEMINI_API_KEY) localStorage.setItem('clawie-gemini-key', s.GEMINI_API_KEY);
           if (s.OPENAI_BASE_URL) localStorage.setItem('clawie-openai-url', s.OPENAI_BASE_URL);
+          if (s.GEMINI_BASE_URL) localStorage.setItem('clawie-gemini-url', s.GEMINI_BASE_URL);
+          if (s.XAI_API_KEY) localStorage.setItem('clawie-xai-key', s.XAI_API_KEY);
+          if (s.XAI_BASE_URL) localStorage.setItem('clawie-xai-url', s.XAI_BASE_URL);
+          if (s.MOONSHOT_API_KEY) localStorage.setItem('clawie-kimi-key', s.MOONSHOT_API_KEY);
+          if (s.MOONSHOT_BASE_URL) localStorage.setItem('clawie-kimi-url', s.MOONSHOT_BASE_URL);
           if (s.CLAWIE_LEAN_MODE) selectedLeanMode = s.CLAWIE_LEAN_MODE;
           if (s.CLAWIE_MAX_TURNS) selectedMaxTurns = parseInt(s.CLAWIE_MAX_TURNS, 10);
           if (s.CLAWIE_MAX_BUDGET_TOKENS) selectedTokenBudget = parseInt(s.CLAWIE_MAX_BUDGET_TOKENS, 10);
@@ -5488,7 +5769,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
       settingsOpenAiKey.value = localStorage.getItem('clawie-openai-key') || '';
       settingsAnthropicKey.value = localStorage.getItem('clawie-anthropic-key') || '';
+      settingsGeminiKey.value = localStorage.getItem('clawie-gemini-key') || '';
       settingsOpenAiUrl.value = localStorage.getItem('clawie-openai-url') || '';
+      settingsGeminiUrl.value = localStorage.getItem('clawie-gemini-url') || '';
+      settingsXaiKey.value = localStorage.getItem('clawie-xai-key') || '';
+      settingsXaiUrl.value = localStorage.getItem('clawie-xai-url') || '';
+      settingsKimiKey.value = localStorage.getItem('clawie-kimi-key') || '';
+      settingsKimiUrl.value = localStorage.getItem('clawie-kimi-url') || '';
       
       applyAppTheme(selectedAppTheme);
       applyTheme(selectedTheme);
@@ -5546,6 +5833,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           text: 'OpenAI authentication failed. Add a valid OpenAI API key here, or restart `./clawie webui` from a terminal that has `OPENAI_API_KEY` exported.',
           button: 'Open OpenAI API Settings',
           focus: 'openai'
+        };
+      }
+      if (/gemini|google/i.test(message) && /401|unauthorized|api key|auth|credential|token|GEMINI_API_KEY|GOOGLE_API_KEY/i.test(message)) {
+        return {
+          text: 'Gemini authentication failed. Add a valid Gemini API key or restart `./clawie webui` from a terminal that has `GEMINI_API_KEY` exported.',
+          button: 'Open Gemini API Settings',
+          focus: 'gemini'
         };
       }
       if (/rate limit|429|quota|billing|insufficient_quota/i.test(message)) {
@@ -5648,8 +5942,18 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     // Test Connection listener
     settingsTestConnBtn.addEventListener('click', async () => {
       const provider = settingsProvider.value;
-      const key = provider === 'anthropic' ? settingsAnthropicKey.value.trim() : settingsOpenAiKey.value.trim();
-      const baseUrl = settingsOpenAiUrl.value.trim();
+      let key;
+      let baseUrl;
+      if (provider === 'anthropic') {
+        key = settingsAnthropicKey.value.trim();
+        baseUrl = '';
+      } else if (provider === 'gemini') {
+        key = settingsGeminiKey.value.trim();
+        baseUrl = settingsGeminiUrl.value.trim();
+      } else {
+        key = settingsOpenAiKey.value.trim();
+        baseUrl = settingsOpenAiUrl.value.trim();
+      }
       const model = settingsModel.value;
 
       if (!key) {
@@ -5734,7 +6038,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-provider', selectedProvider);
       localStorage.setItem('clawie-openai-key', settingsOpenAiKey.value.trim());
       localStorage.setItem('clawie-anthropic-key', settingsAnthropicKey.value.trim());
+      localStorage.setItem('clawie-gemini-key', settingsGeminiKey.value.trim());
       localStorage.setItem('clawie-openai-url', settingsOpenAiUrl.value.trim());
+      localStorage.setItem('clawie-gemini-url', settingsGeminiUrl.value.trim());
+      localStorage.setItem('clawie-xai-key', settingsXaiKey.value.trim());
+      localStorage.setItem('clawie-xai-url', settingsXaiUrl.value.trim());
+      localStorage.setItem('clawie-kimi-key', settingsKimiKey.value.trim());
+      localStorage.setItem('clawie-kimi-url', settingsKimiUrl.value.trim());
       localStorage.setItem('clawie-lean-mode', selectedLeanMode);
       localStorage.setItem('clawie-max-turns', selectedMaxTurns.toString());
       localStorage.setItem('clawie-token-budget', selectedTokenBudget.toString());
@@ -5755,7 +6065,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           model: selectedModel,
           OPENAI_API_KEY: settingsOpenAiKey.value.trim() || null,
           ANTHROPIC_API_KEY: settingsAnthropicKey.value.trim() || null,
+          GEMINI_API_KEY: settingsGeminiKey.value.trim() || null,
           OPENAI_BASE_URL: settingsOpenAiUrl.value.trim() || null,
+          GEMINI_BASE_URL: settingsGeminiUrl.value.trim() || null,
           CLAWIE_LEAN_MODE: selectedLeanMode,
           CLAWIE_MAX_TURNS: selectedMaxTurns,
           CLAWIE_MAX_BUDGET_TOKENS: selectedTokenBudget
@@ -6571,6 +6883,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       });
       
       setStatus('Node configurations saved', 'saved');
+      if (window.logAutomationEvent) {
+        const title = node.querySelector('.node-name')?.textContent || 'Node';
+        window.logAutomationEvent(`Configured settings for node: ${title}`);
+      }
       closeDrawer();
     };
 
@@ -6816,6 +7132,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       const workflowData = getWorkflowJson();
       localStorage.setItem('clawie-saved-workflow', workflowData);
       setStatus('Workflow successfully saved in Clawie config!', 'saved');
+      if (window.logAutomationEvent) window.logAutomationEvent('Workflow successfully saved in Clawie config');
     });
 
     // Save as JSON Action (Open custom modal)
@@ -6836,9 +7153,30 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     document.querySelector('#save-path-cancel-x').addEventListener('click', closeSaveModal);
 
     // Modal Save Confirm Handler
+    document.querySelector('#save-destination-select').addEventListener('change', (e) => {
+      document.querySelector('#save-workspace-options').style.display = e.target.value === 'workspace' ? 'block' : 'none';
+    });
+
     document.querySelector('#save-path-confirm').addEventListener('click', async () => {
-      const filename = savePathInput.value.trim() || 'workflow.json';
+      const dest = document.querySelector('#save-destination-select').value;
       const workflowData = getWorkflowJson();
+
+      if (dest === 'downloads') {
+        const blob = new Blob([workflowData], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'workflow.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        setStatus('Workflow successfully downloaded!', 'saved');
+        if (window.logAutomationEvent) window.logAutomationEvent('Workflow successfully saved as JSON file to Downloads');
+        closeSaveModal();
+        return;
+      }
+      
+      const filename = savePathInput.value.trim() || 'workflow.json';
       
       try {
         setStatus('Saving workflow to JSON file...', 'uploading');
@@ -6855,6 +7193,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         if (!response.ok || !result.ok) throw new Error(result.error || 'Upload failed');
         
         setStatus(`Workflow successfully saved to ${filename}!`, 'saved');
+        if (window.logAutomationEvent) window.logAutomationEvent(`Workflow successfully saved as JSON file: ${filename}`);
         closeSaveModal();
       } catch (error) {
         setStatus(`Failed to save JSON: ${error.message}`, 'error');
@@ -6862,6 +7201,27 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     });
 
     // Node Simulator Logic
+    // Log automation execution event helper
+    window.logAutomationEvent = function(message) {
+      const now = Date.now();
+      localStorage.setItem('clawie-last-automation-activity', String(now));
+      
+      const logs = JSON.parse(localStorage.getItem('clawie-automation-logs') || '[]');
+      const oneHourAgo = now - 3600000;
+      const cleanLogs = logs.filter(item => item.timestamp > oneHourAgo);
+      
+      cleanLogs.push({
+        timestamp: now,
+        message: message
+      });
+      
+      localStorage.setItem('clawie-automation-logs', JSON.stringify(cleanLogs));
+      
+      if (typeof refreshInstances === 'function' && !document.querySelector('#instance-page').hidden) {
+        refreshInstances();
+      }
+    };
+
     window.simulateNode = function(nodeId) {
       const node = document.getElementById(nodeId);
       if (!node) return;
@@ -6872,6 +7232,10 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       simBtn.innerHTML = '⏳ Simulating...';
       simBtn.disabled = true;
       
+      const nodeNameElement = node.querySelector('.node-name');
+      const nodeName = nodeNameElement ? nodeNameElement.textContent : 'Node';
+      if (window.logAutomationEvent) window.logAutomationEvent(`Simulation started for node: ${nodeName}`);
+
       const paths = document.querySelectorAll('.connection-path');
       paths.forEach(p => p.classList.add('simulating'));
       
@@ -6880,8 +7244,6 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         inspector.style.display = 'block';
         
         let mockOutput = {};
-        const nodeNameElement = node.querySelector('.node-name');
-        const nodeName = nodeNameElement ? nodeNameElement.textContent : 'Node';
         
         if (node.classList.contains('ai-agent-node')) {
           mockOutput = {
@@ -6953,7 +7315,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         }
         
         inspector.innerHTML = `<strong>Input:</strong> { ... }<br><strong>Output:</strong> ${JSON.stringify(mockOutput, null, 2)}`;
-        
+        if (window.logAutomationEvent) window.logAutomationEvent(`Node ${nodeName} simulation completed. Output: ${JSON.stringify(mockOutput)}`);
+
         setTimeout(() => {
           simBtn.innerHTML = originalText;
           simBtn.disabled = false;

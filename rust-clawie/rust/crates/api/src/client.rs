@@ -113,6 +113,15 @@ pub const fn openai() -> ProviderFacade {
     ProviderFacade::new(providers::OPENAI_PROVIDER_DEFINITION)
 }
 
+pub const fn gemini() -> ProviderFacade {
+    ProviderFacade::new(providers::GEMINI_PROVIDER_DEFINITION)
+}
+
+#[must_use]
+pub const fn kimi() -> ProviderFacade {
+    ProviderFacade::new(providers::KIMI_PROVIDER_DEFINITION)
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum ProviderClient {
@@ -125,6 +134,14 @@ pub enum ProviderClient {
         api: ProviderApi,
     },
     OpenAi {
+        client: OpenAiCompatClient,
+        api: ProviderApi,
+    },
+    Gemini {
+        client: OpenAiCompatClient,
+        api: ProviderApi,
+    },
+    Kimi {
         client: OpenAiCompatClient,
         api: ProviderApi,
     },
@@ -193,6 +210,14 @@ impl ProviderClient {
                 client: OpenAiCompatClient::from_env(OpenAiCompatConfig::openai())?,
                 api: selection.api,
             }),
+            ProviderKind::Gemini => Ok(Self::Gemini {
+                client: OpenAiCompatClient::from_env(OpenAiCompatConfig::gemini())?,
+                api: selection.api,
+            }),
+            ProviderKind::Kimi => Ok(Self::Kimi {
+                client: OpenAiCompatClient::from_env(OpenAiCompatConfig::kimi())?,
+                api: selection.api,
+            }),
         }
     }
 
@@ -202,13 +227,15 @@ impl ProviderClient {
             Self::Anthropic { .. } => ProviderKind::Anthropic,
             Self::Xai { .. } => ProviderKind::Xai,
             Self::OpenAi { .. } => ProviderKind::OpenAi,
+            Self::Gemini { .. } => ProviderKind::Gemini,
+            Self::Kimi { .. } => ProviderKind::Kimi,
         }
     }
 
     #[must_use]
     pub const fn provider_api(&self) -> ProviderApi {
         match self {
-            Self::Anthropic { api, .. } | Self::Xai { api, .. } | Self::OpenAi { api, .. } => *api,
+            Self::Anthropic { api, .. } | Self::Xai { api, .. } | Self::OpenAi { api, .. } | Self::Gemini { api, .. } | Self::Kimi { api, .. } => *api,
         }
     }
 
@@ -235,7 +262,7 @@ impl ProviderClient {
     pub fn prompt_cache_stats(&self) -> Option<PromptCacheStats> {
         match self {
             Self::Anthropic { client, .. } => client.prompt_cache_stats(),
-            Self::Xai { .. } | Self::OpenAi { .. } => None,
+            Self::Xai { .. } | Self::OpenAi { .. } | Self::Gemini { .. } | Self::Kimi { .. } => None,
         }
     }
 
@@ -243,7 +270,7 @@ impl ProviderClient {
     pub fn take_last_prompt_cache_record(&self) -> Option<PromptCacheRecord> {
         match self {
             Self::Anthropic { client, .. } => client.take_last_prompt_cache_record(),
-            Self::Xai { .. } | Self::OpenAi { .. } => None,
+            Self::Xai { .. } | Self::OpenAi { .. } | Self::Gemini { .. } | Self::Kimi { .. } => None,
         }
     }
 
@@ -253,9 +280,10 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::Anthropic { client, .. } => client.send_message(request).await,
-            Self::Xai { client, .. } | Self::OpenAi { client, .. } => {
-                client.send_message(request).await
-            }
+            Self::Xai { client, .. }
+            | Self::OpenAi { client, .. }
+            | Self::Gemini { client, .. }
+            | Self::Kimi { client, .. } => client.send_message(request).await,
         }
     }
 
@@ -268,7 +296,7 @@ impl ProviderClient {
                 .stream_message(request)
                 .await
                 .map(MessageStream::Anthropic),
-            Self::Xai { client, .. } | Self::OpenAi { client, .. } => client
+            Self::Xai { client, .. } | Self::OpenAi { client, .. } | Self::Gemini { client, .. } | Self::Kimi { client, .. } => client
                 .stream_message(request)
                 .await
                 .map(MessageStream::OpenAiCompat),

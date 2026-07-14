@@ -9,14 +9,16 @@ const PROVIDERS: &[(&str, &str, &str)] = &[
     ("1", "Anthropic", "anthropic"),
     ("2", "xAI / Grok", "xai"),
     ("3", "OpenAI", "openai"),
-    ("4", "DashScope", "dashscope"),
-    ("5", "Custom OpenAI-compatible", "openai"),
+    ("4", "Gemini", "gemini"),
+    ("5", "DashScope", "dashscope"),
+    ("6", "Custom OpenAI-compatible", "openai"),
 ];
 
 const PROVIDER_MODELS: &[(&str, &[&str])] = &[
     ("anthropic", &["opus", "sonnet", "haiku"]),
     ("xai", &["grok", "grok-mini", "grok-2"]),
     ("openai", &["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"]),
+    ("gemini", &["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-pro", "gemini-2.0-flash", "gemini-3.5-flash"]),
     ("dashscope", &["qwen-plus", "qwen-max", "kimi"]),
 ];
 
@@ -24,6 +26,7 @@ const API_KEY_ENV_VARS: &[(&str, &str)] = &[
     ("anthropic", "ANTHROPIC_API_KEY"),
     ("xai", "XAI_API_KEY"),
     ("openai", "OPENAI_API_KEY"),
+    ("gemini", "GEMINI_API_KEY"),
     ("dashscope", "DASHSCOPE_API_KEY"),
 ];
 
@@ -31,6 +34,7 @@ const BASE_URL_ENV_VARS: &[(&str, &str)] = &[
     ("anthropic", "ANTHROPIC_BASE_URL"),
     ("xai", "XAI_BASE_URL"),
     ("openai", "OPENAI_BASE_URL"),
+    ("gemini", "GEMINI_BASE_URL"),
     ("dashscope", "DASHSCOPE_BASE_URL"),
 ];
 

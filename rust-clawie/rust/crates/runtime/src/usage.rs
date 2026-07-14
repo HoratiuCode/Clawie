@@ -95,6 +95,15 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     if normalized.contains("sonnet") {
         return Some(ModelPricing::default_sonnet_tier());
     }
+    if normalized.starts_with("gemini") {
+        // Gemini models use a pay-per-token model; approximate pricing
+        return Some(ModelPricing {
+            input_cost_per_million: 0.075,
+            output_cost_per_million: 0.30,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.0,
+        });
+    }
     None
 }
 

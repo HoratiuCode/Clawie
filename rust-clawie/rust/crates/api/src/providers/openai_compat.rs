@@ -32,6 +32,8 @@ pub struct OpenAiCompatConfig {
 
 const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
+const GEMINI_ENV_VARS: &[&str] = &["GEMINI_API_KEY", "GOOGLE_API_KEY"];
+const KIMI_ENV_VARS: &[&str] = &["MOONSHOT_API_KEY", "KIMI_API_KEY"];
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -53,11 +55,34 @@ impl OpenAiCompatConfig {
             default_base_url: DEFAULT_OPENAI_BASE_URL,
         }
     }
+
+    #[must_use]
+    pub const fn gemini() -> Self {
+        Self {
+            provider_name: "Gemini",
+            api_key_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        }
+    }
+
+    #[must_use]
+    pub const fn kimi() -> Self {
+        Self {
+            provider_name: "Kimi",
+            api_key_env: "MOONSHOT_API_KEY",
+            base_url_env: "MOONSHOT_BASE_URL",
+            default_base_url: "https://api.moonshot.cn/v1",
+        }
+    }
+
     #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
+            "Gemini" => GEMINI_ENV_VARS,
+            "Kimi" => KIMI_ENV_VARS,
             _ => &[],
         }
     }
@@ -67,6 +92,8 @@ impl OpenAiCompatConfig {
 pub struct OpenAiCompatClient {
     http: reqwest::Client,
     api_key: String,
+    oauth_refresh_token: Option<String>,
+    cached_access_token: std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
     config: OpenAiCompatConfig,
     base_url: String,
     max_retries: u32,
@@ -83,6 +110,8 @@ impl OpenAiCompatClient {
         Self {
             http: reqwest::Client::new(),
             api_key: api_key.into(),
+            oauth_refresh_token: None,
+            cached_access_token: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
             config,
             base_url: read_base_url(config),
             max_retries: DEFAULT_MAX_RETRIES,
@@ -92,13 +121,41 @@ impl OpenAiCompatClient {
     }
 
     pub fn from_env(config: OpenAiCompatConfig) -> Result<Self, ApiError> {
-        let Some(api_key) = read_env_non_empty(config.api_key_env)? else {
+        let mut api_key = read_env_non_empty(config.api_key_env)?;
+        if api_key.is_none() && config.provider_name == "Gemini" {
+            api_key = read_env_non_empty("GOOGLE_API_KEY")?;
+        }
+        if api_key.is_none() && config.provider_name == "Kimi" {
+            api_key = read_env_non_empty("KIMI_API_KEY")?;
+        }
+        
+        let mut oauth_refresh_token = None;
+        if api_key.is_none() && config.provider_name == "Gemini" {
+            if let Some(home) = std::env::var_os("HOME") {
+                let token_path = std::path::PathBuf::from(home).join(".gemini/antigravity-cli/antigravity-oauth-token");
+                if let Ok(content) = std::fs::read_to_string(&token_path) {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(token) = parsed.get("token").and_then(|t| t.as_object()) {
+                            if let Some(rt) = token.get("refresh_token").and_then(|r| r.as_str()) {
+                                oauth_refresh_token = Some(rt.to_string());
+                                api_key = Some("dummy_oauth_placeholder".to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        let Some(api_key) = api_key else {
             return Err(ApiError::missing_credentials(
                 config.provider_name,
                 config.credential_env_vars(),
             ));
         };
-        Ok(Self::new(api_key, config))
+        
+        let mut client = Self::new(api_key, config);
+        client.oauth_refresh_token = oauth_refresh_token;
+        Ok(client)
     }
 
     #[must_use]
@@ -191,10 +248,45 @@ impl OpenAiCompatClient {
         request: &MessageRequest,
     ) -> Result<reqwest::Response, ApiError> {
         let request_url = chat_completions_endpoint(&self.base_url);
+        let mut actual_api_key = self.api_key.clone();
+
+        if let Some(refresh_token) = &self.oauth_refresh_token {
+            let mut cached = self.cached_access_token.lock().await;
+            if let Some(token) = &*cached {
+                actual_api_key = token.clone();
+            } else {
+                let oauth_url = "https://oauth2.googleapis.com/token";
+                let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+                let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+                
+                let params = [
+                    ("client_id", client_id.as_str()),
+                    ("client_secret", client_secret.as_str()),
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", refresh_token.as_str()),
+                ];
+                
+                let res = self.http.post(oauth_url)
+                    .form(&params)
+                    .send()
+                    .await
+                    .map_err(ApiError::from)?;
+                    
+                if res.status().is_success() {
+                    if let Ok(json) = res.json::<serde_json::Value>().await {
+                        if let Some(access_token) = json.get("access_token").and_then(|t| t.as_str()) {
+                            actual_api_key = access_token.to_string();
+                            *cached = Some(actual_api_key.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         self.http
             .post(&request_url)
             .header("content-type", "application/json")
-            .bearer_auth(&self.api_key)
+            .bearer_auth(&actual_api_key)
             .json(&build_chat_completion_request(request, self.config()))
             .send()
             .await
@@ -899,10 +991,24 @@ fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
 
 #[must_use]
 pub fn has_api_key(key: &str) -> bool {
-    read_env_non_empty(key)
+    if read_env_non_empty(key)
         .ok()
         .and_then(std::convert::identity)
         .is_some()
+    {
+        return true;
+    }
+    
+    if key == "GEMINI_API_KEY" || key == "GOOGLE_API_KEY" {
+        if let Some(home) = std::env::var_os("HOME") {
+            let token_path = std::path::PathBuf::from(home).join(".gemini/antigravity-cli/antigravity-oauth-token");
+            if token_path.exists() {
+                return true;
+            }
+        }
+    }
+    
+    false
 }
 
 #[must_use]

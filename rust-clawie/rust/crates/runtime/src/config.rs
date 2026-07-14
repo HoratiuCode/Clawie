@@ -775,6 +775,8 @@ fn parse_optional_provider(root: &JsonValue) -> Result<Option<String>, ConfigErr
         "anthropic" | "claude" => Ok(Some("anthropic".to_string())),
         "xai" | "grok" => Ok(Some("xai".to_string())),
         "openai" | "gpt" => Ok(Some("openai".to_string())),
+        "gemini" | "google" => Ok(Some("gemini".to_string())),
+        "kimi" | "moonshot" => Ok(Some("kimi".to_string())),
         other => Err(ConfigError::Parse(format!(
             "merged settings.provider: unsupported provider {other}"
         ))),
@@ -941,6 +943,8 @@ fn normalize_provider_label(value: &str, context: &str) -> Result<String, Config
         "anthropic" | "claude" => Ok("anthropic".to_string()),
         "xai" | "grok" => Ok("xai".to_string()),
         "openai" | "gpt" => Ok("openai".to_string()),
+        "gemini" | "google" => Ok("gemini".to_string()),
+        "kimi" | "moonshot" => Ok("kimi".to_string()),
         other => Err(ConfigError::Parse(format!(
             "{context}: unsupported provider {other}"
         ))),
