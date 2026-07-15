@@ -1963,6 +1963,7 @@ dependencies = [
  "syntect",
  "tokio",
  "tools",
+ "unicode-width",
 ]
 
 [[package]]

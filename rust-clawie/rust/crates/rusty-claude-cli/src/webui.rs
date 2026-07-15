@@ -88,7 +88,9 @@ pub fn launch() -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
                     break;
                 }
             }
-            let listener = bound_listener.unwrap_or_else(|| TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind any port"));
+            let listener = bound_listener.unwrap_or_else(|| {
+                TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind any port")
+            });
             let port = listener.local_addr()?.port();
             let server_output_dir = output_dir.clone();
             thread::Builder::new()
@@ -341,13 +343,15 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
             )
         }
         line if line.starts_with("POST /api/settings ") => {
-            let payload: serde_json::Value = parse_json_body(&request, header_end, "save settings")?;
+            let payload: serde_json::Value =
+                parse_json_body(&request, header_end, "save settings")?;
             let config_home = runtime::default_config_home();
             fs::create_dir_all(&config_home)?;
             let settings_path = config_home.join("settings.json");
             let mut current = if settings_path.exists() {
                 let content = fs::read_to_string(&settings_path)?;
-                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content).unwrap_or_default()
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
+                    .unwrap_or_default()
             } else {
                 serde_json::Map::new()
             };
@@ -363,7 +367,8 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
             write_json_response(stream, "200 OK", r#"{"ok":true}"#)
         }
         line if line.starts_with("POST /test-connection ") => {
-            let payload: TestConnectionRequest = parse_json_body(&request, header_end, "test connection")?;
+            let payload: TestConnectionRequest =
+                parse_json_body(&request, header_end, "test connection")?;
             match test_api_connection(&payload) {
                 Ok(_) => write_json_response(stream, "200 OK", r#"{"ok":true}"#),
                 Err(e) => write_json_response(
@@ -938,13 +943,16 @@ fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::e
         .build()?;
 
     if req.provider == "anthropic" {
-        let url = req.base_url.as_deref()
+        let url = req
+            .base_url
+            .as_deref()
             .unwrap_or("https://api.anthropic.com")
             .trim_end_matches('/');
         let url = format!("{}/v1/messages", url);
         let model = req.model.as_deref().unwrap_or("claude-3-5-sonnet-20240620");
 
-        let response = client.post(&url)
+        let response = client
+            .post(&url)
             .header("x-api-key", &req.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
@@ -959,23 +967,35 @@ fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::e
         if status.is_success() {
             Ok(())
         } else {
-            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                parsed["error"]["message"]
+                    .as_str()
+                    .map(|s| s.to_string())
                     .unwrap_or(text)
             } else {
                 text
             };
-            Err(format!("Anthropic API returned status {}: {}", status.as_u16(), err_msg).into())
+            Err(format!(
+                "Anthropic API returned status {}: {}",
+                status.as_u16(),
+                err_msg
+            )
+            .into())
         }
     } else if req.provider == "openai" {
-        let url = req.base_url.as_deref()
+        let url = req
+            .base_url
+            .as_deref()
             .unwrap_or("https://api.openai.com/v1")
             .trim_end_matches('/');
         let url = format!("{}/chat/completions", url);
         let model = req.model.as_deref().unwrap_or("gpt-4o");
 
-        let response = client.post(&url)
+        let response = client
+            .post(&url)
             .header("Authorization", format!("Bearer {}", req.api_key))
             .header("content-type", "application/json")
             .json(&json!({
@@ -989,23 +1009,35 @@ fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::e
         if status.is_success() {
             Ok(())
         } else {
-            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                parsed["error"]["message"]
+                    .as_str()
+                    .map(|s| s.to_string())
                     .unwrap_or(text)
             } else {
                 text
             };
-            Err(format!("OpenAI API returned status {}: {}", status.as_u16(), err_msg).into())
+            Err(format!(
+                "OpenAI API returned status {}: {}",
+                status.as_u16(),
+                err_msg
+            )
+            .into())
         }
     } else if req.provider == "gemini" {
-        let url = req.base_url.as_deref()
+        let url = req
+            .base_url
+            .as_deref()
             .unwrap_or("https://generativelanguage.googleapis.com/v1beta/openai")
             .trim_end_matches('/');
         let url = format!("{}/chat/completions", url);
         let model = req.model.as_deref().unwrap_or("gemini-1.5-pro");
 
-        let response = client.post(&url)
+        let response = client
+            .post(&url)
             .header("Authorization", format!("Bearer {}", req.api_key))
             .header("content-type", "application/json")
             .json(&json!({
@@ -1019,14 +1051,23 @@ fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::e
         if status.is_success() {
             Ok(())
         } else {
-            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                parsed["error"]["message"]
+                    .as_str()
+                    .map(|s| s.to_string())
                     .unwrap_or(text)
             } else {
                 text
             };
-            Err(format!("Gemini API returned status {}: {}", status.as_u16(), err_msg).into())
+            Err(format!(
+                "Gemini API returned status {}: {}",
+                status.as_u16(),
+                err_msg
+            )
+            .into())
         }
     } else if req.provider == "xai" || req.provider == "kimi" {
         let default_url = if req.provider == "xai" {
@@ -1034,14 +1075,21 @@ fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::e
         } else {
             "https://api.moonshot.cn/v1"
         };
-        let url = req.base_url.as_deref()
+        let url = req
+            .base_url
+            .as_deref()
             .unwrap_or(default_url)
             .trim_end_matches('/');
         let url = format!("{}/chat/completions", url);
-        let default_model = if req.provider == "xai" { "grok-3" } else { "moonshot-v1-auto" };
+        let default_model = if req.provider == "xai" {
+            "grok-3"
+        } else {
+            "moonshot-v1-auto"
+        };
         let model = req.model.as_deref().unwrap_or(default_model);
 
-        let response = client.post(&url)
+        let response = client
+            .post(&url)
             .header("Authorization", format!("Bearer {}", req.api_key))
             .header("content-type", "application/json")
             .json(&json!({
@@ -1055,14 +1103,24 @@ fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::e
         if status.is_success() {
             Ok(())
         } else {
-            let text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-                parsed["error"]["message"].as_str().map(|s| s.to_string())
+                parsed["error"]["message"]
+                    .as_str()
+                    .map(|s| s.to_string())
                     .unwrap_or(text)
             } else {
                 text
             };
-            Err(format!("{} API returned status {}: {}", req.provider, status.as_u16(), err_msg).into())
+            Err(format!(
+                "{} API returned status {}: {}",
+                req.provider,
+                status.as_u16(),
+                err_msg
+            )
+            .into())
         }
     } else {
         Err("Unsupported provider".into())

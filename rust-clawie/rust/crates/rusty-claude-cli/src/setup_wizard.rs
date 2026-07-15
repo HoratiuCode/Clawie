@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
-use runtime::{ConfigLoader, default_config_home};
+use runtime::{default_config_home, ConfigLoader};
 use serde_json::{Map, Value};
 
 #[derive(Clone, Copy)]

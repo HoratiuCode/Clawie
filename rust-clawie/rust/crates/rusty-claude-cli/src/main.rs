@@ -27,38 +27,38 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
-    MessageRequest, MessageResponse, OutputContentBlock, PROVIDER_PREFERENCE_ENV, PromptCache,
-    ProviderApi, ProviderClient, ProviderConnectionOptions, ProviderKind, ProviderSelection,
-    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
     builtin_model_definitions, default_model_for_provider, metadata_for_model,
     parse_provider_preference, provider_preference_from_env, resolve_startup_auth_source,
+    AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
+    MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderApi, ProviderClient,
+    ProviderConnectionOptions, ProviderKind, ProviderSelection, StreamEvent as ApiStreamEvent,
+    ToolChoice, ToolDefinition, ToolResultContentBlock, PROVIDER_PREFERENCE_ENV,
 };
 
 use commands::{
-    SlashCommand, handle_agents_slash_command, handle_mcp_slash_command,
-    handle_plugins_slash_command, handle_skills_slash_command, render_slash_command_help,
-    resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
+    handle_agents_slash_command, handle_mcp_slash_command, handle_plugins_slash_command,
+    handle_skills_slash_command, render_slash_command_help, resume_supported_slash_commands,
+    slash_command_specs, validate_slash_command_input, SlashCommand,
 };
-use compat_harness::{UpstreamPaths, extract_manifest};
+use compat_harness::{extract_manifest, UpstreamPaths};
 use crossterm::style::Stylize;
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{
-    Spinner, TerminalRenderer, TerminalTheme, active_terminal_theme, set_active_terminal_theme,
+    active_terminal_theme, set_active_terminal_theme, Spinner, TerminalRenderer, TerminalTheme,
 };
 use runtime::{
-    ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
-    ContentBlock, ConversationMessage, ConversationRuntime, GitCommitInput, GitUndoInput, LeanMode,
-    McpServerManager, McpTool, MessageRole, ModelConnectionDefinition, ModelPricing,
-    OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
-    PermissionPolicy, ProjectContext, PromptCacheEvent, RepoMapOptions, ResolvedPermissionMode,
-    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, active_lean_mode,
-    build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
+    active_lean_mode, build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
     generate_pkce_pair, generate_state, git_commit, git_undo_last_commit, lean_command_prompt,
     lean_gain_report, lean_help_report, load_system_prompt, parse_model_ref,
     parse_oauth_callback_request_target, persist_lean_mode, pricing_for_model, read_file,
-    resolve_sandbox_status, save_oauth_credentials,
+    resolve_sandbox_status, save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent,
+    CompactionConfig, ConfigLoader, ConfigSource, ContentBlock, ConversationMessage,
+    ConversationRuntime, GitCommitInput, GitUndoInput, LeanMode, McpServerManager, McpTool,
+    MessageRole, ModelConnectionDefinition, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
+    RepoMapOptions, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
+    ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -1031,7 +1031,10 @@ fn run_logout() -> Result<(), Box<dyn std::error::Error>> {
     let provider_env_path = provider_env_file_path();
     if provider_env_path.exists() {
         fs::remove_file(&provider_env_path)?;
-        println!("Launcher provider env cleared from {}.", provider_env_path.display());
+        println!(
+            "Launcher provider env cleared from {}.",
+            provider_env_path.display()
+        );
     }
     if let Some(path) = setup_wizard::clear_provider_settings()? {
         println!("Provider settings cleared from {}.", path.display());
@@ -1399,7 +1402,11 @@ fn format_token_count(count: u32) -> String {
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value { "yes" } else { "no" }
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 fn print_providers_report() {
@@ -3015,7 +3022,7 @@ impl HookAbortMonitor {
     fn spawn(abort_signal: runtime::HookAbortSignal) -> Self {
         Self::spawn_with_waiter(abort_signal, move |stop_rx, abort_signal| {
             if io::stdin().is_terminal() && io::stdout().is_terminal() {
-                use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, poll, read};
+                use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
                 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
                 if enable_raw_mode().is_ok() {
@@ -6089,12 +6096,10 @@ impl InternalPromptProgressRun {
 
         let (heartbeat_stop, heartbeat_rx) = mpsc::channel();
         let heartbeat_reporter = reporter.clone();
-        let heartbeat_handle = thread::spawn(move || {
-            loop {
-                match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                    Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
-                }
+        let heartbeat_handle = thread::spawn(move || loop {
+            match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
+                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
             }
         });
 
@@ -6493,7 +6498,10 @@ impl CodexCliRuntimeClient {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        env::temp_dir().join(format!("clawie-codex-output-{}-{now}.txt", std::process::id()))
+        env::temp_dir().join(format!(
+            "clawie-codex-output-{}-{now}.txt",
+            std::process::id()
+        ))
     }
 
     fn build_prompt(request: &ApiRequest) -> String {
@@ -6501,7 +6509,9 @@ impl CodexCliRuntimeClient {
         prompt.push_str(
             "You are answering inside Clawie through Codex CLI. Answer the latest user message. ",
         );
-        prompt.push_str("Use the conversation context below. Return only the assistant response.\n\n");
+        prompt.push_str(
+            "Use the conversation context below. Return only the assistant response.\n\n",
+        );
         if !request.system_prompt.is_empty() {
             prompt.push_str("# System\n");
             prompt.push_str(&request.system_prompt.join("\n\n"));
@@ -6581,7 +6591,9 @@ impl ApiClient for CodexCliRuntimeClient {
             .as_mut()
             .ok_or_else(|| RuntimeError::new("failed to open Codex CLI stdin"))?
             .write_all(prompt.as_bytes())
-            .map_err(|error| RuntimeError::new(format!("failed to send prompt to Codex CLI: {error}")))?;
+            .map_err(|error| {
+                RuntimeError::new(format!("failed to send prompt to Codex CLI: {error}"))
+            })?;
         let output = child
             .wait_with_output()
             .map_err(|error| RuntimeError::new(format!("Codex CLI failed: {error}")))?;
@@ -6866,7 +6878,7 @@ fn write_structured_reply(
         writeln!(out, "{label}")?;
         *reply_header_written = true;
     }
-    let rendered = renderer.vertical_markdown_to_ansi(body);
+    let rendered = renderer.markdown_to_ansi(body);
     writeln!(out, "{rendered}")?;
     Ok(())
 }
@@ -7135,8 +7147,10 @@ fn accessible_model_completion_candidates(model: &str) -> BTreeSet<String> {
 
     if let Some(config) = config.as_ref() {
         for configured_model in config.model_connections().models() {
-            if configured_model_matches_active_provider(configured_model, active_provider.as_deref())
-            {
+            if configured_model_matches_active_provider(
+                configured_model,
+                active_provider.as_deref(),
+            ) {
                 candidates.insert(configured_model.model_name.clone());
                 candidates.insert(configured_model.model.clone());
             }
@@ -7160,7 +7174,10 @@ fn accessible_model_completion_candidates(model: &str) -> BTreeSet<String> {
     candidates
 }
 
-fn active_completion_provider(model: &str, config: Option<&runtime::RuntimeConfig>) -> Option<String> {
+fn active_completion_provider(
+    model: &str,
+    config: Option<&runtime::RuntimeConfig>,
+) -> Option<String> {
     config
         .and_then(raw_provider_from_config)
         .or_else(|| {
@@ -8145,19 +8162,16 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        CliAction, CliOutputFormat, CliToolExecutor, DEFAULT_MODEL, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
-        StatusUsage, TokenUsage, build_runtime_plugin_state_with_loader,
-        build_runtime_with_plugin_state, create_managed_session_handle, describe_tool_progress,
-        expand_file_mentions_with_roots, extract_file_mentions, filter_tool_specs,
-        final_assistant_text_or_fallback, format_bughunter_report, format_commit_preflight_report,
-        format_commit_skipped_report, format_compact_report, format_cost_report,
-        format_experimental_report, format_internal_prompt_progress_line, format_issue_report,
-        format_model_report, format_model_switch_report, format_permissions_report,
-        format_permissions_switch_report, format_pr_report, format_providers_report,
-        format_resume_report, format_status_report, format_theme_report,
-        format_theme_switch_report, format_tool_call_start, format_tool_result,
-        format_ultraplan_report, format_unknown_slash_command,
+        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
+        create_managed_session_handle, describe_tool_progress, expand_file_mentions_with_roots,
+        extract_file_mentions, filter_tool_specs, final_assistant_text_or_fallback,
+        format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
+        format_compact_report, format_cost_report, format_experimental_report,
+        format_internal_prompt_progress_line, format_issue_report, format_model_report,
+        format_model_switch_report, format_permissions_report, format_permissions_switch_report,
+        format_pr_report, format_providers_report, format_resume_report, format_status_report,
+        format_theme_report, format_theme_switch_report, format_tool_call_start,
+        format_tool_result, format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, normalize_permission_mode, parse_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
         permission_policy, persist_provider_api_key, print_help_to, push_output_block,
@@ -8165,9 +8179,11 @@ mod tests {
         render_repl_help, render_resume_usage, resolve_config_value, resolve_model_alias,
         resolve_session_reference, response_to_events, resume_supported_slash_commands,
         run_resume_command, slash_command_completion_candidates_with_sessions, status_context,
-        upsert_export_line, validate_no_args, write_mcp_server_fixture,
+        upsert_export_line, validate_no_args, write_mcp_server_fixture, write_structured_reply,
+        CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary, InternalPromptProgressEvent,
+        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, TokenUsage, DEFAULT_MODEL,
     };
-    use crate::render::{TerminalTheme, active_terminal_theme, set_active_terminal_theme};
+    use crate::render::{active_terminal_theme, set_active_terminal_theme, TerminalRenderer, TerminalTheme};
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
         PluginManager, PluginManagerConfig, PluginTool, PluginToolDefinition, PluginToolPermission,
@@ -8206,6 +8222,23 @@ mod tests {
             None,
         )])
         .expect("plugin tool registry should build")
+    }
+
+    fn strip_test_ansi(input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
+        let mut chars = input.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+        output
     }
 
     fn temp_dir() -> PathBuf {
@@ -9309,9 +9342,7 @@ mod tests {
         assert!(report.contains("Theme"));
         assert!(report.contains("Active design    chrome"));
         assert!(report.contains("clawie1    ○ available red accent with emoji status markers"));
-        assert!(
-            report.contains("chrome     ● current   black and white with emoji status markers")
-        );
+        assert!(report.contains("chrome     ● current   black and white with emoji status markers"));
         assert!(report.contains("classic    ○ available red accent without emoji status markers"));
     }
 
@@ -9369,6 +9400,28 @@ mod tests {
         assert!(report.contains("/model <name>"));
         assert!(report.contains("Context"));
         assert!(report.contains("Thinking"));
+    }
+
+    #[test]
+    fn structured_reply_renders_plain_text_without_vertical_bullets() {
+        let renderer = TerminalRenderer::new();
+        let mut output = Vec::new();
+        let mut header_written = false;
+
+        write_structured_reply(
+            &mut output,
+            &renderer,
+            "Hello!\n\nHow can I help?",
+            &mut header_written,
+        )
+        .expect("reply should render");
+
+        let rendered = strip_test_ansi(&String::from_utf8(output).expect("utf8"));
+        assert!(rendered.contains("Response"));
+        assert!(rendered.contains("Hello!"));
+        assert!(rendered.contains("How can I help?"));
+        assert!(!rendered.contains("• Hello"));
+        assert!(!rendered.contains("• How can I help"));
     }
 
     #[test]
@@ -9495,22 +9548,16 @@ mod tests {
         assert!(preflight.contains("Result           ready"));
         assert!(preflight.contains("Branch           feature/ux"));
         assert!(preflight.contains("Workspace        dirty · 2 files · 1 staged, 1 unstaged"));
-        assert!(
-            preflight.contains(
-                "Action           create a git commit from the current workspace changes"
-            )
-        );
+        assert!(preflight
+            .contains("Action           create a git commit from the current workspace changes"));
     }
 
     #[test]
     fn commit_skipped_report_points_to_next_steps() {
         let report = format_commit_skipped_report();
         assert!(report.contains("Reason           no workspace changes"));
-        assert!(
-            report.contains(
-                "Action           create a git commit from the current workspace changes"
-            )
-        );
+        assert!(report
+            .contains("Action           create a git commit from the current workspace changes"));
         assert!(report.contains("/status to inspect context"));
         assert!(report.contains("/diff to inspect repo changes"));
     }
@@ -10821,7 +10868,7 @@ impl RustArtifactStore {
 
 #[cfg(test)]
 mod sandbox_report_tests {
-    use super::{HookAbortMonitor, format_sandbox_report};
+    use super::{format_sandbox_report, HookAbortMonitor};
     use runtime::HookAbortSignal;
     use std::sync::mpsc;
     use std::time::Duration;
