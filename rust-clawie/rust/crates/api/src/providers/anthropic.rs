@@ -1,11 +1,11 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use runtime::format_usd;
 use runtime::{
-    load_oauth_credentials, save_oauth_credentials, OAuthConfig, OAuthRefreshRequest,
-    OAuthTokenExchangeRequest,
+    OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest, load_oauth_credentials,
+    save_oauth_credentials,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -118,6 +118,7 @@ pub struct AnthropicClient {
     initial_backoff: Duration,
     max_backoff: Duration,
     request_profile: AnthropicRequestProfile,
+    custom_headers: BTreeMap<String, String>,
     session_tracer: Option<SessionTracer>,
     prompt_cache: Option<PromptCache>,
     last_prompt_cache_record: Arc<Mutex<Option<PromptCacheRecord>>>,
@@ -134,6 +135,7 @@ impl AnthropicClient {
             initial_backoff: DEFAULT_INITIAL_BACKOFF,
             max_backoff: DEFAULT_MAX_BACKOFF,
             request_profile: AnthropicRequestProfile::default(),
+            custom_headers: BTreeMap::new(),
             session_tracer: None,
             prompt_cache: None,
             last_prompt_cache_record: Arc::new(Mutex::new(None)),
@@ -150,6 +152,7 @@ impl AnthropicClient {
             initial_backoff: DEFAULT_INITIAL_BACKOFF,
             max_backoff: DEFAULT_MAX_BACKOFF,
             request_profile: AnthropicRequestProfile::default(),
+            custom_headers: BTreeMap::new(),
             session_tracer: None,
             prompt_cache: None,
             last_prompt_cache_record: Arc::new(Mutex::new(None)),
@@ -194,6 +197,12 @@ impl AnthropicClient {
     #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_headers(mut self, headers: BTreeMap<String, String>) -> Self {
+        self.custom_headers = headers;
         self
     }
 
@@ -469,6 +478,9 @@ impl AnthropicClient {
             .header("content-type", "application/json");
         let mut request_builder = self.auth.apply(request_builder);
         for (header_name, header_value) in self.request_profile.header_pairs() {
+            request_builder = request_builder.header(header_name, header_value);
+        }
+        for (header_name, header_value) in &self.custom_headers {
             request_builder = request_builder.header(header_name, header_value);
         }
 
@@ -847,11 +859,11 @@ mod tests {
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use runtime::{clear_oauth_credentials, save_oauth_credentials, OAuthConfig};
+    use runtime::{OAuthConfig, clear_oauth_credentials, save_oauth_credentials};
 
     use super::{
-        now_unix_timestamp, oauth_token_is_expired, resolve_saved_oauth_token,
-        resolve_startup_auth_source, AnthropicClient, AuthSource, OAuthTokenSet,
+        AnthropicClient, AuthSource, OAuthTokenSet, now_unix_timestamp, oauth_token_is_expired,
+        resolve_saved_oauth_token, resolve_startup_auth_source,
     };
     use crate::types::{ContentBlockDelta, MessageRequest};
 

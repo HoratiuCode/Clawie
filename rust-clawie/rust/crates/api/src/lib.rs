@@ -8,7 +8,7 @@ mod types;
 pub use client::{
     anthropic, gemini, kimi, oauth_token_is_expired, openai, read_base_url, read_xai_base_url,
     resolve_saved_oauth_token, resolve_startup_auth_source, xai, MessageStream, OAuthTokenSet,
-    ProviderClient, ProviderFacade, ProviderRequest, ProviderSelection,
+    ProviderClient, ProviderConnectionOptions, ProviderFacade, ProviderRequest, ProviderSelection,
 };
 pub use error::ApiError;
 pub use prompt_cache::{
@@ -18,10 +18,11 @@ pub use prompt_cache::{
 pub use providers::anthropic::{AnthropicClient, AnthropicClient as ApiClient, AuthSource};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
-    default_model_for_provider, definition_for_model, definition_for_provider,
-    detect_provider_kind, max_tokens_for_model, metadata_for_model, parse_provider_preference,
-    provider_preference_from_env, provider_supports_api, resolve_model_alias, ProviderApi,
-    ProviderDefinition, ProviderKind, ANTHROPIC_PROVIDER_DEFINITION, GEMINI_PROVIDER_DEFINITION,
+    builtin_model_definition, builtin_model_definitions, default_model_for_provider,
+    definition_for_model, definition_for_provider, detect_provider_kind, max_tokens_for_model,
+    metadata_for_model, parse_provider_preference, provider_preference_from_env,
+    provider_supports_api, resolve_model_alias, ModelDefinition, ProviderApi, ProviderDefinition,
+    ProviderKind, ProviderMetadata, ANTHROPIC_PROVIDER_DEFINITION, GEMINI_PROVIDER_DEFINITION,
     KIMI_PROVIDER_DEFINITION, LEGACY_PROVIDER_PREFERENCE_ENV, OPENAI_PROVIDER_DEFINITION,
     PROVIDER_PREFERENCE_ENV, XAI_PROVIDER_DEFINITION,
 };

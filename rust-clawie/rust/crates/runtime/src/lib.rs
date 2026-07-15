@@ -70,12 +70,13 @@ pub use compact::{
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
 pub use config::{
-    default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
-    McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
-    McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
-    ResolvedPermissionMode, RuntimeAgentConfig, RuntimeAgentDefinitionConfig, RuntimeConfig,
-    RuntimeFeatureConfig, RuntimeHookConfig, RuntimePermissionRuleConfig, RuntimePluginConfig,
-    ScopedMcpServerConfig, CLAW_SETTINGS_SCHEMA_NAME,
+    default_config_home, parse_model_ref, ConfigEntry, ConfigError, ConfigLoader, ConfigSource,
+    McpConfigCollection, McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig,
+    McpSdkServerConfig, McpServerConfig, McpStdioServerConfig, McpTransport,
+    McpWebSocketServerConfig, ModelConnectionDefinition, OAuthConfig, ResolvedPermissionMode,
+    RuntimeAgentConfig, RuntimeAgentDefinitionConfig, RuntimeConfig, RuntimeFeatureConfig,
+    RuntimeHookConfig, RuntimePermissionRuleConfig, RuntimePluginConfig, ScopedMcpServerConfig,
+    CLAW_SETTINGS_SCHEMA_NAME,
 };
 pub use config_validate::{
     check_unsupported_format, format_diagnostics, validate_config_file, ConfigDiagnostic,

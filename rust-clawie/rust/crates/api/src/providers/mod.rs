@@ -115,6 +115,143 @@ pub struct ProviderMetadata {
     pub default_base_url: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelDefinition {
+    pub provider: ProviderKind,
+    pub model: &'static str,
+    pub api: ProviderApi,
+    pub auth_env: &'static str,
+    pub base_url_env: &'static str,
+    pub default_base_url: &'static str,
+    pub context_window: u32,
+    pub max_output_tokens: u32,
+    pub reasoning: bool,
+    pub images: bool,
+}
+
+const BUILTIN_MODEL_DEFINITIONS: &[ModelDefinition] = &[
+    ModelDefinition {
+        provider: ProviderKind::Anthropic,
+        model: "claude-opus-4-6",
+        api: ProviderApi::Messages,
+        auth_env: "ANTHROPIC_API_KEY",
+        base_url_env: "ANTHROPIC_BASE_URL",
+        default_base_url: anthropic::DEFAULT_BASE_URL,
+        context_window: 200_000,
+        max_output_tokens: 32_000,
+        reasoning: true,
+        images: true,
+    },
+    ModelDefinition {
+        provider: ProviderKind::Anthropic,
+        model: "claude-sonnet-4-6",
+        api: ProviderApi::Messages,
+        auth_env: "ANTHROPIC_API_KEY",
+        base_url_env: "ANTHROPIC_BASE_URL",
+        default_base_url: anthropic::DEFAULT_BASE_URL,
+        context_window: 200_000,
+        max_output_tokens: 32_000,
+        reasoning: true,
+        images: true,
+    },
+    ModelDefinition {
+        provider: ProviderKind::Anthropic,
+        model: "claude-haiku-4-5-20251213",
+        api: ProviderApi::Messages,
+        auth_env: "ANTHROPIC_API_KEY",
+        base_url_env: "ANTHROPIC_BASE_URL",
+        default_base_url: anthropic::DEFAULT_BASE_URL,
+        context_window: 200_000,
+        max_output_tokens: 32_000,
+        reasoning: false,
+        images: true,
+    },
+    ModelDefinition {
+        provider: ProviderKind::OpenAi,
+        model: "gpt-4.1",
+        api: ProviderApi::Responses,
+        auth_env: "OPENAI_API_KEY",
+        base_url_env: "OPENAI_BASE_URL",
+        default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        context_window: 1_000_000,
+        max_output_tokens: 32_768,
+        reasoning: false,
+        images: true,
+    },
+    ModelDefinition {
+        provider: ProviderKind::OpenAi,
+        model: "gpt-4.1-mini",
+        api: ProviderApi::Responses,
+        auth_env: "OPENAI_API_KEY",
+        base_url_env: "OPENAI_BASE_URL",
+        default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        context_window: 1_000_000,
+        max_output_tokens: 32_768,
+        reasoning: false,
+        images: true,
+    },
+    ModelDefinition {
+        provider: ProviderKind::Xai,
+        model: "grok-3",
+        api: ProviderApi::Responses,
+        auth_env: "XAI_API_KEY",
+        base_url_env: "XAI_BASE_URL",
+        default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+        context_window: 131_072,
+        max_output_tokens: 64_000,
+        reasoning: true,
+        images: false,
+    },
+    ModelDefinition {
+        provider: ProviderKind::Xai,
+        model: "grok-3-mini",
+        api: ProviderApi::Responses,
+        auth_env: "XAI_API_KEY",
+        base_url_env: "XAI_BASE_URL",
+        default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+        context_window: 131_072,
+        max_output_tokens: 64_000,
+        reasoning: true,
+        images: false,
+    },
+    ModelDefinition {
+        provider: ProviderKind::Gemini,
+        model: "gemini-1.5-pro",
+        api: ProviderApi::Responses,
+        auth_env: "GEMINI_API_KEY",
+        base_url_env: "GEMINI_BASE_URL",
+        default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        context_window: 2_000_000,
+        max_output_tokens: 65_536,
+        reasoning: false,
+        images: true,
+    },
+    ModelDefinition {
+        provider: ProviderKind::Gemini,
+        model: "gemini-1.5-flash",
+        api: ProviderApi::Responses,
+        auth_env: "GEMINI_API_KEY",
+        base_url_env: "GEMINI_BASE_URL",
+        default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        context_window: 1_000_000,
+        max_output_tokens: 65_536,
+        reasoning: false,
+        images: true,
+    },
+    ModelDefinition {
+        provider: ProviderKind::Kimi,
+        model: "moonshot-v1-auto",
+        api: ProviderApi::Responses,
+        auth_env: "MOONSHOT_API_KEY",
+        base_url_env: "MOONSHOT_BASE_URL",
+        default_base_url: "https://api.moonshot.cn/v1",
+        context_window: 128_000,
+        max_output_tokens: 64_000,
+        reasoning: false,
+        images: false,
+    },
+];
+
 const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     (
         "opus",
@@ -298,6 +435,14 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
         });
     }
+    if canonical.starts_with("qwen") || canonical.starts_with("dashscope/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "DASHSCOPE_API_KEY",
+            base_url_env: "DASHSCOPE_BASE_URL",
+            default_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        });
+    }
     if canonical.starts_with("claude") {
         return Some(ProviderMetadata {
             provider: ProviderKind::Anthropic,
@@ -322,7 +467,29 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
         });
     }
+    if canonical.starts_with("moonshot-") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::Kimi,
+            auth_env: "MOONSHOT_API_KEY",
+            base_url_env: "MOONSHOT_BASE_URL",
+            default_base_url: "https://api.moonshot.cn/v1",
+        });
+    }
     None
+}
+
+#[must_use]
+pub const fn builtin_model_definitions() -> &'static [ModelDefinition] {
+    BUILTIN_MODEL_DEFINITIONS
+}
+
+#[must_use]
+pub fn builtin_model_definition(model: &str) -> Option<ModelDefinition> {
+    let canonical = resolve_model_alias(model);
+    BUILTIN_MODEL_DEFINITIONS
+        .iter()
+        .copied()
+        .find(|definition| definition.model == canonical)
 }
 
 #[must_use]
@@ -330,7 +497,7 @@ pub fn parse_provider_preference(value: &str) -> Option<ProviderKind> {
     match value.trim().to_ascii_lowercase().as_str() {
         "anthropic" | "claude" => Some(ProviderKind::Anthropic),
         "xai" | "grok" => Some(ProviderKind::Xai),
-        "openai" | "gpt" => Some(ProviderKind::OpenAi),
+        "openai" | "gpt" | "dashscope" => Some(ProviderKind::OpenAi),
         "gemini" | "google" => Some(ProviderKind::Gemini),
         "kimi" | "moonshot" => Some(ProviderKind::Kimi),
         _ => None,
@@ -389,7 +556,8 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(preferred) = provider_preference_from_env() {
         return preferred;
     }
-    if openai_compat::has_api_key("GEMINI_API_KEY") || openai_compat::has_api_key("GOOGLE_API_KEY") {
+    if openai_compat::has_api_key("GEMINI_API_KEY") || openai_compat::has_api_key("GOOGLE_API_KEY")
+    {
         return ProviderKind::Gemini;
     }
     if openai_compat::has_api_key("OPENAI_API_KEY") {
@@ -428,9 +596,10 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
+        ProviderApi, ProviderKind, builtin_model_definition, builtin_model_definitions,
         default_model_for_provider, definition_for_model, definition_for_provider,
         detect_provider_kind, max_tokens_for_model, parse_provider_preference,
-        provider_supports_api, resolve_model_alias, ProviderApi, ProviderKind,
+        provider_supports_api, resolve_model_alias,
     };
 
     #[test]
@@ -456,6 +625,10 @@ mod tests {
             Some(ProviderKind::Anthropic)
         );
         assert_eq!(parse_provider_preference("gpt"), Some(ProviderKind::OpenAi));
+        assert_eq!(
+            parse_provider_preference("dashscope"),
+            Some(ProviderKind::OpenAi)
+        );
         assert_eq!(parse_provider_preference("grok"), Some(ProviderKind::Xai));
         assert_eq!(parse_provider_preference("kimi"), Some(ProviderKind::Kimi));
         assert_eq!(
@@ -493,9 +666,29 @@ mod tests {
     }
 
     #[test]
+    fn exposes_builtin_model_capabilities() {
+        let models = builtin_model_definitions();
+        assert!(models.iter().any(|model| model.model == "gpt-4.1"));
+
+        let model = builtin_model_definition("kimi").expect("kimi alias should resolve");
+        assert_eq!(model.provider, ProviderKind::Kimi);
+        assert_eq!(model.model, "moonshot-v1-auto");
+        assert_eq!(model.auth_env, "MOONSHOT_API_KEY");
+        assert!(model.context_window >= 128_000);
+    }
+
+    #[test]
     fn keeps_existing_max_token_heuristic() {
         assert_eq!(max_tokens_for_model("opus"), 32_000);
         assert_eq!(max_tokens_for_model("grok-3"), 64_000);
         assert_eq!(max_tokens_for_model("gpt-4.1"), 32_768);
+    }
+
+    #[test]
+    fn dashscope_models_use_dashscope_env_metadata() {
+        let metadata = super::metadata_for_model("qwen-plus").expect("dashscope metadata");
+        assert_eq!(metadata.provider, ProviderKind::OpenAi);
+        assert_eq!(metadata.auth_env, "DASHSCOPE_API_KEY");
+        assert_eq!(metadata.base_url_env, "DASHSCOPE_BASE_URL");
     }
 }

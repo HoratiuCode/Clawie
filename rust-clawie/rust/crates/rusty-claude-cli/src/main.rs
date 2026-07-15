@@ -12,7 +12,7 @@ mod render;
 mod setup_wizard;
 mod webui;
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -29,8 +29,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use api::{
     AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
     MessageRequest, MessageResponse, OutputContentBlock, PROVIDER_PREFERENCE_ENV, PromptCache,
-    ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
-    ToolResultContentBlock, default_model_for_provider, metadata_for_model,
+    ProviderApi, ProviderClient, ProviderConnectionOptions, ProviderKind, ProviderSelection,
+    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    builtin_model_definitions, default_model_for_provider, metadata_for_model,
     parse_provider_preference, provider_preference_from_env, resolve_startup_auth_source,
 };
 
@@ -49,14 +50,15 @@ use render::{
 use runtime::{
     ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
     ContentBlock, ConversationMessage, ConversationRuntime, GitCommitInput, GitUndoInput, LeanMode,
-    McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    RepoMapOptions, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
-    ToolExecutor, UsageTracker, active_lean_mode, build_repo_map, clear_oauth_credentials,
-    format_lean_mode_report, format_usd, generate_pkce_pair, generate_state, git_commit,
-    git_undo_last_commit, lean_command_prompt, lean_gain_report, lean_help_report,
-    load_system_prompt, parse_oauth_callback_request_target, persist_lean_mode, pricing_for_model,
-    read_file, resolve_sandbox_status, save_oauth_credentials,
+    McpServerManager, McpTool, MessageRole, ModelConnectionDefinition, ModelPricing,
+    OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
+    PermissionPolicy, ProjectContext, PromptCacheEvent, RepoMapOptions, ResolvedPermissionMode,
+    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, active_lean_mode,
+    build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
+    generate_pkce_pair, generate_state, git_commit, git_undo_last_commit, lean_command_prompt,
+    lean_gain_report, lean_help_report, load_system_prompt, parse_model_ref,
+    parse_oauth_callback_request_target, persist_lean_mode, pricing_for_model, read_file,
+    resolve_sandbox_status, save_oauth_credentials,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -1026,6 +1028,14 @@ fn run_login() -> Result<(), Box<dyn std::error::Error>> {
 fn run_logout() -> Result<(), Box<dyn std::error::Error>> {
     clear_oauth_credentials()?;
     println!("Claude OAuth credentials cleared.");
+    let provider_env_path = provider_env_file_path();
+    if provider_env_path.exists() {
+        fs::remove_file(&provider_env_path)?;
+        println!("Launcher provider env cleared from {}.", provider_env_path.display());
+    }
+    if let Some(path) = setup_wizard::clear_provider_settings()? {
+        println!("Provider settings cleared from {}.", path.display());
+    }
     restart_onboarding_after_logout()?;
     Ok(())
 }
@@ -1277,45 +1287,119 @@ fn format_model_switch_report(previous: &str, next: &str, message_count: usize) 
 }
 
 fn format_providers_report() -> String {
-    let providers = [
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251213",
-        "gpt-4.1",
-        "gpt-4.1-mini",
-        "gpt-5",
-        "gpt-5-mini",
-        "grok-3",
-        "grok-3-mini",
-    ];
     let mut lines = vec![
         "Providers".to_string(),
         "  Switch models with /model <name> or --model <name>".to_string(),
         "  Set provider preference with config `provider` or env `CLAW_PROVIDER`".to_string(),
-        "  Missing API keys are prompted on first use and saved to ~/.claw/launcher-provider.env"
-            .to_string(),
+        "  Custom models can be added through settings.json `model_list`".to_string(),
+        "".to_string(),
+        format!(
+            "  {:<10} {:<32} {:<8} {:<8} {:<9} {:<6} {:<11} {}",
+            "Provider", "Model", "Context", "MaxOut", "Thinking", "Image", "Auth", "Base URL"
+        ),
     ];
     if let Some(preference) = provider_preference_from_env() {
+        lines.insert(
+            3,
+            format!(
+                "  Active preference {} default-model={}",
+                provider_label(preference),
+                default_model_for_provider(preference)
+            ),
+        );
+    }
+
+    for model in builtin_model_definitions() {
+        let auth = if env::var(model.auth_env).is_ok_and(|value| !value.is_empty()) {
+            model.auth_env.to_string()
+        } else {
+            format!("missing:{}", model.auth_env)
+        };
         lines.push(format!(
-            "  Active preference {} default-model={}",
-            provider_label(preference),
-            default_model_for_provider(preference)
+            "  {:<10} {:<32} {:<8} {:<8} {:<9} {:<6} {:<11} {}",
+            provider_label(model.provider),
+            model.model,
+            format_token_count(model.context_window),
+            format_token_count(model.max_output_tokens),
+            yes_no(model.reasoning),
+            yes_no(model.images),
+            auth,
+            model.default_base_url
         ));
     }
 
-    for model in providers {
-        if let Some(metadata) = metadata_for_model(model) {
-            lines.push(format!(
-                "  {:<10} model={model:<28} key={} base={} default={}",
-                provider_label(metadata.provider),
-                metadata.auth_env,
-                metadata.base_url_env,
-                metadata.default_base_url
-            ));
+    if let Ok(cwd) = env::current_dir() {
+        if let Ok(config) = ConfigLoader::default_for(cwd).load() {
+            if !config.model_connections().is_empty() {
+                lines.push("".to_string());
+                lines.push("Configured model_list".to_string());
+                for entry in config.model_connections().models() {
+                    lines.push(format_configured_model_report(entry));
+                }
+            }
         }
     }
 
     lines.join("\n")
+}
+
+fn format_configured_model_report(entry: &ModelConnectionDefinition) -> String {
+    let provider = entry
+        .provider
+        .clone()
+        .or_else(|| parse_model_ref(&entry.model, None).map(|(provider, _)| provider))
+        .unwrap_or_else(|| "custom".to_string());
+    let auth = entry
+        .api_key
+        .as_deref()
+        .map(|value| {
+            if resolve_config_value(value).is_some() {
+                "configured"
+            } else {
+                "missing"
+            }
+        })
+        .unwrap_or("env/default");
+    format!(
+        "  {:<10} {:<32} {:<8} {:<8} {:<9} {:<6} {:<11} {}",
+        provider,
+        format!("{} -> {}", entry.model_name, entry.model),
+        entry
+            .context_window
+            .map(format_token_count)
+            .unwrap_or_else(|| "-".to_string()),
+        entry
+            .max_tokens
+            .map(format_token_count)
+            .unwrap_or_else(|| "-".to_string()),
+        entry.reasoning.map(yes_no).unwrap_or("-"),
+        yes_no(entry.input.iter().any(|value| value == "image")),
+        auth,
+        entry.api_base.as_deref().unwrap_or("-")
+    )
+}
+
+fn format_token_count(count: u32) -> String {
+    if count >= 1_000_000 {
+        let millions = count as f64 / 1_000_000.0;
+        if count % 1_000_000 == 0 {
+            format!("{}M", count / 1_000_000)
+        } else {
+            format!("{millions:.1}M")
+        }
+    } else if count >= 1_000 {
+        if count % 1_000 == 0 {
+            format!("{}K", count / 1_000)
+        } else {
+            format!("{:.1}K", count as f64 / 1_000.0)
+        }
+    } else {
+        count.to_string()
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 fn print_providers_report() {
@@ -1329,6 +1413,185 @@ fn provider_label(kind: ProviderKind) -> &'static str {
         ProviderKind::Xai => "xAI",
         ProviderKind::Gemini => "Gemini",
         ProviderKind::Kimi => "Kimi",
+    }
+}
+
+fn provider_kind_from_name(provider: &str) -> Option<ProviderKind> {
+    parse_provider_preference(provider)
+}
+
+fn provider_api_from_name(api: &str) -> Option<ProviderApi> {
+    match api.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "messages" | "anthropic_messages" => Some(ProviderApi::Messages),
+        "chat_completions" | "openai_completions" => Some(ProviderApi::ChatCompletions),
+        "responses" | "openai_responses" => Some(ProviderApi::Responses),
+        "responses_websocket" | "openai_responses_websocket" => {
+            Some(ProviderApi::ResponsesWebSocket)
+        }
+        _ => None,
+    }
+}
+
+fn resolve_config_value(value: &str) -> Option<String> {
+    if let Some(command) = value.strip_prefix('!') {
+        return resolve_config_command(command);
+    }
+    resolve_config_template(value)
+}
+
+fn resolve_config_command(command: &str) -> Option<String> {
+    let output = if cfg!(windows) {
+        Command::new("cmd").args(["/C", command]).output().ok()?
+    } else {
+        Command::new("sh").args(["-lc", command]).output().ok()?
+    };
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn resolve_config_template(value: &str) -> Option<String> {
+    let mut resolved = String::new();
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] != '$' {
+            resolved.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        let Some(next) = chars.get(index + 1).copied() else {
+            resolved.push('$');
+            index += 1;
+            continue;
+        };
+        if next == '$' || next == '!' {
+            resolved.push(next);
+            index += 2;
+            continue;
+        }
+        if next == '{' {
+            let mut end = index + 2;
+            while end < chars.len() && chars[end] != '}' {
+                end += 1;
+            }
+            if end >= chars.len() {
+                resolved.push('$');
+                index += 1;
+                continue;
+            }
+            let name = chars[index + 2..end].iter().collect::<String>();
+            resolved.push_str(&env::var(name).ok()?);
+            index = end + 1;
+            continue;
+        }
+        let mut end = index + 1;
+        while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_') {
+            end += 1;
+        }
+        if end == index + 1 {
+            resolved.push('$');
+            index += 1;
+            continue;
+        }
+        let name = chars[index + 1..end].iter().collect::<String>();
+        resolved.push_str(&env::var(name).ok()?);
+        index = end;
+    }
+    Some(resolved)
+}
+
+fn resolve_config_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(key, value)| {
+            resolve_config_value(value).map(|resolved| (key.clone(), resolved))
+        })
+        .collect()
+}
+
+fn configured_model_connection(
+    model: &str,
+) -> Option<(String, ProviderSelection, ProviderConnectionOptions)> {
+    let cwd = env::current_dir().ok()?;
+    let config = ConfigLoader::default_for(cwd).load().ok()?;
+    let candidate = config
+        .resolve_model_connection_candidates(model)
+        .into_iter()
+        .next()?;
+    let entry = config.model_connections().models().iter().find(|entry| {
+        entry.model_name == model
+            || entry.model == model
+            || entry.model_name == candidate.source
+            || entry.model == candidate.source
+    });
+    let provider = entry
+        .and_then(|entry| entry.provider.as_deref())
+        .unwrap_or(&candidate.provider);
+    let kind = provider_kind_from_name(provider)?;
+    let default_api = api::definition_for_provider(kind).default_api;
+    let api = entry
+        .and_then(|entry| entry.api.as_deref())
+        .and_then(provider_api_from_name)
+        .unwrap_or(default_api);
+    let provider_metadata = metadata_for_configured_provider_model(provider, &candidate.model);
+    let api_key = entry
+        .and_then(|entry| entry.api_key.as_deref())
+        .and_then(resolve_config_value)
+        .or_else(|| {
+            provider_metadata
+                .as_ref()
+                .and_then(|metadata| env::var(metadata.auth_env).ok())
+                .filter(|value| !value.trim().is_empty())
+        });
+    let base_url = entry.and_then(|entry| entry.api_base.clone()).or_else(|| {
+        provider_metadata.as_ref().map(|metadata| {
+            env::var(metadata.base_url_env)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| metadata.default_base_url.to_string())
+        })
+    });
+    let mut headers = entry
+        .map(|entry| resolve_config_headers(&entry.headers))
+        .unwrap_or_default();
+    if entry.and_then(|entry| entry.auth_header).unwrap_or(false) {
+        if let Some(api_key) = &api_key {
+            headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+        }
+    }
+    let (credential_provider, credential_env_vars) =
+        credential_override_for_metadata(provider_metadata.as_ref());
+    Some((
+        candidate.model,
+        ProviderSelection { kind, api },
+        ProviderConnectionOptions {
+            api_key,
+            base_url,
+            headers,
+            anthropic_auth: None,
+            allow_provider_mismatch: true,
+            credential_provider,
+            credential_env_vars,
+        },
+    ))
+}
+
+fn metadata_for_configured_provider_model(
+    provider: &str,
+    model: &str,
+) -> Option<api::ProviderMetadata> {
+    metadata_for_model(&format!("{provider}/{model}")).or_else(|| metadata_for_model(model))
+}
+
+fn credential_override_for_metadata(
+    metadata: Option<&api::ProviderMetadata>,
+) -> (Option<&'static str>, Option<&'static [&'static str]>) {
+    match metadata.map(|metadata| metadata.auth_env) {
+        Some("DASHSCOPE_API_KEY") => (Some("DashScope"), Some(&["DASHSCOPE_API_KEY"])),
+        _ => (None, None),
     }
 }
 
@@ -1435,6 +1698,18 @@ fn prompt_for_api_key(provider: &str, env_name: &str) -> io::Result<Option<Strin
 }
 
 fn ensure_provider_credentials_for_model(model: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    if model_uses_codex_cli(model) {
+        return Ok(true);
+    }
+
+    if let Some((request_model, selection, options)) = configured_model_connection(model) {
+        if ProviderClient::from_model_with_selection_and_options(&request_model, selection, options)
+            .is_ok()
+        {
+            return Ok(true);
+        }
+    }
+
     if ProviderClient::from_model(model).is_ok() {
         return Ok(true);
     }
@@ -2322,7 +2597,7 @@ struct RuntimeMcpState {
 }
 
 struct BuiltRuntime {
-    runtime: Option<ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>>,
+    runtime: Option<ConversationRuntime<RuntimeApiClient, CliToolExecutor>>,
     plugin_registry: PluginRegistry,
     plugins_active: bool,
     mcp_state: Option<Arc<Mutex<RuntimeMcpState>>>,
@@ -2331,7 +2606,7 @@ struct BuiltRuntime {
 
 impl BuiltRuntime {
     fn new(
-        runtime: ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>,
+        runtime: ConversationRuntime<RuntimeApiClient, CliToolExecutor>,
         plugin_registry: PluginRegistry,
         mcp_state: Option<Arc<Mutex<RuntimeMcpState>>>,
     ) -> Self {
@@ -2376,7 +2651,7 @@ impl BuiltRuntime {
 }
 
 impl Deref for BuiltRuntime {
-    type Target = ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>;
+    type Target = ConversationRuntime<RuntimeApiClient, CliToolExecutor>;
 
     fn deref(&self) -> &Self::Target {
         self.runtime
@@ -6018,17 +6293,18 @@ fn build_runtime_with_plugin_state(
     plugin_registry.initialize()?;
     let policy = permission_policy(permission_mode, &feature_config, &tool_registry)
         .map_err(std::io::Error::other)?;
+    let api_client = runtime_api_client(
+        session_id,
+        model,
+        enable_tools,
+        emit_output,
+        allowed_tools.clone(),
+        tool_registry.clone(),
+        progress_reporter,
+    )?;
     let mut runtime = ConversationRuntime::new_with_features(
         session,
-        AnthropicRuntimeClient::new(
-            session_id,
-            model,
-            enable_tools,
-            emit_output,
-            allowed_tools.clone(),
-            tool_registry.clone(),
-            progress_reporter,
-        )?,
+        api_client,
         CliToolExecutor::new(
             allowed_tools.clone(),
             emit_output,
@@ -6043,6 +6319,67 @@ fn build_runtime_with_plugin_state(
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
     }
     Ok(BuiltRuntime::new(runtime, plugin_registry, mcp_state))
+}
+
+fn runtime_api_client(
+    session_id: &str,
+    model: String,
+    enable_tools: bool,
+    emit_output: bool,
+    allowed_tools: Option<AllowedToolSet>,
+    tool_registry: GlobalToolRegistry,
+    progress_reporter: Option<InternalPromptProgressReporter>,
+) -> Result<RuntimeApiClient, Box<dyn std::error::Error>> {
+    if model_uses_codex_cli(&model) {
+        return Ok(RuntimeApiClient::Codex(CodexCliRuntimeClient::new(
+            codex_cli_model(model),
+            emit_output,
+        )));
+    }
+
+    Ok(RuntimeApiClient::Provider(AnthropicRuntimeClient::new(
+        session_id,
+        model,
+        enable_tools,
+        emit_output,
+        allowed_tools,
+        tool_registry,
+        progress_reporter,
+    )?))
+}
+
+fn model_uses_codex_cli(model: &str) -> bool {
+    let Ok(cwd) = env::current_dir() else {
+        return false;
+    };
+    let Ok(config) = ConfigLoader::default_for(cwd).load() else {
+        return false;
+    };
+    if config.provider() == Some("codex") {
+        return true;
+    }
+    config
+        .resolve_model_connection_candidates(model)
+        .into_iter()
+        .any(|candidate| {
+            candidate.provider.eq_ignore_ascii_case("codex")
+                || candidate.source.eq_ignore_ascii_case("codex")
+        })
+}
+
+fn codex_cli_model(model: String) -> String {
+    let Ok(cwd) = env::current_dir() else {
+        return model;
+    };
+    let Ok(config) = ConfigLoader::default_for(cwd).load() else {
+        return model;
+    };
+    if config.provider() == Some("codex")
+        && matches!(model.as_str(), "gpt-4.1" | "gpt-4.1-mini" | "gpt-4.1-nano")
+    {
+        return "codex".to_string();
+    }
+    model
 }
 
 struct CliHookProgressReporter;
@@ -6127,6 +6464,160 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
     }
 }
 
+enum RuntimeApiClient {
+    Provider(AnthropicRuntimeClient),
+    Codex(CodexCliRuntimeClient),
+}
+
+impl ApiClient for RuntimeApiClient {
+    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        match self {
+            Self::Provider(client) => client.stream(request),
+            Self::Codex(client) => client.stream(request),
+        }
+    }
+}
+
+struct CodexCliRuntimeClient {
+    model: String,
+    emit_output: bool,
+}
+
+impl CodexCliRuntimeClient {
+    fn new(model: String, emit_output: bool) -> Self {
+        Self { model, emit_output }
+    }
+
+    fn output_path() -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        env::temp_dir().join(format!("clawie-codex-output-{}-{now}.txt", std::process::id()))
+    }
+
+    fn build_prompt(request: &ApiRequest) -> String {
+        let mut prompt = String::new();
+        prompt.push_str(
+            "You are answering inside Clawie through Codex CLI. Answer the latest user message. ",
+        );
+        prompt.push_str("Use the conversation context below. Return only the assistant response.\n\n");
+        if !request.system_prompt.is_empty() {
+            prompt.push_str("# System\n");
+            prompt.push_str(&request.system_prompt.join("\n\n"));
+            prompt.push_str("\n\n");
+        }
+        prompt.push_str("# Conversation\n");
+        for message in &request.messages {
+            let role = match message.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            };
+            let text = conversation_message_text(message);
+            if !text.trim().is_empty() {
+                prompt.push_str(role);
+                prompt.push_str(": ");
+                prompt.push_str(text.trim());
+                prompt.push_str("\n\n");
+            }
+        }
+        prompt
+    }
+
+    fn ensure_codex_login() -> Result<(), RuntimeError> {
+        match Command::new("codex").args(["login", "status"]).output() {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => {
+                let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let suffix = if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Details: {detail}")
+                };
+                Err(RuntimeError::new(format!(
+                    "Codex CLI is not logged in. Run `codex login`, then restart Clawie.{suffix}"
+                )))
+            }
+            Err(error) => Err(RuntimeError::new(format!(
+                "Codex CLI was not found. Install Codex CLI, run `codex login`, then choose Codex CLI in Clawie onboarding. {error}"
+            ))),
+        }
+    }
+}
+
+impl ApiClient for CodexCliRuntimeClient {
+    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        Self::ensure_codex_login()?;
+        let prompt = Self::build_prompt(&request);
+        let output_path = Self::output_path();
+        let cwd = env::current_dir().map_err(|error| RuntimeError::new(error.to_string()))?;
+        let mut command = Command::new("codex");
+        command
+            .arg("exec")
+            .arg("--ignore-user-config")
+            .arg("--skip-git-repo-check")
+            .arg("--color")
+            .arg("never")
+            .arg("-C")
+            .arg(&cwd)
+            .arg("--output-last-message")
+            .arg(&output_path);
+        if self.model != "codex" {
+            command.arg("--model").arg(&self.model);
+        }
+        command
+            .arg("-")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = command
+            .spawn()
+            .map_err(|error| RuntimeError::new(format!("failed to start Codex CLI: {error}")))?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| RuntimeError::new("failed to open Codex CLI stdin"))?
+            .write_all(prompt.as_bytes())
+            .map_err(|error| RuntimeError::new(format!("failed to send prompt to Codex CLI: {error}")))?;
+        let output = child
+            .wait_with_output()
+            .map_err(|error| RuntimeError::new(format!("Codex CLI failed: {error}")))?;
+        if !output.status.success() {
+            let _ = fs::remove_file(&output_path);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let detail = if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            };
+            return Err(RuntimeError::new(format!(
+                "Codex CLI request failed. {}",
+                truncate_for_summary(detail, 500)
+            )));
+        }
+        let text = fs::read_to_string(&output_path)
+            .unwrap_or_else(|_| String::from_utf8_lossy(&output.stdout).to_string());
+        let _ = fs::remove_file(&output_path);
+        let text = text.trim().to_string();
+        if self.emit_output && !text.is_empty() {
+            let renderer = TerminalRenderer::new();
+            let mut stdout = io::stdout();
+            let mut header_written = false;
+            write_structured_reply(&mut stdout, &renderer, &text, &mut header_written)
+                .and_then(|()| stdout.flush())
+                .map_err(|error| RuntimeError::new(error.to_string()))?;
+        }
+        Ok(vec![
+            AssistantEvent::TextDelta(text),
+            AssistantEvent::MessageStop,
+        ])
+    }
+}
+
 struct AnthropicRuntimeClient {
     runtime: tokio::runtime::Runtime,
     client: ProviderClient,
@@ -6148,11 +6639,24 @@ impl AnthropicRuntimeClient {
         tool_registry: GlobalToolRegistry,
         progress_reporter: Option<InternalPromptProgressReporter>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (request_model, client) = if let Some((request_model, selection, options)) =
+            configured_model_connection(&model)
+        {
+            (
+                request_model.clone(),
+                ProviderClient::from_model_with_selection_and_options(
+                    &request_model,
+                    selection,
+                    options,
+                )?,
+            )
+        } else {
+            (model.clone(), ProviderClient::from_model(&model)?)
+        };
         Ok(Self {
             runtime: tokio::runtime::Runtime::new()?,
-            client: ProviderClient::from_model(&model)?
-                .with_prompt_cache(PromptCache::new(session_id)),
-            model,
+            client: client.with_prompt_cache(PromptCache::new(session_id)),
+            model: request_model,
             enable_tools,
             emit_output,
             allowed_tools,
@@ -6564,15 +7068,6 @@ fn slash_command_completion_candidates_with_sessions(
         "/model opus",
         "/model sonnet",
         "/model haiku",
-        "/model claude-opus-4-6",
-        "/model claude-sonnet-4-6",
-        "/model claude-haiku-4-5-20251213",
-        "/model gpt-4.1",
-        "/model gpt-4.1-mini",
-        "/model gpt-5",
-        "/model gpt-5-mini",
-        "/model grok-3",
-        "/model grok-3-mini",
         "/permissions ",
         "/permissions read-only",
         "/permissions workspace-write",
@@ -6604,6 +7099,10 @@ fn slash_command_completion_candidates_with_sessions(
         "/skills help",
     ] {
         completions.insert(candidate.to_string());
+    }
+
+    for definition in builtin_model_definitions() {
+        completions.insert(format!("/model {}", definition.model));
     }
 
     if !model.trim().is_empty() {
@@ -7547,10 +8046,10 @@ mod tests {
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
         permission_policy, persist_provider_api_key, print_help_to, push_output_block,
         render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
-        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
-        response_to_events, resume_supported_slash_commands, run_resume_command,
-        slash_command_completion_candidates_with_sessions, status_context, upsert_export_line,
-        validate_no_args, write_mcp_server_fixture,
+        render_repl_help, render_resume_usage, resolve_config_value, resolve_model_alias,
+        resolve_session_reference, response_to_events, resume_supported_slash_commands,
+        run_resume_command, slash_command_completion_candidates_with_sessions, status_context,
+        upsert_export_line, validate_no_args, write_mcp_server_fixture,
     };
     use crate::render::{TerminalTheme, active_terminal_theme, set_active_terminal_theme};
     use api::{MessageResponse, OutputContentBlock, Usage};
@@ -8661,6 +9160,22 @@ mod tests {
         assert!(report.contains("ANTHROPIC_API_KEY"));
         assert!(report.contains("OPENAI_API_KEY"));
         assert!(report.contains("/model <name>"));
+        assert!(report.contains("Context"));
+        assert!(report.contains("Thinking"));
+    }
+
+    #[test]
+    fn config_value_resolver_supports_env_templates_and_escapes() {
+        std::env::set_var("CLAWIE_TEST_TOKEN", "resolved");
+        assert_eq!(
+            resolve_config_value("Bearer $CLAWIE_TEST_TOKEN").as_deref(),
+            Some("Bearer resolved")
+        );
+        assert_eq!(
+            resolve_config_value("${CLAWIE_TEST_TOKEN}:$$:$!").as_deref(),
+            Some("resolved:$:!")
+        );
+        std::env::remove_var("CLAWIE_TEST_TOKEN");
     }
 
     #[test]

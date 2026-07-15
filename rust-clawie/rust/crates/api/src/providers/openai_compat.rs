@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::ApiError;
 use crate::types::{
@@ -96,6 +96,7 @@ pub struct OpenAiCompatClient {
     cached_access_token: std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
     config: OpenAiCompatConfig,
     base_url: String,
+    custom_headers: BTreeMap<String, String>,
     max_retries: u32,
     initial_backoff: Duration,
     max_backoff: Duration,
@@ -114,6 +115,7 @@ impl OpenAiCompatClient {
             cached_access_token: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
             config,
             base_url: read_base_url(config),
+            custom_headers: BTreeMap::new(),
             max_retries: DEFAULT_MAX_RETRIES,
             initial_backoff: DEFAULT_INITIAL_BACKOFF,
             max_backoff: DEFAULT_MAX_BACKOFF,
@@ -128,11 +130,12 @@ impl OpenAiCompatClient {
         if api_key.is_none() && config.provider_name == "Kimi" {
             api_key = read_env_non_empty("KIMI_API_KEY")?;
         }
-        
+
         let mut oauth_refresh_token = None;
         if api_key.is_none() && config.provider_name == "Gemini" {
             if let Some(home) = std::env::var_os("HOME") {
-                let token_path = std::path::PathBuf::from(home).join(".gemini/antigravity-cli/antigravity-oauth-token");
+                let token_path = std::path::PathBuf::from(home)
+                    .join(".gemini/antigravity-cli/antigravity-oauth-token");
                 if let Ok(content) = std::fs::read_to_string(&token_path) {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                         if let Some(token) = parsed.get("token").and_then(|t| t.as_object()) {
@@ -145,14 +148,14 @@ impl OpenAiCompatClient {
                 }
             }
         }
-        
+
         let Some(api_key) = api_key else {
             return Err(ApiError::missing_credentials(
                 config.provider_name,
                 config.credential_env_vars(),
             ));
         };
-        
+
         let mut client = Self::new(api_key, config);
         client.oauth_refresh_token = oauth_refresh_token;
         Ok(client)
@@ -161,6 +164,12 @@ impl OpenAiCompatClient {
     #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_headers(mut self, headers: BTreeMap<String, String>) -> Self {
+        self.custom_headers = headers;
         self
     }
 
@@ -258,23 +267,27 @@ impl OpenAiCompatClient {
                 let oauth_url = "https://oauth2.googleapis.com/token";
                 let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
                 let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
-                
+
                 let params = [
                     ("client_id", client_id.as_str()),
                     ("client_secret", client_secret.as_str()),
                     ("grant_type", "refresh_token"),
                     ("refresh_token", refresh_token.as_str()),
                 ];
-                
-                let res = self.http.post(oauth_url)
+
+                let res = self
+                    .http
+                    .post(oauth_url)
                     .form(&params)
                     .send()
                     .await
                     .map_err(ApiError::from)?;
-                    
+
                 if res.status().is_success() {
                     if let Ok(json) = res.json::<serde_json::Value>().await {
-                        if let Some(access_token) = json.get("access_token").and_then(|t| t.as_str()) {
+                        if let Some(access_token) =
+                            json.get("access_token").and_then(|t| t.as_str())
+                        {
                             actual_api_key = access_token.to_string();
                             *cached = Some(actual_api_key.clone());
                         }
@@ -283,14 +296,16 @@ impl OpenAiCompatClient {
             }
         }
 
-        self.http
+        let mut request_builder = self
+            .http
             .post(&request_url)
             .header("content-type", "application/json")
             .bearer_auth(&actual_api_key)
-            .json(&build_chat_completion_request(request, self.config()))
-            .send()
-            .await
-            .map_err(ApiError::from)
+            .json(&build_chat_completion_request(request, self.config()));
+        for (header_name, header_value) in &self.custom_headers {
+            request_builder = request_builder.header(header_name, header_value);
+        }
+        request_builder.send().await.map_err(ApiError::from)
     }
 
     fn backoff_for_attempt(&self, attempt: u32) -> Result<Duration, ApiError> {
@@ -998,16 +1013,17 @@ pub fn has_api_key(key: &str) -> bool {
     {
         return true;
     }
-    
+
     if key == "GEMINI_API_KEY" || key == "GOOGLE_API_KEY" {
         if let Some(home) = std::env::var_os("HOME") {
-            let token_path = std::path::PathBuf::from(home).join(".gemini/antigravity-cli/antigravity-oauth-token");
+            let token_path = std::path::PathBuf::from(home)
+                .join(".gemini/antigravity-cli/antigravity-oauth-token");
             if token_path.exists() {
                 return true;
             }
         }
     }
-    
+
     false
 }
 
@@ -1075,19 +1091,16 @@ trait StringExt {
 
 impl StringExt for String {
     fn if_empty_then(self, fallback: String) -> String {
-        if self.is_empty() {
-            fallback
-        } else {
-            self
-        }
+        if self.is_empty() { fallback } else { self }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_chat_completion_request, chat_completions_endpoint, normalize_finish_reason,
-        openai_tool_choice, parse_tool_arguments, OpenAiCompatClient, OpenAiCompatConfig,
+        OpenAiCompatClient, OpenAiCompatConfig, build_chat_completion_request,
+        chat_completions_endpoint, normalize_finish_reason, openai_tool_choice,
+        parse_tool_arguments,
     };
     use crate::error::ApiError;
     use crate::types::{

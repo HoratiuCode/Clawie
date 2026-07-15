@@ -52,6 +52,12 @@ const PROVIDERS: &[ProviderOption] = &[
     },
     ProviderOption {
         number: "6",
+        label: "Codex CLI",
+        provider: "codex",
+        requires_base_url: false,
+    },
+    ProviderOption {
+        number: "7",
         label: "Custom OpenAI-compatible",
         provider: "openai",
         requires_base_url: true,
@@ -73,6 +79,7 @@ const PROVIDER_MODELS: &[(&str, &[&str])] = &[
         ],
     ),
     ("dashscope", &["qwen-plus", "qwen-max", "kimi"]),
+    ("codex", &["codex"]),
 ];
 
 const API_KEY_ENV_VARS: &[(&str, &str)] = &[
@@ -103,15 +110,22 @@ pub fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     println!("  Clawie Setup Wizard");
-    println!("  Configure provider, API key, base URL, and model.");
+    println!("  Configure provider, credentials, and model.");
     println!("  Press Enter to keep the current/default value.");
     println!();
 
     let current_provider = current.provider();
     let selection = prompt_provider(current_provider)?;
     let model = prompt_model(&selection.provider, current_provider, current.model())?;
-    let api_key = prompt_secret(&selection.provider)?;
-    let base_url = prompt_base_url(&selection.provider, selection.requires_base_url)?;
+    let (api_key, base_url) = if selection.provider == "codex" {
+        print_codex_login_hint();
+        (None, None)
+    } else {
+        (
+            prompt_secret(&selection.provider)?,
+            prompt_base_url(&selection.provider, selection.requires_base_url)?,
+        )
+    };
     let settings_path = save_settings(
         &selection.provider,
         model.as_deref(),
@@ -136,6 +150,44 @@ pub fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!();
     Ok(())
+}
+
+pub fn clear_provider_settings() -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    let settings_path = default_config_home().join("settings.json");
+    if !settings_path.exists() {
+        return Ok(None);
+    }
+
+    let mut root = read_settings_object(&settings_path)?;
+    for key in [
+        "provider",
+        "preferredProvider",
+        "model",
+        "model_list",
+        "modelList",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "XAI_API_KEY",
+        "XAI_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "GEMINI_API_KEY",
+        "GEMINI_BASE_URL",
+        "GOOGLE_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_BASE_URL",
+        "CODEX_CLI",
+        "MOONSHOT_API_KEY",
+        "MOONSHOT_BASE_URL",
+        "KIMI_API_KEY",
+    ] {
+        root.remove(key);
+    }
+    fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&Value::Object(root))?,
+    )?;
+    Ok(Some(settings_path))
 }
 
 fn prompt_provider(current: Option<&str>) -> Result<ProviderSelection, Box<dyn std::error::Error>> {
@@ -224,6 +276,27 @@ fn prompt_secret(provider: &str) -> Result<Option<String>, Box<dyn std::error::E
     Ok((!input.trim().is_empty()).then(|| input.trim().to_string()))
 }
 
+fn print_codex_login_hint() {
+    println!();
+    println!("  Codex CLI uses your existing Codex login instead of an API key.");
+    match std::process::Command::new("codex")
+        .args(["login", "status"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            println!("  Codex login       detected");
+        }
+        Ok(_) => {
+            println!("  Codex login       not detected");
+            println!("  Run `codex login` first to use ChatGPT/Codex credits.");
+        }
+        Err(_) => {
+            println!("  Codex CLI         not found in PATH");
+            println!("  Install Codex CLI and run `codex login` first.");
+        }
+    }
+}
+
 fn prompt_base_url(
     provider: &str,
     required: bool,
@@ -289,12 +362,18 @@ fn upsert_model_list_entry(
 ) {
     let model_ref = if model.contains('/') {
         model.to_string()
+    } else if provider == "codex" {
+        model.to_string()
     } else {
         format!("{provider}/{model}")
     };
     let mut entry = Map::new();
     entry.insert("model_name".to_string(), Value::String(model.to_string()));
     entry.insert("model".to_string(), Value::String(model_ref));
+    entry.insert("provider".to_string(), Value::String(provider.to_string()));
+    if provider == "codex" {
+        entry.insert("connect_mode".to_string(), Value::String("cli".to_string()));
+    }
     if let Some(base_url) = base_url {
         entry.insert("api_base".to_string(), Value::String(base_url.to_string()));
     }

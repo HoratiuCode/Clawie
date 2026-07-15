@@ -78,11 +78,22 @@ pub struct RuntimeModelConnectionConfig {
 pub struct ModelConnectionDefinition {
     pub model_name: String,
     pub model: String,
+    pub provider: Option<String>,
+    pub api: Option<String>,
     pub api_base: Option<String>,
+    pub api_key: Option<String>,
+    pub headers: BTreeMap<String, String>,
+    pub auth_header: Option<bool>,
     pub fallbacks: Vec<String>,
     pub auth_method: Option<String>,
     pub connect_mode: Option<String>,
     pub workspace: Option<String>,
+    pub context_window: Option<u32>,
+    pub max_tokens: Option<u32>,
+    pub input: Vec<String>,
+    pub reasoning: Option<bool>,
+    pub cost: BTreeMap<String, String>,
+    pub compat: BTreeMap<String, String>,
     pub rpm: Option<u32>,
     pub max_tokens_field: Option<String>,
     pub request_timeout: Option<u32>,
@@ -976,14 +987,31 @@ fn parse_optional_model_connections(
         models.push(ModelConnectionDefinition {
             model_name,
             model,
+            provider: optional_string(object, "provider", &context)?.map(str::to_string),
+            api: optional_string(object, "api", &context)?.map(str::to_string),
             api_base: optional_string_any(object, &["apiBase", "api_base"], &context)?
                 .map(str::to_string),
+            api_key: optional_string_any(object, &["apiKey", "api_key"], &context)?
+                .map(str::to_string),
+            headers: optional_string_map(object, "headers", &context)?.unwrap_or_default(),
+            auth_header: optional_bool_any(object, &["authHeader", "auth_header"], &context)?,
             fallbacks: optional_string_array(object, "fallbacks", &context)?.unwrap_or_default(),
             auth_method: optional_string_any(object, &["authMethod", "auth_method"], &context)?
                 .map(str::to_string),
             connect_mode: optional_string_any(object, &["connectMode", "connect_mode"], &context)?
                 .map(str::to_string),
             workspace: optional_string(object, "workspace", &context)?.map(str::to_string),
+            context_window: optional_u32_any(
+                object,
+                &["contextWindow", "context_window"],
+                &context,
+            )?,
+            max_tokens: optional_u32_any(object, &["maxTokens", "max_tokens"], &context)?,
+            input: optional_string_array(object, "input", &context)?.unwrap_or_default(),
+            reasoning: optional_bool(object, "reasoning", &context)?,
+            cost: optional_string_map_any(object, &["cost", "costs"], &context)?
+                .unwrap_or_default(),
+            compat: optional_string_map(object, "compat", &context)?.unwrap_or_default(),
             rpm: optional_u32(object, "rpm", &context)?,
             max_tokens_field: optional_string_any(
                 object,
@@ -1022,9 +1050,10 @@ fn parse_optional_provider(root: &JsonValue) -> Result<Option<String>, ConfigErr
     match value.trim().to_ascii_lowercase().as_str() {
         "anthropic" | "claude" => Ok(Some("anthropic".to_string())),
         "xai" | "grok" => Ok(Some("xai".to_string())),
-        "openai" | "gpt" => Ok(Some("openai".to_string())),
+        "openai" | "gpt" | "dashscope" => Ok(Some("openai".to_string())),
         "gemini" | "google" => Ok(Some("gemini".to_string())),
         "kimi" | "moonshot" => Ok(Some("kimi".to_string())),
+        "codex" | "codex-cli" | "codex_cli" => Ok(Some("codex".to_string())),
         other => Err(ConfigError::Parse(format!(
             "merged settings.provider: unsupported provider {other}"
         ))),
@@ -1417,6 +1446,19 @@ fn optional_string_any<'a>(
     Ok(None)
 }
 
+fn optional_bool_any(
+    object: &BTreeMap<String, JsonValue>,
+    keys: &[&str],
+    context: &str,
+) -> Result<Option<bool>, ConfigError> {
+    for key in keys {
+        if object.contains_key(*key) {
+            return optional_bool(object, key, context);
+        }
+    }
+    Ok(None)
+}
+
 fn optional_bool(
     object: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -1471,6 +1513,19 @@ fn optional_u32(
         }
         None => Ok(None),
     }
+}
+
+fn optional_u32_any(
+    object: &BTreeMap<String, JsonValue>,
+    keys: &[&str],
+    context: &str,
+) -> Result<Option<u32>, ConfigError> {
+    for key in keys {
+        if object.contains_key(*key) {
+            return optional_u32(object, key, context);
+        }
+    }
+    Ok(None)
 }
 
 fn optional_u64(
@@ -1568,6 +1623,19 @@ fn optional_string_map(
         }
         None => Ok(None),
     }
+}
+
+fn optional_string_map_any(
+    object: &BTreeMap<String, JsonValue>,
+    keys: &[&str],
+    context: &str,
+) -> Result<Option<BTreeMap<String, String>>, ConfigError> {
+    for key in keys {
+        if object.contains_key(*key) {
+            return optional_string_map(object, key, context);
+        }
+    }
+    Ok(None)
 }
 
 fn deep_merge_objects(
@@ -2131,6 +2199,51 @@ mod tests {
     }
 
     #[test]
+    fn dashscope_provider_preference_uses_openai_compatible_runtime() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.local.json"),
+            r#"{"provider":"dashscope","model":"qwen-plus"}"#,
+        )
+        .expect("write local settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("dashscope should load");
+
+        assert_eq!(loaded.provider(), Some("openai"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn codex_provider_preference_uses_cli_runtime() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.local.json"),
+            r#"{"provider":"codex","model":"codex"}"#,
+        )
+        .expect("write local settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("codex should load");
+
+        assert_eq!(loaded.provider(), Some("codex"));
+        assert_eq!(loaded.model(), Some("codex"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn parses_jameclaw_style_model_list_and_resolves_fallbacks() {
         let root = temp_dir();
         let cwd = root.join("project");
@@ -2146,11 +2259,22 @@ mod tests {
                 {
                   "model_name": "primary",
                   "model": "openai/gpt-4.1",
+                  "provider": "openai",
+                  "api": "openai-responses",
                   "api_base": "https://api.openai.com/v1",
+                  "api_key": "$OPENAI_API_KEY",
+                  "headers": {"X-Test": "$CUSTOM_HEADER"},
+                  "auth_header": true,
                   "fallbacks": ["fast", "anthropic/claude-sonnet-4-6"],
                   "auth_method": "token",
                   "connect_mode": "stdio",
                   "workspace": "/tmp/workspace",
+                  "context_window": 1000000,
+                  "max_tokens": 32768,
+                  "input": ["text", "image"],
+                  "reasoning": false,
+                  "cost": {"input": "2.00", "output": "8.00"},
+                  "compat": {"max_tokens_field": "max_completion_tokens"},
                   "rpm": 120,
                   "max_tokens_field": "max_completion_tokens",
                   "request_timeout": 45,
@@ -2183,9 +2307,26 @@ mod tests {
             primary.api_base.as_deref(),
             Some("https://api.openai.com/v1")
         );
+        assert_eq!(primary.provider.as_deref(), Some("openai"));
+        assert_eq!(primary.api.as_deref(), Some("openai-responses"));
+        assert_eq!(primary.api_key.as_deref(), Some("$OPENAI_API_KEY"));
+        assert_eq!(
+            primary.headers.get("X-Test").map(String::as_str),
+            Some("$CUSTOM_HEADER")
+        );
+        assert_eq!(primary.auth_header, Some(true));
         assert_eq!(primary.auth_method.as_deref(), Some("token"));
         assert_eq!(primary.connect_mode.as_deref(), Some("stdio"));
         assert_eq!(primary.workspace.as_deref(), Some("/tmp/workspace"));
+        assert_eq!(primary.context_window, Some(1_000_000));
+        assert_eq!(primary.max_tokens, Some(32_768));
+        assert_eq!(primary.input, vec!["text".to_string(), "image".to_string()]);
+        assert_eq!(primary.reasoning, Some(false));
+        assert_eq!(primary.cost.get("input").map(String::as_str), Some("2.00"));
+        assert_eq!(
+            primary.compat.get("max_tokens_field").map(String::as_str),
+            Some("max_completion_tokens")
+        );
         assert_eq!(primary.rpm, Some(120));
         assert_eq!(
             primary.max_tokens_field.as_deref(),
