@@ -60,10 +60,41 @@ pub struct RuntimeFeatureConfig {
     oauth: Option<OAuthConfig>,
     agents: RuntimeAgentConfig,
     model: Option<String>,
+    model_connections: RuntimeModelConnectionConfig,
     provider: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
     permission_rules: RuntimePermissionRuleConfig,
     sandbox: SandboxConfig,
+}
+
+/// Model-centric connection entries inspired by Jameclaw's `model_list`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeModelConnectionConfig {
+    models: Vec<ModelConnectionDefinition>,
+}
+
+/// One configured model connection.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ModelConnectionDefinition {
+    pub model_name: String,
+    pub model: String,
+    pub api_base: Option<String>,
+    pub fallbacks: Vec<String>,
+    pub auth_method: Option<String>,
+    pub connect_mode: Option<String>,
+    pub workspace: Option<String>,
+    pub rpm: Option<u32>,
+    pub max_tokens_field: Option<String>,
+    pub request_timeout: Option<u32>,
+    pub thinking_level: Option<String>,
+}
+
+/// Provider/model pair selected from a model alias or fallback chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelConnectionCandidate {
+    pub provider: String,
+    pub model: String,
+    pub source: String,
 }
 
 /// Hook command lists grouped by lifecycle stage.
@@ -306,6 +337,7 @@ impl ConfigLoader {
             oauth: parse_optional_oauth_config(&merged_value, "merged settings.oauth")?,
             agents: parse_optional_agent_config(&merged_value)?,
             model: parse_optional_model(&merged_value),
+            model_connections: parse_optional_model_connections(&merged_value)?,
             provider: parse_optional_provider(&merged_value)?,
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             permission_rules: parse_optional_permission_rules(&merged_value)?,
@@ -386,6 +418,21 @@ impl RuntimeConfig {
     }
 
     #[must_use]
+    pub fn model_connections(&self) -> &RuntimeModelConnectionConfig {
+        &self.feature_config.model_connections
+    }
+
+    #[must_use]
+    pub fn resolve_model_connection_candidates(
+        &self,
+        model_name: &str,
+    ) -> Vec<ModelConnectionCandidate> {
+        self.feature_config
+            .model_connections
+            .resolve_candidates(model_name, self.provider())
+    }
+
+    #[must_use]
     pub fn provider(&self) -> Option<&str> {
         self.feature_config.provider.as_deref()
     }
@@ -450,6 +497,11 @@ impl RuntimeFeatureConfig {
     }
 
     #[must_use]
+    pub fn model_connections(&self) -> &RuntimeModelConnectionConfig {
+        &self.model_connections
+    }
+
+    #[must_use]
     pub fn provider(&self) -> Option<&str> {
         self.provider.as_deref()
     }
@@ -468,6 +520,134 @@ impl RuntimeFeatureConfig {
     pub fn sandbox(&self) -> &SandboxConfig {
         &self.sandbox
     }
+}
+
+impl RuntimeModelConnectionConfig {
+    #[must_use]
+    pub fn models(&self) -> &[ModelConnectionDefinition] {
+        &self.models
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.models.is_empty()
+    }
+
+    #[must_use]
+    pub fn find(&self, model_name: &str) -> Vec<&ModelConnectionDefinition> {
+        self.models
+            .iter()
+            .filter(|model| model.model_name == model_name)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn default_model_name(&self) -> Option<&str> {
+        self.models.first().map(|model| model.model_name.as_str())
+    }
+
+    #[must_use]
+    pub fn resolve_candidates(
+        &self,
+        model_name: &str,
+        default_provider: Option<&str>,
+    ) -> Vec<ModelConnectionCandidate> {
+        let matches = self.find(model_name);
+        if matches.is_empty() {
+            return parse_model_ref(model_name, default_provider)
+                .map(|(provider, model)| {
+                    vec![ModelConnectionCandidate {
+                        provider,
+                        model,
+                        source: model_name.to_string(),
+                    }]
+                })
+                .unwrap_or_default();
+        }
+
+        let mut candidates = Vec::new();
+        let mut seen = BTreeMap::new();
+        for connection in matches {
+            push_model_candidate(
+                &mut candidates,
+                &mut seen,
+                &connection.model,
+                default_provider,
+                &connection.model_name,
+            );
+            for fallback in &connection.fallbacks {
+                let resolved = self
+                    .find(fallback)
+                    .first()
+                    .map_or(fallback.as_str(), |model| model.model.as_str());
+                push_model_candidate(
+                    &mut candidates,
+                    &mut seen,
+                    resolved,
+                    default_provider,
+                    fallback,
+                );
+            }
+        }
+        candidates
+    }
+}
+
+fn push_model_candidate(
+    candidates: &mut Vec<ModelConnectionCandidate>,
+    seen: &mut BTreeMap<String, bool>,
+    raw: &str,
+    default_provider: Option<&str>,
+    source: &str,
+) {
+    let Some((provider, model)) = parse_model_ref(raw, default_provider) else {
+        return;
+    };
+    let key = format!("{provider}/{}", model.to_ascii_lowercase());
+    if seen.insert(key, true).is_some() {
+        return;
+    }
+    candidates.push(ModelConnectionCandidate {
+        provider,
+        model,
+        source: source.to_string(),
+    });
+}
+
+#[must_use]
+pub fn parse_model_ref(raw: &str, default_provider: Option<&str>) -> Option<(String, String)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some((provider, model)) = raw.split_once('/') {
+        let provider = normalize_model_provider(provider)?;
+        let model = model.trim();
+        if model.is_empty() {
+            return None;
+        }
+        return Some((provider, model.to_string()));
+    }
+    Some((
+        normalize_model_provider(default_provider.unwrap_or("openai"))?,
+        raw.to_string(),
+    ))
+}
+
+fn normalize_model_provider(provider: &str) -> Option<String> {
+    let provider = provider.trim().to_ascii_lowercase();
+    let normalized = match provider.as_str() {
+        "" => return None,
+        "claude" => "anthropic",
+        "gpt" => "openai",
+        "google" => "gemini",
+        "grok" => "xai",
+        "moonshot" => "kimi",
+        "dashscope-us" => "qwen-us",
+        "dashscope-intl" | "qwen-international" => "qwen-intl",
+        value => value,
+    };
+    Some(normalized.to_string())
 }
 
 impl RuntimePluginConfig {
@@ -757,6 +937,74 @@ fn parse_optional_model(root: &JsonValue) -> Option<String> {
         .and_then(|object| object.get("model"))
         .and_then(JsonValue::as_str)
         .map(ToOwned::to_owned)
+}
+
+fn parse_optional_model_connections(
+    root: &JsonValue,
+) -> Result<RuntimeModelConnectionConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeModelConnectionConfig::default());
+    };
+    let Some(value) = object.get("modelList").or_else(|| object.get("model_list")) else {
+        return Ok(RuntimeModelConnectionConfig::default());
+    };
+    let Some(array) = value.as_array() else {
+        return Err(ConfigError::Parse(
+            "merged settings.modelList: expected array".to_string(),
+        ));
+    };
+
+    let mut models = Vec::with_capacity(array.len());
+    for (index, item) in array.iter().enumerate() {
+        let context = format!("merged settings.modelList[{index}]");
+        let object = expect_object(item, &context)?;
+        let model_name = optional_string_any(object, &["modelName", "model_name"], &context)?
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let model = expect_string(object, "model", &context)?.trim().to_string();
+        if model_name.is_empty() {
+            return Err(ConfigError::Parse(format!(
+                "{context}: missing string field modelName"
+            )));
+        }
+        if model.is_empty() {
+            return Err(ConfigError::Parse(format!(
+                "{context}: field model cannot be empty"
+            )));
+        }
+        models.push(ModelConnectionDefinition {
+            model_name,
+            model,
+            api_base: optional_string_any(object, &["apiBase", "api_base"], &context)?
+                .map(str::to_string),
+            fallbacks: optional_string_array(object, "fallbacks", &context)?.unwrap_or_default(),
+            auth_method: optional_string_any(object, &["authMethod", "auth_method"], &context)?
+                .map(str::to_string),
+            connect_mode: optional_string_any(object, &["connectMode", "connect_mode"], &context)?
+                .map(str::to_string),
+            workspace: optional_string(object, "workspace", &context)?.map(str::to_string),
+            rpm: optional_u32(object, "rpm", &context)?,
+            max_tokens_field: optional_string_any(
+                object,
+                &["maxTokensField", "max_tokens_field"],
+                &context,
+            )?
+            .map(str::to_string),
+            request_timeout: optional_u32(object, "requestTimeout", &context)?.or(optional_u32(
+                object,
+                "request_timeout",
+                &context,
+            )?),
+            thinking_level: optional_string_any(
+                object,
+                &["thinkingLevel", "thinking_level"],
+                &context,
+            )?
+            .map(str::to_string),
+        });
+    }
+    Ok(RuntimeModelConnectionConfig { models })
 }
 
 fn parse_optional_provider(root: &JsonValue) -> Result<Option<String>, ConfigError> {
@@ -1156,6 +1404,19 @@ fn optional_string<'a>(
     }
 }
 
+fn optional_string_any<'a>(
+    object: &'a BTreeMap<String, JsonValue>,
+    keys: &[&str],
+    context: &str,
+) -> Result<Option<&'a str>, ConfigError> {
+    for key in keys {
+        if object.contains_key(*key) {
+            return optional_string(object, key, context);
+        }
+    }
+    Ok(None)
+}
+
 fn optional_bool(
     object: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -1340,9 +1601,9 @@ fn push_unique(target: &mut Vec<String>, value: String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        deep_merge_objects, parse_permission_mode_label, ConfigLoader, ConfigSource,
-        McpServerConfig, McpTransport, ResolvedPermissionMode, RuntimeHookConfig,
-        RuntimePluginConfig, CLAW_SETTINGS_SCHEMA_NAME,
+        CLAW_SETTINGS_SCHEMA_NAME, ConfigLoader, ConfigSource, McpServerConfig, McpTransport,
+        ModelConnectionCandidate, ResolvedPermissionMode, RuntimeHookConfig, RuntimePluginConfig,
+        deep_merge_objects, parse_permission_mode_label,
     };
     use crate::agent::AgentMode;
     use crate::json::JsonValue;
@@ -1373,9 +1634,11 @@ mod tests {
         let error = ConfigLoader::new(&cwd, &home)
             .load()
             .expect_err("config should fail");
-        assert!(error
-            .to_string()
-            .contains("top-level settings value must be a JSON object"));
+        assert!(
+            error
+                .to_string()
+                .contains("top-level settings value must be a JSON object")
+        );
 
         if root.exists() {
             fs::remove_dir_all(root).expect("cleanup temp dir");
@@ -1441,16 +1704,20 @@ mod tests {
                 .len(),
             4
         );
-        assert!(loaded
-            .get("hooks")
-            .and_then(JsonValue::as_object)
-            .expect("hooks object")
-            .contains_key("PreToolUse"));
-        assert!(loaded
-            .get("hooks")
-            .and_then(JsonValue::as_object)
-            .expect("hooks object")
-            .contains_key("PostToolUse"));
+        assert!(
+            loaded
+                .get("hooks")
+                .and_then(JsonValue::as_object)
+                .expect("hooks object")
+                .contains_key("PreToolUse")
+        );
+        assert!(
+            loaded
+                .get("hooks")
+                .and_then(JsonValue::as_object)
+                .expect("hooks object")
+                .contains_key("PostToolUse")
+        );
         assert_eq!(loaded.hooks().pre_tool_use(), &["base".to_string()]);
         assert_eq!(loaded.hooks().post_tool_use(), &["project".to_string()]);
         assert_eq!(
@@ -1804,9 +2071,11 @@ mod tests {
             .expect_err("config should fail");
 
         // then
-        assert!(error
-            .to_string()
-            .contains("mcpServers.broken: missing string field url"));
+        assert!(
+            error
+                .to_string()
+                .contains("mcpServers.broken: missing string field url")
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -1852,9 +2121,151 @@ mod tests {
             .load()
             .expect_err("config should reject unknown provider");
 
-        assert!(error
-            .to_string()
-            .contains("merged settings.provider: unsupported provider unknown"));
+        assert!(
+            error
+                .to_string()
+                .contains("merged settings.provider: unsupported provider unknown")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_jameclaw_style_model_list_and_resolves_fallbacks() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "provider": "openai",
+              "model": "primary",
+              "model_list": [
+                {
+                  "model_name": "primary",
+                  "model": "openai/gpt-4.1",
+                  "api_base": "https://api.openai.com/v1",
+                  "fallbacks": ["fast", "anthropic/claude-sonnet-4-6"],
+                  "auth_method": "token",
+                  "connect_mode": "stdio",
+                  "workspace": "/tmp/workspace",
+                  "rpm": 120,
+                  "max_tokens_field": "max_completion_tokens",
+                  "request_timeout": 45,
+                  "thinking_level": "medium"
+                },
+                {
+                  "model_name": "fast",
+                  "model": "gemini/gemini-1.5-flash"
+                },
+                {
+                  "model_name": "primary",
+                  "model": "openai/gpt-4.1-mini"
+                }
+              ]
+            }"#,
+        )
+        .expect("write model list settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(loaded.model_connections().models().len(), 3);
+        assert_eq!(
+            loaded.model_connections().default_model_name(),
+            Some("primary")
+        );
+        let primary = &loaded.model_connections().models()[0];
+        assert_eq!(
+            primary.api_base.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(primary.auth_method.as_deref(), Some("token"));
+        assert_eq!(primary.connect_mode.as_deref(), Some("stdio"));
+        assert_eq!(primary.workspace.as_deref(), Some("/tmp/workspace"));
+        assert_eq!(primary.rpm, Some(120));
+        assert_eq!(
+            primary.max_tokens_field.as_deref(),
+            Some("max_completion_tokens")
+        );
+        assert_eq!(primary.request_timeout, Some(45));
+        assert_eq!(primary.thinking_level.as_deref(), Some("medium"));
+
+        let candidates = loaded.resolve_model_connection_candidates("primary");
+        assert_eq!(
+            candidates,
+            vec![
+                ModelConnectionCandidate {
+                    provider: "openai".to_string(),
+                    model: "gpt-4.1".to_string(),
+                    source: "primary".to_string(),
+                },
+                ModelConnectionCandidate {
+                    provider: "gemini".to_string(),
+                    model: "gemini-1.5-flash".to_string(),
+                    source: "fast".to_string(),
+                },
+                ModelConnectionCandidate {
+                    provider: "anthropic".to_string(),
+                    model: "claude-sonnet-4-6".to_string(),
+                    source: "anthropic/claude-sonnet-4-6".to_string(),
+                },
+                ModelConnectionCandidate {
+                    provider: "openai".to_string(),
+                    model: "gpt-4.1-mini".to_string(),
+                    source: "primary".to_string(),
+                },
+            ]
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_camel_case_model_list_and_provider_aliases() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "preferredProvider": "claude",
+              "modelList": [
+                {
+                  "modelName": "code-cli",
+                  "model": "gpt/gpt-5-codex",
+                  "apiBase": "http://localhost:11434/v1",
+                  "connectMode": "stdio",
+                  "requestTimeout": 90,
+                  "thinkingLevel": "high"
+                }
+              ]
+            }"#,
+        )
+        .expect("write model list settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        let model = &loaded.model_connections().models()[0];
+        assert_eq!(model.model_name, "code-cli");
+        assert_eq!(model.api_base.as_deref(), Some("http://localhost:11434/v1"));
+        assert_eq!(model.connect_mode.as_deref(), Some("stdio"));
+        assert_eq!(model.request_timeout, Some(90));
+        assert_eq!(model.thinking_level.as_deref(), Some("high"));
+        assert_eq!(
+            loaded.resolve_model_connection_candidates("code-cli"),
+            vec![ModelConnectionCandidate {
+                provider: "openai".to_string(),
+                model: "gpt-5-codex".to_string(),
+                source: "code-cli".to_string(),
+            }]
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

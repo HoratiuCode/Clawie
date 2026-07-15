@@ -21,7 +21,7 @@ def build_bootstrap_graph() -> BootstrapGraph:
             'CLI parser and pre-action trust gate',
             'setup() + commands/agents parallel load',
             'deferred init after trust',
-            'mode routing: local / remote / ssh / teleport / direct-connect / deep-link',
+            'mode routing: local / remote / ssh / teleport / direct-connect / deep-link / cli-bridge',
             'query engine submit loop',
         )
     )

@@ -345,7 +345,7 @@ mod tests {
     use crate::providers::{detect_provider_kind, resolve_model_alias, ProviderApi, ProviderKind};
     use crate::ApiError;
 
-    use super::{anthropic, openai, xai, ProviderClient};
+    use super::{anthropic, kimi, openai, xai, ProviderClient};
 
     #[test]
     fn resolves_existing_and_grok_aliases() {
@@ -373,6 +373,9 @@ mod tests {
 
         let anthropic_request = anthropic().messages("claude-sonnet-4-6");
         assert_eq!(anthropic_request.selection().api, ProviderApi::Messages);
+
+        let kimi_request = kimi().responses("moonshot-v1-auto");
+        assert_eq!(kimi_request.selection().api, ProviderApi::Responses);
     }
 
     #[test]

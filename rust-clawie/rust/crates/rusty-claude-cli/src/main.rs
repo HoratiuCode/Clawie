@@ -27,36 +27,36 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    default_model_for_provider, metadata_for_model, parse_provider_preference,
-    provider_preference_from_env, resolve_startup_auth_source, AnthropicClient, AuthSource,
-    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock, PromptCache, ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent,
-    ToolChoice, ToolDefinition, ToolResultContentBlock, PROVIDER_PREFERENCE_ENV,
+    AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
+    MessageRequest, MessageResponse, OutputContentBlock, PROVIDER_PREFERENCE_ENV, PromptCache,
+    ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
+    ToolResultContentBlock, default_model_for_provider, metadata_for_model,
+    parse_provider_preference, provider_preference_from_env, resolve_startup_auth_source,
 };
 
 use commands::{
-    handle_agents_slash_command, handle_mcp_slash_command, handle_plugins_slash_command,
-    handle_skills_slash_command, render_slash_command_help, resume_supported_slash_commands,
-    slash_command_specs, validate_slash_command_input, SlashCommand,
+    SlashCommand, handle_agents_slash_command, handle_mcp_slash_command,
+    handle_plugins_slash_command, handle_skills_slash_command, render_slash_command_help,
+    resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
 };
-use compat_harness::{extract_manifest, UpstreamPaths};
+use compat_harness::{UpstreamPaths, extract_manifest};
 use crossterm::style::Stylize;
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{
-    active_terminal_theme, set_active_terminal_theme, Spinner, TerminalRenderer, TerminalTheme,
+    Spinner, TerminalRenderer, TerminalTheme, active_terminal_theme, set_active_terminal_theme,
 };
 use runtime::{
-    active_lean_mode, build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
-    generate_pkce_pair, generate_state, git_commit, git_undo_last_commit, lean_command_prompt,
-    lean_gain_report, lean_help_report, load_system_prompt, parse_oauth_callback_request_target,
-    persist_lean_mode, pricing_for_model, read_file, resolve_sandbox_status,
-    save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
-    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, GitCommitInput,
-    GitUndoInput, LeanMode, McpServerManager, McpTool, MessageRole, ModelPricing,
-    OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
-    PermissionPolicy, ProjectContext, PromptCacheEvent, RepoMapOptions, ResolvedPermissionMode,
-    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
+    ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
+    ContentBlock, ConversationMessage, ConversationRuntime, GitCommitInput, GitUndoInput, LeanMode,
+    McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
+    RepoMapOptions, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
+    ToolExecutor, UsageTracker, active_lean_mode, build_repo_map, clear_oauth_credentials,
+    format_lean_mode_report, format_usd, generate_pkce_pair, generate_state, git_commit,
+    git_undo_last_commit, lean_command_prompt, lean_gain_report, lean_help_report,
+    load_system_prompt, parse_oauth_callback_request_target, persist_lean_mode, pricing_for_model,
+    read_file, resolve_sandbox_status, save_oauth_credentials,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -371,7 +371,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 index += 1;
             }
             other if rest.is_empty() && other.starts_with('-') => {
-                return Err(format_unknown_option(other))
+                return Err(format_unknown_option(other));
             }
             other => {
                 rest.push(other.to_string());
@@ -557,6 +557,7 @@ fn parse_direct_slash_cli_action(
         Ok(Some(SlashCommand::LeanHelp)) => Ok(CliAction::LeanHelp),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
         Ok(Some(SlashCommand::Map)) => Ok(CliAction::Map),
+        Ok(Some(SlashCommand::Logout)) => Ok(CliAction::Logout),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
             let _ = command;
@@ -767,7 +768,22 @@ fn default_model_for_current_dir() -> String {
     };
 
     if let Some(model) = runtime_config.model() {
+        if let Some(candidate) = runtime_config
+            .resolve_model_connection_candidates(model)
+            .first()
+        {
+            return resolve_model_alias(&candidate.model).to_string();
+        }
         return resolve_model_alias(model).to_string();
+    }
+    if let Some(model_name) = runtime_config.model_connections().default_model_name() {
+        if let Some(candidate) = runtime_config
+            .resolve_model_connection_candidates(model_name)
+            .first()
+        {
+            return resolve_model_alias(&candidate.model).to_string();
+        }
+        return resolve_model_alias(model_name).to_string();
     }
 
     fallback_model_for_preference(provider_preference_from_env().or_else(|| {
@@ -1010,6 +1026,20 @@ fn run_login() -> Result<(), Box<dyn std::error::Error>> {
 fn run_logout() -> Result<(), Box<dyn std::error::Error>> {
     clear_oauth_credentials()?;
     println!("Claude OAuth credentials cleared.");
+    restart_onboarding_after_logout()?;
+    Ok(())
+}
+
+fn restart_onboarding_after_logout() -> Result<(), Box<dyn std::error::Error>> {
+    if io::stdin().is_terminal() {
+        println!("Restarting Clawie onboarding...");
+        setup_wizard::run_setup_wizard()?;
+    } else {
+        println!(
+            "Clawie onboarding skipped because this logout is not running in an interactive terminal."
+        );
+        println!("Run `claw setup` to start onboarding.");
+    }
     Ok(())
 }
 
@@ -2710,7 +2740,7 @@ impl HookAbortMonitor {
     fn spawn(abort_signal: runtime::HookAbortSignal) -> Self {
         Self::spawn_with_waiter(abort_signal, move |stop_rx, abort_signal| {
             if io::stdin().is_terminal() && io::stdout().is_terminal() {
-                use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
+                use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, poll, read};
                 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
                 if enable_raw_mode().is_ok() {
@@ -3377,7 +3407,7 @@ impl LiveCli {
             Err(_) => {
                 return Err(Box::new(io::Error::other(
                     "thinking spinner thread panicked",
-                )))
+                )));
             }
         }
         let mut spinner = Spinner::new();
@@ -3740,6 +3770,10 @@ impl LiveCli {
                 Self::print_version();
                 false
             }
+            SlashCommand::Logout => {
+                run_logout()?;
+                false
+            }
             SlashCommand::Export { path } => {
                 self.export_session(path.as_deref())?;
                 false
@@ -3765,7 +3799,6 @@ impl LiveCli {
             SlashCommand::Theme { name } => self.set_theme(name)?,
             SlashCommand::Doctor
             | SlashCommand::Login
-            | SlashCommand::Logout
             | SlashCommand::Vim
             | SlashCommand::Upgrade
             | SlashCommand::Stats
@@ -5781,10 +5814,12 @@ impl InternalPromptProgressRun {
 
         let (heartbeat_stop, heartbeat_rx) = mpsc::channel();
         let heartbeat_reporter = reporter.clone();
-        let heartbeat_handle = thread::spawn(move || loop {
-            match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
-                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
+        let heartbeat_handle = thread::spawn(move || {
+            loop {
+                match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
+                }
             }
         });
 
@@ -6579,6 +6614,15 @@ fn slash_command_completion_candidates_with_sessions(
     if let Some(active_session_id) = active_session_id.filter(|value| !value.trim().is_empty()) {
         completions.insert(format!("/resume {active_session_id}"));
         completions.insert(format!("/session switch {active_session_id}"));
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        if let Ok(config) = ConfigLoader::default_for(cwd).load() {
+            for configured_model in config.model_connections().models() {
+                completions.insert(format!("/model {}", configured_model.model_name));
+                completions.insert(format!("/model {}", configured_model.model));
+            }
+        }
     }
 
     for session_id in recent_session_ids
@@ -7419,7 +7463,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "  --dangerously-skip-permissions  Skip all permission checks"
     )?;
-    writeln!(out, "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)")?;
+    writeln!(
+        out,
+        "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)"
+    )?;
     writeln!(
         out,
         "  --version, -V              Print version and build information locally"
@@ -7483,16 +7530,19 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        create_managed_session_handle, describe_tool_progress, expand_file_mentions_with_roots,
-        extract_file_mentions, filter_tool_specs, final_assistant_text_or_fallback,
-        format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
-        format_compact_report, format_cost_report, format_experimental_report,
-        format_internal_prompt_progress_line, format_issue_report, format_model_report,
-        format_model_switch_report, format_permissions_report, format_permissions_switch_report,
-        format_pr_report, format_providers_report, format_resume_report, format_status_report,
-        format_theme_report, format_theme_switch_report, format_tool_call_start,
-        format_tool_result, format_ultraplan_report, format_unknown_slash_command,
+        CliAction, CliOutputFormat, CliToolExecutor, DEFAULT_MODEL, GitWorkspaceSummary,
+        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
+        StatusUsage, TokenUsage, build_runtime_plugin_state_with_loader,
+        build_runtime_with_plugin_state, create_managed_session_handle, describe_tool_progress,
+        expand_file_mentions_with_roots, extract_file_mentions, filter_tool_specs,
+        final_assistant_text_or_fallback, format_bughunter_report, format_commit_preflight_report,
+        format_commit_skipped_report, format_compact_report, format_cost_report,
+        format_experimental_report, format_internal_prompt_progress_line, format_issue_report,
+        format_model_report, format_model_switch_report, format_permissions_report,
+        format_permissions_switch_report, format_pr_report, format_providers_report,
+        format_resume_report, format_status_report, format_theme_report,
+        format_theme_switch_report, format_tool_call_start, format_tool_result,
+        format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, normalize_permission_mode, parse_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
         permission_policy, persist_provider_api_key, print_help_to, push_output_block,
@@ -7500,11 +7550,9 @@ mod tests {
         render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
         response_to_events, resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, upsert_export_line,
-        validate_no_args, write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
-        GitWorkspaceSummary, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
-        SlashCommand, StatusUsage, TokenUsage, DEFAULT_MODEL,
+        validate_no_args, write_mcp_server_fixture,
     };
-    use crate::render::{active_terminal_theme, set_active_terminal_theme, TerminalTheme};
+    use crate::render::{TerminalTheme, active_terminal_theme, set_active_terminal_theme};
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
         PluginManager, PluginManagerConfig, PluginTool, PluginToolDefinition, PluginToolPermission,
@@ -7657,7 +7705,8 @@ mod tests {
 
     fn env_lock() -> EnvGuard {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let guard = LOCK.get_or_init(|| Mutex::new(()))
+        let guard = LOCK
+            .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
@@ -7813,6 +7862,38 @@ mod tests {
         std::fs::remove_dir_all(root).expect("temp config root should clean up");
 
         assert_eq!(resolved, PermissionMode::ReadOnly);
+    }
+
+    #[test]
+    fn default_model_resolves_configured_model_list_alias() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        std::fs::create_dir_all(cwd.join(".claw")).expect("project config dir should exist");
+        std::fs::create_dir_all(&config_home).expect("config home should exist");
+        std::fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{
+              "provider": "openai",
+              "model": "primary",
+              "model_list": [
+                {"model_name": "primary", "model": "openai/gpt-4.1-mini"}
+              ]
+            }"#,
+        )
+        .expect("project config should write");
+
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        let resolved = with_current_dir(&cwd, super::default_model_for_current_dir);
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(root).expect("temp config root should clean up");
+
+        assert_eq!(resolved, "gpt-4.1-mini");
     }
 
     #[test]
@@ -7989,6 +8070,10 @@ mod tests {
         );
         assert_eq!(
             parse_args(&["logout".to_string()]).expect("logout should parse"),
+            CliAction::Logout
+        );
+        assert_eq!(
+            parse_args(&["/logout".to_string()]).expect("/logout should parse"),
             CliAction::Logout
         );
         assert_eq!(
@@ -8383,6 +8468,35 @@ mod tests {
     }
 
     #[test]
+    fn completion_candidates_include_configured_model_list_entries() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        std::fs::create_dir_all(cwd.join(".claw")).expect("project config dir should exist");
+        std::fs::create_dir_all(&config_home).expect("config home should exist");
+        std::fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"modelList":[{"modelName":"primary","model":"openai/gpt-4.1-mini"}]}"#,
+        )
+        .expect("project config should write");
+
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        let completions = with_current_dir(&cwd, || {
+            slash_command_completion_candidates_with_sessions("primary", None, Vec::new())
+        });
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(root).expect("temp config root should clean up");
+
+        assert!(completions.contains(&"/model primary".to_string()));
+        assert!(completions.contains(&"/model openai/gpt-4.1-mini".to_string()));
+    }
+
+    #[test]
     fn startup_banner_mentions_workflow_completions() {
         let _guard = env_lock();
         // Inject dummy credentials so LiveCli can construct without real Anthropic key
@@ -8489,7 +8603,9 @@ mod tests {
         assert!(report.contains("Theme"));
         assert!(report.contains("Active design    chrome"));
         assert!(report.contains("clawie1    ○ available red accent with emoji status markers"));
-        assert!(report.contains("chrome     ● current   black and white with emoji status markers"));
+        assert!(
+            report.contains("chrome     ● current   black and white with emoji status markers")
+        );
         assert!(report.contains("classic    ○ available red accent without emoji status markers"));
     }
 
@@ -8657,16 +8773,22 @@ mod tests {
         assert!(preflight.contains("Result           ready"));
         assert!(preflight.contains("Branch           feature/ux"));
         assert!(preflight.contains("Workspace        dirty · 2 files · 1 staged, 1 unstaged"));
-        assert!(preflight
-            .contains("Action           create a git commit from the current workspace changes"));
+        assert!(
+            preflight.contains(
+                "Action           create a git commit from the current workspace changes"
+            )
+        );
     }
 
     #[test]
     fn commit_skipped_report_points_to_next_steps() {
         let report = format_commit_skipped_report();
         assert!(report.contains("Reason           no workspace changes"));
-        assert!(report
-            .contains("Action           create a git commit from the current workspace changes"));
+        assert!(
+            report.contains(
+                "Action           create a git commit from the current workspace changes"
+            )
+        );
         assert!(report.contains("/status to inspect context"));
         assert!(report.contains("/diff to inspect repo changes"));
     }
@@ -9977,7 +10099,7 @@ impl RustArtifactStore {
 
 #[cfg(test)]
 mod sandbox_report_tests {
-    use super::{format_sandbox_report, HookAbortMonitor};
+    use super::{HookAbortMonitor, format_sandbox_report};
     use runtime::HookAbortSignal;
     use std::sync::mpsc;
     use std::time::Duration;

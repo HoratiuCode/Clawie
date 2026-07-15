@@ -303,6 +303,46 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('mode=ssh', ssh_result.stdout)
         self.assertIn('mode=teleport', teleport_result.stdout)
 
+    def test_cli_bridge_mode_validates_local_cli_transport(self) -> None:
+        result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'cli-bridge-mode', 'codex', '--command', sys.executable],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('mode=cli-bridge', result.stdout)
+        self.assertIn('transport=stdio-cli', result.stdout)
+        self.assertIn('command_found=True', result.stdout)
+        self.assertIn('executed=False', result.stdout)
+
+    def test_cli_bridge_mode_can_execute_command_transport(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                '-m',
+                'src.main',
+                'cli-bridge-mode',
+                'codex',
+                '--command',
+                sys.executable,
+                '--arg=-c',
+                '--arg',
+                'import os,sys; print(os.environ["CLAWIE_BRIDGE_TEST"] + ":" + sys.argv[1])',
+                '--env',
+                'CLAWIE_BRIDGE_TEST=ok',
+                '--prompt',
+                'hello',
+                '--execute',
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('connected=True', result.stdout)
+        self.assertIn('executed=True', result.stdout)
+        self.assertIn('env_keys=CLAWIE_BRIDGE_TEST', result.stdout)
+        self.assertIn('ok:hello', result.stdout)
+
     def test_flush_transcript_cli_runs(self) -> None:
         result = subprocess.run(
             [sys.executable, '-m', 'src.main', 'flush-transcript', 'review MCP tool'],

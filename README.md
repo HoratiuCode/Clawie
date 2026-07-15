@@ -134,6 +134,12 @@ python3 -m python-clawie.src.main turn-loop "audit this module" --max-turns 30
 
 # Resume an existing session
 python3 -m python-clawie.src.main resume-session <session_id> "continue"
+
+# Validate a CLI transport to infrastructure, e.g. a Codex-style local CLI
+python3 -m python-clawie.src.main cli-bridge-mode codex --command "codex exec"
+
+# Execute the CLI transport with a prompt appended as the final argument
+python3 -m python-clawie.src.main cli-bridge-mode codex --command "codex exec" --prompt "inspect this workspace" --execute
 ```
 
 ## Use Cases & Workflows

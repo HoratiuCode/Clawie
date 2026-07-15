@@ -332,6 +332,7 @@ pub fn parse_provider_preference(value: &str) -> Option<ProviderKind> {
         "xai" | "grok" => Some(ProviderKind::Xai),
         "openai" | "gpt" => Some(ProviderKind::OpenAi),
         "gemini" | "google" => Some(ProviderKind::Gemini),
+        "kimi" | "moonshot" => Some(ProviderKind::Kimi),
         _ => None,
     }
 }
@@ -456,12 +457,21 @@ mod tests {
         );
         assert_eq!(parse_provider_preference("gpt"), Some(ProviderKind::OpenAi));
         assert_eq!(parse_provider_preference("grok"), Some(ProviderKind::Xai));
+        assert_eq!(parse_provider_preference("kimi"), Some(ProviderKind::Kimi));
+        assert_eq!(
+            parse_provider_preference("moonshot"),
+            Some(ProviderKind::Kimi)
+        );
         assert_eq!(
             default_model_for_provider(ProviderKind::Anthropic),
             "claude-sonnet-4-6"
         );
         assert_eq!(default_model_for_provider(ProviderKind::OpenAi), "gpt-4.1");
         assert_eq!(default_model_for_provider(ProviderKind::Xai), "grok-3");
+        assert_eq!(
+            default_model_for_provider(ProviderKind::Kimi),
+            "moonshot-v1-auto"
+        );
     }
 
     #[test]

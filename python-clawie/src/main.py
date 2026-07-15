@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from .bootstrap_graph import build_bootstrap_graph
+from .cli_bridge import parse_env_assignments, run_cli_bridge_mode
 from .command_graph import build_command_graph
 from .commands import execute_command, get_command, get_commands, render_command_index
 from .direct_modes import run_deep_link, run_direct_connect
@@ -93,6 +94,15 @@ def build_parser() -> argparse.ArgumentParser:
     direct_parser.add_argument('target')
     deep_link_parser = subparsers.add_parser('deep-link-mode', help='simulate deep-link runtime branching')
     deep_link_parser.add_argument('target')
+    cli_bridge_parser = subparsers.add_parser('cli-bridge-mode', help='connect to infrastructure through a local CLI stdio transport')
+    cli_bridge_parser.add_argument('target')
+    cli_bridge_parser.add_argument('--command', dest='cli_command', help='command to launch; defaults to CLAWIE_INFRA_CLI or target')
+    cli_bridge_parser.add_argument('--arg', action='append', default=[], help='additional CLI argument; repeat for multiple args')
+    cli_bridge_parser.add_argument('--prompt', help='prompt appended as the final CLI argument')
+    cli_bridge_parser.add_argument('--env', action='append', default=[], help='environment assignment passed to the CLI, as KEY=VALUE')
+    cli_bridge_parser.add_argument('--cwd', help='working directory for --execute')
+    cli_bridge_parser.add_argument('--timeout', type=float, default=120.0, help='execution timeout in seconds')
+    cli_bridge_parser.add_argument('--execute', action='store_true', help='run the CLI instead of only validating availability')
 
     show_command = subparsers.add_parser('show-command', help='show one mirrored command entry by exact name')
     show_command.add_argument('name')
@@ -229,6 +239,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == 'deep-link-mode':
             print(run_deep_link(args.target).as_text())
             return 0
+        if args.command == 'cli-bridge-mode':
+            env = parse_env_assignments(args.env)
+            report = run_cli_bridge_mode(
+                args.target,
+                args.cli_command,
+                extra_args=tuple(args.arg),
+                prompt=args.prompt,
+                env=env,
+                cwd=args.cwd,
+                timeout_seconds=args.timeout,
+                execute=args.execute,
+            )
+            print(report.as_text())
+            return 0 if report.connected else 1
         if args.command == 'show-command':
             module = get_command(args.name)
             if module is None:
