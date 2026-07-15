@@ -7065,9 +7065,6 @@ fn slash_command_completion_candidates_with_sessions(
         "/export ",
         "/issue ",
         "/model ",
-        "/model opus",
-        "/model sonnet",
-        "/model haiku",
         "/permissions ",
         "/permissions read-only",
         "/permissions workspace-write",
@@ -7101,27 +7098,13 @@ fn slash_command_completion_candidates_with_sessions(
         completions.insert(candidate.to_string());
     }
 
-    for definition in builtin_model_definitions() {
-        completions.insert(format!("/model {}", definition.model));
-    }
-
-    if !model.trim().is_empty() {
-        completions.insert(format!("/model {}", resolve_model_alias(model)));
-        completions.insert(format!("/model {model}"));
-    }
-
     if let Some(active_session_id) = active_session_id.filter(|value| !value.trim().is_empty()) {
         completions.insert(format!("/resume {active_session_id}"));
         completions.insert(format!("/session switch {active_session_id}"));
     }
 
-    if let Ok(cwd) = env::current_dir() {
-        if let Ok(config) = ConfigLoader::default_for(cwd).load() {
-            for configured_model in config.model_connections().models() {
-                completions.insert(format!("/model {}", configured_model.model_name));
-                completions.insert(format!("/model {}", configured_model.model));
-            }
-        }
+    for candidate in accessible_model_completion_candidates(model) {
+        completions.insert(format!("/model {candidate}"));
     }
 
     for session_id in recent_session_ids
@@ -7134,6 +7117,139 @@ fn slash_command_completion_candidates_with_sessions(
     }
 
     completions.into_iter().collect()
+}
+
+fn accessible_model_completion_candidates(model: &str) -> BTreeSet<String> {
+    let config = env::current_dir()
+        .ok()
+        .and_then(|cwd| ConfigLoader::default_for(cwd).load().ok());
+    let active_provider = active_completion_provider(model, config.as_ref());
+    let mut candidates = BTreeSet::new();
+
+    for definition in builtin_model_definitions() {
+        let provider = provider_key_for_kind(definition.provider);
+        if provider_matches_active(provider, active_provider.as_deref()) {
+            candidates.insert(definition.model.to_string());
+        }
+    }
+
+    if let Some(config) = config.as_ref() {
+        for configured_model in config.model_connections().models() {
+            if configured_model_matches_active_provider(configured_model, active_provider.as_deref())
+            {
+                candidates.insert(configured_model.model_name.clone());
+                candidates.insert(configured_model.model.clone());
+            }
+        }
+    }
+
+    if !model.trim().is_empty() {
+        let resolved = resolve_model_alias(model).to_string();
+        if model_ref_matches_active_provider(model, active_provider.as_deref())
+            || model_ref_matches_active_provider(&resolved, active_provider.as_deref())
+        {
+            candidates.insert(model.to_string());
+            candidates.insert(resolved);
+        }
+    }
+
+    if active_provider.as_deref() == Some("codex") {
+        candidates.insert("codex".to_string());
+    }
+
+    candidates
+}
+
+fn active_completion_provider(model: &str, config: Option<&runtime::RuntimeConfig>) -> Option<String> {
+    config
+        .and_then(raw_provider_from_config)
+        .or_else(|| {
+            env::var(PROVIDER_PREFERENCE_ENV)
+                .ok()
+                .and_then(|value| normalize_provider_key(&value))
+                .or_else(|| {
+                    env::var("CLAW_PROVIDER_PREFERENCE")
+                        .ok()
+                        .and_then(|value| normalize_provider_key(&value))
+                })
+        })
+        .or_else(|| model_provider_key(model))
+        .or_else(|| config.and_then(|config| config.provider().and_then(normalize_provider_key)))
+}
+
+fn raw_provider_from_config(config: &runtime::RuntimeConfig) -> Option<String> {
+    config
+        .get("provider")
+        .or_else(|| config.get("preferredProvider"))
+        .and_then(|value| value.as_str())
+        .and_then(normalize_provider_key)
+}
+
+fn configured_model_matches_active_provider(
+    entry: &ModelConnectionDefinition,
+    active_provider: Option<&str>,
+) -> bool {
+    let provider = entry
+        .provider
+        .as_deref()
+        .and_then(normalize_provider_key)
+        .or_else(|| model_provider_key(&entry.model));
+    match active_provider {
+        Some(active) => provider.as_deref() == Some(active),
+        None => true,
+    }
+}
+
+fn model_ref_matches_active_provider(model: &str, active_provider: Option<&str>) -> bool {
+    let provider = model_provider_key(model);
+    match active_provider {
+        Some("codex") => model == "codex",
+        Some(active) => provider.as_deref() == Some(active),
+        None => true,
+    }
+}
+
+fn provider_matches_active(provider: &str, active_provider: Option<&str>) -> bool {
+    match active_provider {
+        Some(active) => provider == active,
+        None => true,
+    }
+}
+
+fn model_provider_key(model: &str) -> Option<String> {
+    if model == "codex" {
+        return Some("codex".to_string());
+    }
+    metadata_for_model(model)
+        .map(|metadata| provider_key_for_kind(metadata.provider).to_string())
+        .or_else(|| {
+            parse_model_ref(model, None)
+                .map(|(provider, _)| provider)
+                .and_then(|provider| normalize_provider_key(&provider))
+        })
+}
+
+fn provider_key_for_kind(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Anthropic => "anthropic",
+        ProviderKind::OpenAi => "openai",
+        ProviderKind::Xai => "xai",
+        ProviderKind::Gemini => "gemini",
+        ProviderKind::Kimi => "kimi",
+    }
+}
+
+fn normalize_provider_key(provider: &str) -> Option<String> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" => Some("anthropic".to_string()),
+        "openai" | "gpt" => Some("openai".to_string()),
+        "xai" | "grok" => Some("xai".to_string()),
+        "gemini" | "google" => Some("gemini".to_string()),
+        "kimi" | "moonshot" => Some("kimi".to_string()),
+        "dashscope" => Some("dashscope".to_string()),
+        "codex" | "codex-cli" | "codex_cli" => Some("codex".to_string()),
+        _ => None,
+    }
 }
 
 fn format_tool_call_start(name: &str, input: &str) -> String {
@@ -8944,15 +9060,45 @@ mod tests {
 
     #[test]
     fn completion_candidates_include_workflow_shortcuts_and_dynamic_sessions() {
-        let completions = slash_command_completion_candidates_with_sessions(
-            "sonnet",
-            Some("session-current"),
-            vec!["session-old".to_string()],
-        );
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        std::fs::create_dir_all(&cwd).expect("project dir should exist");
+        std::fs::create_dir_all(&config_home).expect("config home should exist");
+        let original_provider = std::env::var("CLAW_PROVIDER").ok();
+        let original_legacy_provider = std::env::var("CLAW_PROVIDER_PREFERENCE").ok();
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::remove_var("CLAW_PROVIDER");
+        std::env::remove_var("CLAW_PROVIDER_PREFERENCE");
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        let inferred_provider =
+            with_current_dir(&cwd, || crate::active_completion_provider("sonnet", None));
+        let completions = with_current_dir(&cwd, || {
+            slash_command_completion_candidates_with_sessions(
+                "sonnet",
+                Some("session-current"),
+                vec!["session-old".to_string()],
+            )
+        });
+        match original_provider {
+            Some(value) => std::env::set_var("CLAW_PROVIDER", value),
+            None => std::env::remove_var("CLAW_PROVIDER"),
+        }
+        match original_legacy_provider {
+            Some(value) => std::env::set_var("CLAW_PROVIDER_PREFERENCE", value),
+            None => std::env::remove_var("CLAW_PROVIDER_PREFERENCE"),
+        }
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(root).expect("temp config root should clean up");
 
+        assert_eq!(inferred_provider.as_deref(), Some("anthropic"));
         assert!(completions.contains(&"/model claude-sonnet-4-6".to_string()));
-        assert!(completions.contains(&"/model gpt-4.1".to_string()));
-        assert!(completions.contains(&"/model grok-3".to_string()));
+        assert!(!completions.contains(&"/model gpt-4.1".to_string()));
+        assert!(!completions.contains(&"/model grok-3".to_string()));
         assert!(completions.contains(&"/providers".to_string()));
         assert!(completions.contains(&"/permissions workspace-write".to_string()));
         assert!(completions.contains(&"/theme clawie1".to_string()));
@@ -8964,6 +9110,67 @@ mod tests {
         assert!(completions.contains(&"/resume session-old".to_string()));
         assert!(completions.contains(&"/mcp list".to_string()));
         assert!(completions.contains(&"/ultraplan ".to_string()));
+    }
+
+    #[test]
+    fn model_completion_candidates_follow_selected_provider() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        std::fs::create_dir_all(cwd.join(".claw")).expect("project config dir should exist");
+        std::fs::create_dir_all(&config_home).expect("config home should exist");
+        std::fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"provider":"openai","model":"gpt-4.1"}"#,
+        )
+        .expect("project config should write");
+
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        let completions = with_current_dir(&cwd, || {
+            slash_command_completion_candidates_with_sessions("gpt-4.1", None, Vec::new())
+        });
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(root).expect("temp config root should clean up");
+
+        assert!(completions.contains(&"/model gpt-4.1".to_string()));
+        assert!(completions.contains(&"/model gpt-4.1-mini".to_string()));
+        assert!(!completions.contains(&"/model claude-sonnet-4-6".to_string()));
+        assert!(!completions.contains(&"/model grok-3".to_string()));
+    }
+
+    #[test]
+    fn model_completion_candidates_follow_codex_provider() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        std::fs::create_dir_all(cwd.join(".claw")).expect("project config dir should exist");
+        std::fs::create_dir_all(&config_home).expect("config home should exist");
+        std::fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"provider":"codex","model":"codex"}"#,
+        )
+        .expect("project config should write");
+
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        let completions = with_current_dir(&cwd, || {
+            slash_command_completion_candidates_with_sessions("codex", None, Vec::new())
+        });
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(root).expect("temp config root should clean up");
+
+        assert!(completions.contains(&"/model codex".to_string()));
+        assert!(!completions.contains(&"/model gpt-4.1".to_string()));
+        assert!(!completions.contains(&"/model claude-sonnet-4-6".to_string()));
     }
 
     #[test]
