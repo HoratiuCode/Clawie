@@ -162,6 +162,7 @@ impl SystemPromptBuilder {
         if let Some(lean_section) = lean_system_section(active_lean_mode()) {
             sections.push(lean_section);
         }
+        sections.push(get_design_intelligence_section());
         sections.push(get_actions_section());
         sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
         sections.push(self.environment_section());
@@ -227,7 +228,9 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
         for candidate in [
             dir.join("CLAUDE.md"),
             dir.join("CLAUDE.local.md"),
+            dir.join("DESIGN.md"),
             dir.join(".claw").join("CLAUDE.md"),
+            dir.join(".claw").join("DESIGN.md"),
             dir.join(".claw").join("instructions.md"),
         ] {
             push_context_file(&mut files, candidate)?;
@@ -528,6 +531,28 @@ fn get_simple_doing_tasks_section() -> String {
         .join("\n")
 }
 
+fn get_design_intelligence_section() -> String {
+    let items = prepend_bullets(vec![
+        "For website, landing page, product, dashboard, and visual UI work, behave as if a concise design brief exists even when the user is vague: infer audience, product category, trust posture, information density, and primary conversion/action before choosing layout.".to_string(),
+        "Start from a clear design direction, not generic decoration. Pick one coherent visual thesis such as precise developer tool, premium consumer product, data-dense enterprise app, editorial media, playful creative tool, or cinematic product launch; let typography, spacing, color, imagery, and motion follow that thesis.".to_string(),
+        "Define a small design system while building: 1-2 type families or system fallbacks, 3-5 semantic colors, spacing steps, radius scale, component states, and reusable sections. Apply it consistently instead of styling each block independently.".to_string(),
+        "Make the first viewport immediately communicate the product, object, or workflow. Use real product UI, screenshots, diagrams, generated visuals, or concrete interface mockups when useful; avoid empty atmospheric gradients, vague blobs, and stock-looking decoration.".to_string(),
+        "Prefer hierarchy over noise: strong headline, one supporting paragraph, one primary action, one secondary action when needed, then proof or product detail. Do not make every element large, bright, rounded, or animated.".to_string(),
+        "Use restraint with color. Choose one primary accent and a few neutrals; reserve bright accents for CTAs, focus, status, or key data. Avoid one-note palettes and avoid copying a famous brand verbatim unless the user asks for that brand.".to_string(),
+        "Use typography deliberately: display type only for hero or major section titles, readable body line lengths, compact labels for controls, tabular figures for metrics, and no cramped text inside buttons or cards.".to_string(),
+        "Design components with states: hover, focus, active, disabled, empty, loading, error, success, and responsive behavior. Controls should feel operational, not just decorative.".to_string(),
+        "For SaaS, AI, developer tools, infrastructure, CRM, dashboards, and admin products, favor a quiet work surface: dense but organized data, clear navigation, visible product UI, restrained cards, useful tables, filters, tabs, and command/action affordances.".to_string(),
+        "For consumer, portfolio, object, venue, retail, automotive, music, gaming, or launch pages, use stronger art direction: real or generated imagery, full-bleed moments, editorial rhythm, tactile product details, and sections that reveal the object clearly.".to_string(),
+        "When implementing frontend, verify responsive layout, text fit, contrast, keyboard/focus states, and no overlapping elements. Prefer stable dimensions, aspect ratios, and predictable grids so the design does not shift as content changes.".to_string(),
+        "If a project provides DESIGN.md, treat it as the visual source of truth. Use its tokens and rules over these defaults, but still adapt them pragmatically to the existing codebase and user request.".to_string(),
+    ]);
+
+    std::iter::once("# Design intelligence".to_string())
+        .chain(items)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn get_actions_section() -> String {
     [
         "# Executing actions with care".to_string(),
@@ -575,6 +600,8 @@ mod tests {
         fs::write(root.join("CLAUDE.md"), "root instructions").expect("write root instructions");
         fs::write(root.join("CLAUDE.local.md"), "local instructions")
             .expect("write local instructions");
+        fs::write(root.join("DESIGN.md"), "root design language")
+            .expect("write root design language");
         fs::create_dir_all(root.join("apps")).expect("apps dir");
         fs::create_dir_all(root.join("apps").join(".claw")).expect("apps claw dir");
         fs::write(root.join("apps").join("CLAUDE.md"), "apps instructions")
@@ -591,6 +618,8 @@ mod tests {
             "nested instructions",
         )
         .expect("write nested instructions");
+        fs::write(nested.join(".claw").join("DESIGN.md"), "nested design language")
+            .expect("write nested design language");
 
         let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
         let contents = context
@@ -604,9 +633,11 @@ mod tests {
             vec![
                 "root instructions",
                 "local instructions",
+                "root design language",
                 "apps instructions",
                 "apps dot claude instructions",
                 "nested rules",
+                "nested design language",
                 "nested instructions"
             ]
         );
@@ -791,12 +822,14 @@ mod tests {
             .render();
 
         assert!(prompt.contains("# System"));
+        assert!(prompt.contains("# Design intelligence"));
         assert!(prompt.contains("# Project context"));
         assert!(prompt.contains("# Claude instructions"));
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));
         assert!(prompt.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
         assert!(prompt.contains("one choice per line"));
+        assert!(prompt.contains("If a project provides DESIGN.md"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
