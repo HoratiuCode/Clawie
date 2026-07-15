@@ -12,7 +12,7 @@ pub struct Cli {
     #[arg(long, default_value = "gpt-4.1")]
     pub model: String,
 
-    #[arg(long, value_enum, default_value_t = PermissionMode::DangerFullAccess)]
+    #[arg(long, value_enum, default_value_t = PermissionMode::WorkspaceWrite)]
     pub permission_mode: PermissionMode,
 
     #[arg(long)]
@@ -101,8 +101,8 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_danger_full_access_permission_mode() {
+    fn defaults_to_workspace_write_permission_mode() {
         let cli = Cli::parse_from(["clawie"]);
-        assert_eq!(cli.permission_mode, PermissionMode::DangerFullAccess);
+        assert_eq!(cli.permission_mode, PermissionMode::WorkspaceWrite);
     }
 }

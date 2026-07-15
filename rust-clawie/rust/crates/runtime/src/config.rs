@@ -1054,6 +1054,7 @@ fn parse_optional_provider(root: &JsonValue) -> Result<Option<String>, ConfigErr
         "gemini" | "google" => Ok(Some("gemini".to_string())),
         "kimi" | "moonshot" => Ok(Some("kimi".to_string())),
         "codex" | "codex-cli" | "codex_cli" => Ok(Some("codex".to_string())),
+        "cli" | "local-cli" | "local_cli" | "command" => Ok(Some("cli".to_string())),
         other => Err(ConfigError::Parse(format!(
             "merged settings.provider: unsupported provider {other}"
         ))),
@@ -1222,6 +1223,8 @@ fn normalize_provider_label(value: &str, context: &str) -> Result<String, Config
         "openai" | "gpt" => Ok("openai".to_string()),
         "gemini" | "google" => Ok("gemini".to_string()),
         "kimi" | "moonshot" => Ok("kimi".to_string()),
+        "codex" | "codex-cli" | "codex_cli" => Ok("codex".to_string()),
+        "cli" | "local-cli" | "local_cli" | "command" => Ok("cli".to_string()),
         other => Err(ConfigError::Parse(format!(
             "{context}: unsupported provider {other}"
         ))),
@@ -2239,6 +2242,29 @@ mod tests {
 
         assert_eq!(loaded.provider(), Some("codex"));
         assert_eq!(loaded.model(), Some("codex"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn cli_provider_preference_uses_cli_runtime() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.local.json"),
+            r#"{"provider":"cli","model":"local-agent"}"#,
+        )
+        .expect("write local settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("cli should load");
+
+        assert_eq!(loaded.provider(), Some("cli"));
+        assert_eq!(loaded.model(), Some("local-agent"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

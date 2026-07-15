@@ -755,7 +755,7 @@ fn default_permission_mode() -> PermissionMode {
         .and_then(normalize_permission_mode)
         .map(permission_mode_from_label)
         .or_else(config_permission_mode_for_current_dir)
-        .unwrap_or(PermissionMode::DangerFullAccess)
+        .unwrap_or(PermissionMode::WorkspaceWrite)
 }
 
 fn default_model_for_current_dir() -> String {
@@ -6306,6 +6306,7 @@ fn build_runtime_with_plugin_state(
         allowed_tools.clone(),
         tool_registry.clone(),
         progress_reporter,
+        permission_mode,
     )?;
     let mut runtime = ConversationRuntime::new_with_features(
         session,
@@ -6334,12 +6335,10 @@ fn runtime_api_client(
     allowed_tools: Option<AllowedToolSet>,
     tool_registry: GlobalToolRegistry,
     progress_reporter: Option<InternalPromptProgressReporter>,
+    permission_mode: PermissionMode,
 ) -> Result<RuntimeApiClient, Box<dyn std::error::Error>> {
-    if model_uses_codex_cli(&model) {
-        return Ok(RuntimeApiClient::Codex(CodexCliRuntimeClient::new(
-            codex_cli_model(model),
-            emit_output,
-        )));
+    if let Some(adapter) = cli_api_adapter_for_model(&model, emit_output, permission_mode) {
+        return Ok(RuntimeApiClient::Cli(adapter));
     }
 
     Ok(RuntimeApiClient::Provider(AnthropicRuntimeClient::new(
@@ -6351,6 +6350,91 @@ fn runtime_api_client(
         tool_registry,
         progress_reporter,
     )?))
+}
+
+fn cli_api_adapter_for_model(
+    model: &str,
+    emit_output: bool,
+    permission_mode: PermissionMode,
+) -> Option<CliApiAdapter> {
+    if model_uses_codex_cli(model) {
+        return Some(CliApiAdapter::Codex(CodexCliRuntimeClient::new(
+            codex_cli_model(model.to_string()),
+            emit_output,
+            permission_mode,
+        )));
+    }
+
+    let (entry, resolved_model) = configured_cli_model_connection(model)?;
+    let command = cli_command_for_entry(&entry)?;
+    let args = cli_args_for_entry(&entry, &resolved_model);
+    Some(CliApiAdapter::Generic(GenericCliRuntimeClient::new(
+        command,
+        args,
+        emit_output,
+    )))
+}
+
+fn configured_cli_model_connection(
+    model: &str,
+) -> Option<(ModelConnectionDefinition, String)> {
+    let cwd = env::current_dir().ok()?;
+    let config = ConfigLoader::default_for(cwd).load().ok()?;
+    let candidate = config
+        .resolve_model_connection_candidates(model)
+        .into_iter()
+        .next()?;
+    let entry = config.model_connections().models().iter().find(|entry| {
+        entry.model_name == model
+            || entry.model == model
+            || entry.model_name == candidate.source
+            || entry.model == candidate.source
+    })?;
+    is_cli_model_connection(entry).then(|| (entry.clone(), candidate.model))
+}
+
+fn is_cli_model_connection(entry: &ModelConnectionDefinition) -> bool {
+    entry
+        .connect_mode
+        .as_deref()
+        .is_some_and(|mode| matches!(normalize_cli_mode(mode).as_deref(), Some("cli")))
+        || entry
+            .provider
+            .as_deref()
+            .is_some_and(|provider| matches!(normalize_cli_mode(provider).as_deref(), Some("cli")))
+}
+
+fn normalize_cli_mode(value: &str) -> Option<String> {
+    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "cli" | "local-cli" | "command" | "shell-command" => Some("cli".to_string()),
+        _ => None,
+    }
+}
+
+fn cli_command_for_entry(entry: &ModelConnectionDefinition) -> Option<String> {
+    entry
+        .api
+        .as_deref()
+        .or(entry.provider.as_deref())
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .filter(|command| !matches!(normalize_cli_mode(command).as_deref(), Some("cli")))
+        .map(ToOwned::to_owned)
+}
+
+fn cli_args_for_entry(entry: &ModelConnectionDefinition, model: &str) -> Vec<String> {
+    if entry.input.is_empty() {
+        return vec!["-".to_string()];
+    }
+    entry
+        .input
+        .iter()
+        .map(|arg| {
+            arg.replace("{model}", model)
+                .replace("{modelName}", &entry.model_name)
+                .replace("{model_name}", &entry.model_name)
+        })
+        .collect()
 }
 
 fn model_uses_codex_cli(model: &str) -> bool {
@@ -6471,14 +6555,28 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
 
 enum RuntimeApiClient {
     Provider(AnthropicRuntimeClient),
-    Codex(CodexCliRuntimeClient),
+    Cli(CliApiAdapter),
 }
 
 impl ApiClient for RuntimeApiClient {
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
         match self {
             Self::Provider(client) => client.stream(request),
+            Self::Cli(client) => client.stream(request),
+        }
+    }
+}
+
+enum CliApiAdapter {
+    Codex(CodexCliRuntimeClient),
+    Generic(GenericCliRuntimeClient),
+}
+
+impl ApiClient for CliApiAdapter {
+    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        match self {
             Self::Codex(client) => client.stream(request),
+            Self::Generic(client) => client.stream(request),
         }
     }
 }
@@ -6486,11 +6584,16 @@ impl ApiClient for RuntimeApiClient {
 struct CodexCliRuntimeClient {
     model: String,
     emit_output: bool,
+    permission_mode: PermissionMode,
 }
 
 impl CodexCliRuntimeClient {
-    fn new(model: String, emit_output: bool) -> Self {
-        Self { model, emit_output }
+    fn new(model: String, emit_output: bool, permission_mode: PermissionMode) -> Self {
+        Self {
+            model,
+            emit_output,
+            permission_mode,
+        }
     }
 
     fn output_path() -> PathBuf {
@@ -6536,6 +6639,29 @@ impl CodexCliRuntimeClient {
         prompt
     }
 
+    fn add_dirs_for_request(request: &ApiRequest, cwd: &Path) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        let mut seen = HashSet::new();
+        for message in &request.messages {
+            for path in absolute_local_paths_in_text(&conversation_message_text(message)) {
+                let dir = if path.is_dir() {
+                    path
+                } else if path.exists() {
+                    path.parent().map(Path::to_path_buf).unwrap_or(path)
+                } else {
+                    path.parent()
+                        .filter(|parent| parent.is_dir())
+                        .map(Path::to_path_buf)
+                        .unwrap_or(path)
+                };
+                if dir != cwd && seen.insert(dir.clone()) {
+                    dirs.push(dir);
+                }
+            }
+        }
+        dirs
+    }
+
     fn ensure_codex_login() -> Result<(), RuntimeError> {
         match Command::new("codex").args(["login", "status"]).output() {
             Ok(output) if output.status.success() => Ok(()),
@@ -6555,25 +6681,24 @@ impl CodexCliRuntimeClient {
             ))),
         }
     }
-}
 
-impl ApiClient for CodexCliRuntimeClient {
-    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
-        Self::ensure_codex_login()?;
-        let prompt = Self::build_prompt(&request);
-        let output_path = Self::output_path();
-        let cwd = env::current_dir().map_err(|error| RuntimeError::new(error.to_string()))?;
+    fn exec_command(&self, cwd: &Path, output_path: &Path, add_dirs: &[PathBuf]) -> Command {
         let mut command = Command::new("codex");
         command
             .arg("exec")
             .arg("--ignore-user-config")
             .arg("--skip-git-repo-check")
+            .arg("--sandbox")
+            .arg(self.permission_mode.as_str())
             .arg("--color")
             .arg("never")
             .arg("-C")
-            .arg(&cwd)
+            .arg(cwd)
             .arg("--output-last-message")
-            .arg(&output_path);
+            .arg(output_path);
+        for dir in add_dirs {
+            command.arg("--add-dir").arg(dir);
+        }
         if self.model != "codex" {
             command.arg("--model").arg(&self.model);
         }
@@ -6582,6 +6707,18 @@ impl ApiClient for CodexCliRuntimeClient {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        command
+    }
+}
+
+impl ApiClient for CodexCliRuntimeClient {
+    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        Self::ensure_codex_login()?;
+        let prompt = Self::build_prompt(&request);
+        let output_path = Self::output_path();
+        let cwd = env::current_dir().map_err(|error| RuntimeError::new(error.to_string()))?;
+        let add_dirs = Self::add_dirs_for_request(&request, &cwd);
+        let mut command = self.exec_command(&cwd, &output_path, &add_dirs);
 
         let mut child = command
             .spawn()
@@ -6615,6 +6752,84 @@ impl ApiClient for CodexCliRuntimeClient {
             .unwrap_or_else(|_| String::from_utf8_lossy(&output.stdout).to_string());
         let _ = fs::remove_file(&output_path);
         let text = text.trim().to_string();
+        if self.emit_output && !text.is_empty() {
+            let renderer = TerminalRenderer::new();
+            let mut stdout = io::stdout();
+            let mut header_written = false;
+            write_structured_reply(&mut stdout, &renderer, &text, &mut header_written)
+                .and_then(|()| stdout.flush())
+                .map_err(|error| RuntimeError::new(error.to_string()))?;
+        }
+        Ok(vec![
+            AssistantEvent::TextDelta(text),
+            AssistantEvent::MessageStop,
+        ])
+    }
+}
+
+struct GenericCliRuntimeClient {
+    command: String,
+    args: Vec<String>,
+    emit_output: bool,
+}
+
+impl GenericCliRuntimeClient {
+    fn new(command: String, args: Vec<String>, emit_output: bool) -> Self {
+        Self {
+            command,
+            args,
+            emit_output,
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.command);
+        command
+            .args(&self.args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        command
+    }
+}
+
+impl ApiClient for GenericCliRuntimeClient {
+    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let prompt = CodexCliRuntimeClient::build_prompt(&request);
+        let mut command = self.command();
+        let mut child = command.spawn().map_err(|error| {
+            RuntimeError::new(format!(
+                "failed to start CLI API command `{}`: {error}",
+                self.command
+            ))
+        })?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| RuntimeError::new("failed to open CLI API stdin"))?
+            .write_all(prompt.as_bytes())
+            .map_err(|error| {
+                RuntimeError::new(format!("failed to send prompt to CLI API command: {error}"))
+            })?;
+        let output = child
+            .wait_with_output()
+            .map_err(|error| RuntimeError::new(format!("CLI API command failed: {error}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let detail = if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            };
+            return Err(RuntimeError::new(format!(
+                "CLI API command `{}` failed. {}",
+                self.command,
+                truncate_for_summary(detail, 500)
+            )));
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if self.emit_output && !text.is_empty() {
             let renderer = TerminalRenderer::new();
             let mut stdout = io::stdout();
@@ -6932,6 +7147,28 @@ fn conversation_message_text(message: &ConversationMessage) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn absolute_local_paths_in_text(text: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    for token in text.split_whitespace() {
+        let trimmed = token.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '"' | '\'' | '`' | ',' | '.' | ':' | ';' | ')' | ']' | '}'
+            )
+        });
+        if !trimmed.starts_with('/') {
+            continue;
+        }
+        let normalized = trimmed.replace("\\ ", " ");
+        let path = PathBuf::from(normalized);
+        if path.is_absolute() && seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+    paths
 }
 
 fn contains_fenced_code(text: &str) -> bool {
@@ -7265,6 +7502,7 @@ fn normalize_provider_key(provider: &str) -> Option<String> {
         "kimi" | "moonshot" => Some("kimi".to_string()),
         "dashscope" => Some("dashscope".to_string()),
         "codex" | "codex-cli" | "codex_cli" => Some("codex".to_string()),
+        "cli" | "local-cli" | "local_cli" | "command" => Some("cli".to_string()),
         _ => None,
     }
 }
@@ -8172,16 +8410,18 @@ mod tests {
         format_pr_report, format_providers_report, format_resume_report, format_status_report,
         format_theme_report, format_theme_switch_report, format_tool_call_start,
         format_tool_result, format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, normalize_permission_mode, parse_args,
-        parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
-        permission_policy, persist_provider_api_key, print_help_to, push_output_block,
-        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
-        render_repl_help, render_resume_usage, resolve_config_value, resolve_model_alias,
-        resolve_session_reference, response_to_events, resume_supported_slash_commands,
-        run_resume_command, slash_command_completion_candidates_with_sessions, status_context,
-        upsert_export_line, validate_no_args, write_mcp_server_fixture, write_structured_reply,
-        CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary, InternalPromptProgressEvent,
-        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, TokenUsage, DEFAULT_MODEL,
+        format_unknown_slash_command_message, cli_api_adapter_for_model, normalize_permission_mode,
+        parse_args, parse_git_status_branch, parse_git_status_metadata_for,
+        parse_git_workspace_summary, permission_policy, persist_provider_api_key, print_help_to,
+        push_output_block, render_config_report, render_diff_report, render_diff_report_for,
+        render_memory_report, render_repl_help, render_resume_usage, resolve_config_value,
+        resolve_model_alias, resolve_session_reference, response_to_events,
+        resume_supported_slash_commands, run_resume_command,
+        slash_command_completion_candidates_with_sessions, status_context, upsert_export_line,
+        validate_no_args, write_mcp_server_fixture, write_structured_reply, CliAction,
+        CliApiAdapter, CliOutputFormat, CliToolExecutor, CodexCliRuntimeClient, GitWorkspaceSummary,
+        ApiRequest, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
+        StatusUsage, TokenUsage, DEFAULT_MODEL,
     };
     use crate::render::{active_terminal_theme, set_active_terminal_theme, TerminalRenderer, TerminalTheme};
     use api::{MessageResponse, OutputContentBlock, Usage};
@@ -8439,7 +8679,7 @@ mod tests {
             CliAction::Repl {
                 model: DEFAULT_MODEL.to_string(),
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
             }
         );
     }
@@ -9422,6 +9662,124 @@ mod tests {
         assert!(rendered.contains("How can I help?"));
         assert!(!rendered.contains("• Hello"));
         assert!(!rendered.contains("• How can I help"));
+    }
+
+    #[test]
+    fn codex_cli_exec_inherits_workspace_write_permission_mode() {
+        let client = CodexCliRuntimeClient::new(
+            "codex".to_string(),
+            false,
+            PermissionMode::WorkspaceWrite,
+        );
+        let command = client.exec_command(
+            Path::new("/tmp/clawie-project"),
+            Path::new("/tmp/clawie-codex-output.txt"),
+            &[],
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        let sandbox_index = args
+            .iter()
+            .position(|arg| arg == "--sandbox")
+            .expect("codex exec should set a sandbox mode");
+        assert_eq!(
+            args.get(sandbox_index + 1).map(String::as_str),
+            Some("workspace-write")
+        );
+    }
+
+    #[test]
+    fn codex_cli_exec_adds_user_mentioned_absolute_directories() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&cwd).expect("project dir should exist");
+        std::fs::create_dir_all(&downloads).expect("downloads dir should exist");
+        let request = ApiRequest {
+            system_prompt: Vec::new(),
+            messages: vec![ConversationMessage::user_text(format!(
+                "create a landing page in {}",
+                downloads.display()
+            ))],
+        };
+        let add_dirs = CodexCliRuntimeClient::add_dirs_for_request(&request, &cwd);
+        let client = CodexCliRuntimeClient::new(
+            "codex".to_string(),
+            false,
+            PermissionMode::WorkspaceWrite,
+        );
+        let command = client.exec_command(
+            &cwd,
+            &root.join("clawie-codex-output.txt"),
+            &add_dirs,
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        let add_dir_index = args
+            .iter()
+            .position(|arg| arg == "--add-dir")
+            .expect("codex exec should add the user-mentioned directory");
+        assert_eq!(
+            args.get(add_dir_index + 1).map(String::as_str),
+            Some(downloads.to_string_lossy().as_ref())
+        );
+
+        std::fs::remove_dir_all(root).expect("temp root should clean up");
+    }
+
+    #[test]
+    fn model_list_can_route_a_cli_command_as_an_api_adapter() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        std::fs::create_dir_all(cwd.join(".claw")).expect("project config dir should exist");
+        std::fs::create_dir_all(&config_home).expect("config home should exist");
+        std::fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{
+              "provider": "cli",
+              "model": "local-agent",
+              "modelList": [
+                {
+                  "modelName": "local-agent",
+                  "model": "local-model",
+                  "provider": "cli",
+                  "connectMode": "cli",
+                  "api": "fake-ai-cli",
+                  "input": ["run", "--model", "{model}", "-"]
+                }
+              ]
+            }"#,
+        )
+        .expect("project config should write");
+
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        let adapter = with_current_dir(&cwd, || {
+            cli_api_adapter_for_model("local-agent", false, PermissionMode::WorkspaceWrite)
+        })
+        .expect("cli model should resolve to an adapter");
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+
+        match adapter {
+            CliApiAdapter::Generic(client) => {
+                assert_eq!(client.command, "fake-ai-cli");
+                assert_eq!(client.args, vec!["run", "--model", "local-model", "-"]);
+            }
+            CliApiAdapter::Codex(_) => panic!("generic cli model should not use codex adapter"),
+        }
+
+        std::fs::remove_dir_all(root).expect("temp root should clean up");
     }
 
     #[test]
