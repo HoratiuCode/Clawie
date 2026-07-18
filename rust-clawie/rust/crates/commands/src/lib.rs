@@ -113,6 +113,9 @@ pub enum SlashCommand {
     FollowUp {
         message: String,
     },
+    Btw {
+        note: String,
+    },
     Memory,
     Init,
     WebUi,
@@ -139,6 +142,9 @@ pub enum SlashCommand {
         target: Option<String>,
     },
     Agents {
+        args: Option<String>,
+    },
+    Team {
         args: Option<String>,
     },
     Skills {
@@ -353,6 +359,9 @@ pub fn validate_slash_command_input(
         "follow-up" | "followup" => SlashCommand::FollowUp {
             message: require_remainder(command, remainder, "<message>")?,
         },
+        "btw" => SlashCommand::Btw {
+            note: require_remainder(command, remainder, "<note>")?,
+        },
         "memory" => {
             validate_no_args(command, &args)?;
             SlashCommand::Memory
@@ -406,6 +415,7 @@ pub fn validate_slash_command_input(
         "agents" => SlashCommand::Agents {
             args: parse_list_or_help_args(command, remainder)?,
         },
+        "team" => SlashCommand::Team { args: remainder },
         "skills" | "skill" => SlashCommand::Skills {
             args: parse_skills_args(remainder.as_deref())?,
         },
@@ -2510,6 +2520,7 @@ pub fn handle_slash_command(
         | SlashCommand::Chat
         | SlashCommand::Steer { .. }
         | SlashCommand::FollowUp { .. }
+        | SlashCommand::Btw { .. }
         | SlashCommand::Memory
         | SlashCommand::Init
         | SlashCommand::WebUi
@@ -2526,6 +2537,7 @@ pub fn handle_slash_command(
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
         | SlashCommand::Agents { .. }
+        | SlashCommand::Team { .. }
         | SlashCommand::Skills { .. }
         | SlashCommand::Doctor
         | SlashCommand::Login
@@ -2813,6 +2825,12 @@ mod tests {
         );
         assert_eq!(SlashCommand::parse("/chat"), Ok(Some(SlashCommand::Chat)));
         assert_eq!(
+            SlashCommand::parse("/team spawn frontend build landing page"),
+            Ok(Some(SlashCommand::Team {
+                args: Some("spawn frontend build landing page".to_string())
+            }))
+        );
+        assert_eq!(
             SlashCommand::parse("/steer add tests next"),
             Ok(Some(SlashCommand::Steer {
                 message: "add tests next".to_string()
@@ -2828,6 +2846,12 @@ mod tests {
             SlashCommand::parse("/followup then commit"),
             Ok(Some(SlashCommand::FollowUp {
                 message: "then commit".to_string()
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/btw use colors like gray and white"),
+            Ok(Some(SlashCommand::Btw {
+                note: "use colors like gray and white".to_string()
             }))
         );
         assert_eq!(
@@ -3036,6 +3060,7 @@ mod tests {
         assert!(help.contains("/steer <message>"));
         assert!(help.contains("/follow-up <message>"));
         assert!(help.contains("aliases: /followup"));
+        assert!(help.contains("/btw <note>"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
         assert!(help.contains("/webui"));
@@ -3052,7 +3077,7 @@ mod tests {
         assert!(help.contains("/skills [list|install <path>|add <name> :: <instructions>|help]"));
         assert!(help.contains("/lean [lite|full|ultra|off]"));
         assert!(help.contains("/lean-review"));
-        assert_eq!(slash_command_specs().len(), 152);
+        assert_eq!(slash_command_specs().len(), 153);
         assert!(resume_supported_slash_commands().len() >= 42);
     }
 

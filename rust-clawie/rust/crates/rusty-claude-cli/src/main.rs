@@ -10,6 +10,7 @@ mod init;
 mod input;
 mod render;
 mod setup_wizard;
+mod team;
 mod webui;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -2426,6 +2427,8 @@ fn run_resume_command(
         | SlashCommand::DebugToolCall { .. }
         | SlashCommand::Steer { .. }
         | SlashCommand::FollowUp { .. }
+        | SlashCommand::Btw { .. }
+        | SlashCommand::Team { .. }
         | SlashCommand::LeanReview
         | SlashCommand::LeanAudit
         | SlashCommand::LeanDebt
@@ -2587,6 +2590,7 @@ struct LiveCli {
     runtime: BuiltRuntime,
     session: SessionHandle,
     steer_queue: VecDeque<String>,
+    btw_queue: VecDeque<String>,
     follow_up_queue: VecDeque<String>,
 }
 
@@ -3477,6 +3481,7 @@ impl LiveCli {
             runtime,
             session,
             steer_queue: VecDeque::new(),
+            btw_queue: VecDeque::new(),
             follow_up_queue: VecDeque::new(),
         };
         cli.persist_session()?;
@@ -3761,10 +3766,23 @@ impl LiveCli {
         self.print_queue_status();
     }
 
+    fn enqueue_btw(&mut self, note: impl Into<String>) {
+        let note = note.into();
+        if note.trim().is_empty() {
+            return;
+        }
+        self.btw_queue.push_back(format!(
+            "By the way, while continuing the current work: {note}"
+        ));
+        println!("BTW note queued — Clawie will apply it after the current work without interrupting it.");
+        self.print_queue_status();
+    }
+
     fn print_queue_status(&self) {
         println!(
-            "Queued messages\n  Steer            {}\n  Follow-up        {}",
+            "Queued messages\n  Steer            {}\n  BTW notes        {}\n  Follow-up        {}",
             self.steer_queue.len(),
+            self.btw_queue.len(),
             self.follow_up_queue.len()
         );
     }
@@ -3776,6 +3794,14 @@ impl LiveCli {
         }
 
         while self.steer_queue.is_empty() {
+            let Some(note) = self.btw_queue.pop_front() else {
+                break;
+            };
+            println!("BTW\n  Applying queued note");
+            self.run_turn(&note)?;
+        }
+
+        while self.steer_queue.is_empty() && self.btw_queue.is_empty() {
             let Some(message) = self.follow_up_queue.pop_front() else {
                 break;
             };
@@ -4004,6 +4030,11 @@ impl LiveCli {
                 self.drain_queued_turns()?;
                 true
             }
+            SlashCommand::Btw { note } => {
+                self.enqueue_btw(note);
+                self.drain_queued_turns()?;
+                true
+            }
             SlashCommand::Memory => {
                 Self::print_memory()?;
                 false
@@ -4070,6 +4101,10 @@ impl LiveCli {
             }
             SlashCommand::Agents { args } => {
                 Self::print_agents(args.as_deref())?;
+                false
+            }
+            SlashCommand::Team { args } => {
+                println!("{}", team::handle(args.as_deref())?);
                 false
             }
             SlashCommand::Skills { args } => {
@@ -6377,9 +6412,7 @@ fn cli_api_adapter_for_model(
     )))
 }
 
-fn configured_cli_model_connection(
-    model: &str,
-) -> Option<(ModelConnectionDefinition, String)> {
+fn configured_cli_model_connection(model: &str) -> Option<(ModelConnectionDefinition, String)> {
     let cwd = env::current_dir().ok()?;
     let config = ConfigLoader::default_for(cwd).load().ok()?;
     let candidate = config
@@ -8403,29 +8436,31 @@ fn print_help() {
 mod tests {
     use super::{
         build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        create_managed_session_handle, describe_tool_progress, expand_file_mentions_with_roots,
-        extract_file_mentions, filter_tool_specs, final_assistant_text_or_fallback,
-        format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
-        format_compact_report, format_cost_report, format_experimental_report,
-        format_internal_prompt_progress_line, format_issue_report, format_model_report,
-        format_model_switch_report, format_permissions_report, format_permissions_switch_report,
-        format_pr_report, format_providers_report, format_resume_report, format_status_report,
-        format_theme_report, format_theme_switch_report, format_tool_call_start,
-        format_tool_result, format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, cli_api_adapter_for_model, normalize_permission_mode,
-        parse_args, parse_git_status_branch, parse_git_status_metadata_for,
-        parse_git_workspace_summary, permission_policy, persist_provider_api_key, print_help_to,
-        push_output_block, render_config_report, render_diff_report, render_diff_report_for,
-        render_memory_report, render_repl_help, render_resume_usage, resolve_config_value,
-        resolve_model_alias, resolve_session_reference, response_to_events,
-        resume_supported_slash_commands, run_resume_command,
-        slash_command_completion_candidates_with_sessions, status_context, upsert_export_line,
-        validate_no_args, write_mcp_server_fixture, write_structured_reply, CliAction,
-        CliApiAdapter, CliOutputFormat, CliToolExecutor, CodexCliRuntimeClient, GitWorkspaceSummary,
-        ApiRequest, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
-        StatusUsage, TokenUsage, DEFAULT_MODEL,
+        cli_api_adapter_for_model, create_managed_session_handle, describe_tool_progress,
+        expand_file_mentions_with_roots, extract_file_mentions, filter_tool_specs,
+        final_assistant_text_or_fallback, format_bughunter_report, format_commit_preflight_report,
+        format_commit_skipped_report, format_compact_report, format_cost_report,
+        format_experimental_report, format_internal_prompt_progress_line, format_issue_report,
+        format_model_report, format_model_switch_report, format_permissions_report,
+        format_permissions_switch_report, format_pr_report, format_providers_report,
+        format_resume_report, format_status_report, format_theme_report,
+        format_theme_switch_report, format_tool_call_start, format_tool_result,
+        format_ultraplan_report, format_unknown_slash_command,
+        format_unknown_slash_command_message, normalize_permission_mode, parse_args,
+        parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
+        permission_policy, persist_provider_api_key, print_help_to, push_output_block,
+        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
+        render_repl_help, render_resume_usage, resolve_config_value, resolve_model_alias,
+        resolve_session_reference, response_to_events, resume_supported_slash_commands,
+        run_resume_command, slash_command_completion_candidates_with_sessions, status_context,
+        upsert_export_line, validate_no_args, write_mcp_server_fixture, write_structured_reply,
+        ApiRequest, CliAction, CliApiAdapter, CliOutputFormat, CliToolExecutor,
+        CodexCliRuntimeClient, GitWorkspaceSummary, InternalPromptProgressEvent,
+        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, TokenUsage, DEFAULT_MODEL,
     };
-    use crate::render::{active_terminal_theme, set_active_terminal_theme, TerminalRenderer, TerminalTheme};
+    use crate::render::{
+        active_terminal_theme, set_active_terminal_theme, TerminalRenderer, TerminalTheme,
+    };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
         PluginManager, PluginManagerConfig, PluginTool, PluginToolDefinition, PluginToolPermission,
@@ -9668,11 +9703,8 @@ mod tests {
 
     #[test]
     fn codex_cli_exec_inherits_workspace_write_permission_mode() {
-        let client = CodexCliRuntimeClient::new(
-            "codex".to_string(),
-            false,
-            PermissionMode::WorkspaceWrite,
-        );
+        let client =
+            CodexCliRuntimeClient::new("codex".to_string(), false, PermissionMode::WorkspaceWrite);
         let command = client.exec_command(
             Path::new("/tmp/clawie-project"),
             Path::new("/tmp/clawie-codex-output.txt"),
@@ -9708,16 +9740,9 @@ mod tests {
             ))],
         };
         let add_dirs = CodexCliRuntimeClient::add_dirs_for_request(&request, &cwd);
-        let client = CodexCliRuntimeClient::new(
-            "codex".to_string(),
-            false,
-            PermissionMode::WorkspaceWrite,
-        );
-        let command = client.exec_command(
-            &cwd,
-            &root.join("clawie-codex-output.txt"),
-            &add_dirs,
-        );
+        let client =
+            CodexCliRuntimeClient::new("codex".to_string(), false, PermissionMode::WorkspaceWrite);
+        let command = client.exec_command(&cwd, &root.join("clawie-codex-output.txt"), &add_dirs);
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().to_string())

@@ -44,6 +44,15 @@ Manage commits directly from the REPL:
 - `/commit`: Preflight checks changes, generates a commit message, and commits them.
 - `/undo`: Undoes the last commit (soft reset, keeping changes).
 
+### 4.1 Multi-Agent Team Workflow
+Coordinate parallel coding safely from the terminal with `/team`:
+- `/team spawn <name> <task>` creates an isolated Git worktree and branch.
+- `/team assign <name> <file[,file...]>` reserves files to prevent overlapping edits.
+- `/team run <name>` starts the agent in its assigned worktree after ownership is set.
+- `/team context <task>` provides lazy, task-scoped file context without indexing the full repository.
+- `/team ready <name>` runs quality gates and adds the branch to the merge queue.
+- `/team merge <name>` merges one reviewed agent branch at a time.
+
 ### 5. Workspace RAG Service (`claw-rag-service`)
 SQLite-backed vector indexing service for semantic repository searches:
 - **Ingest files**: `cargo run -p claw-rag-service -- ingest --workspace .`

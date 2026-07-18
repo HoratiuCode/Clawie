@@ -867,8 +867,8 @@
   {
     "name": "team",
     "aliases": [],
-    "summary": "Manage agent teams",
-    "argument_hint": "[list|create|delete]",
+    "summary": "Coordinate isolated coding agents, file ownership, and merges",
+    "argument_hint": "[init|spawn|assign|run|status|context|ready|merge|help]",
     "resume_supported": true,
     "category": "Other"
   },
@@ -991,6 +991,14 @@
     ],
     "summary": "Queue a message to run after the agent finishes",
     "argument_hint": "<message>",
+    "resume_supported": false,
+    "category": "Session & visibility"
+  },
+  {
+    "name": "btw",
+    "aliases": [],
+    "summary": "Add a non-interrupting note for Clawie to apply after the current work",
+    "argument_hint": "<note>",
     "resume_supported": false,
     "category": "Session & visibility"
   },

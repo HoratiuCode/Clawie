@@ -365,6 +365,47 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                 .to_string(),
             )
         }
+        line if line.starts_with("GET /api/terminal-connection ") => {
+            let connection = terminal_connection();
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({
+                    "ok": true,
+                    "provider": connection.provider,
+                    "model": connection.model,
+                    "credential_source": connection.credential_source,
+                    "base_url_configured": connection.base_url.is_some(),
+                    "ready": connection.api_key.is_some(),
+                })
+                .to_string(),
+            )
+        }
+        line if line.starts_with("POST /api/terminal-connection/test ") => {
+            let connection = terminal_connection();
+            let api_key = connection.api_key.as_deref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "No API key is available to the terminal for {}.",
+                        connection.provider
+                    ),
+                )
+            })?;
+            match test_api_connection(&TestConnectionRequest {
+                provider: connection.provider,
+                api_key: api_key.to_string(),
+                base_url: connection.base_url,
+                model: Some(connection.model),
+            }) {
+                Ok(()) => write_json_response(stream, "200 OK", r#"{"ok":true}"#),
+                Err(error) => write_json_response(
+                    stream,
+                    "200 OK",
+                    &json!({"ok": false, "error": error.to_string()}).to_string(),
+                ),
+            }
+        }
         line if line.starts_with("GET /api/settings ") => {
             let config_home = runtime::default_config_home();
             let settings_path = config_home.join("settings.json");
@@ -977,6 +1018,106 @@ fn safe_relative_path(input: &str) -> io::Result<PathBuf> {
     Ok(safe)
 }
 
+struct TerminalConnection {
+    provider: String,
+    model: String,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    credential_source: &'static str,
+}
+
+fn terminal_connection() -> TerminalConnection {
+    let settings = read_webui_settings();
+    let provider = env_value("CLAWIE_PROVIDER")
+        .or_else(|| setting_string(&settings, "provider"))
+        .or_else(|| setting_string(&settings, "preferredProvider"))
+        .unwrap_or_else(|| "openai".to_string());
+    let provider = normalize_provider(&provider);
+    let model = env_value("CLAWIE_MODEL")
+        .or_else(|| setting_string(&settings, "model"))
+        .unwrap_or_else(|| default_model_for_provider(&provider).to_string());
+    let (key_names, url_names): (&[&str], &[&str]) = match provider.as_str() {
+        "anthropic" => (&["ANTHROPIC_API_KEY"], &["ANTHROPIC_BASE_URL"]),
+        "gemini" => (&["GEMINI_API_KEY", "GOOGLE_API_KEY"], &["GEMINI_BASE_URL"]),
+        "xai" => (&["XAI_API_KEY"], &["XAI_BASE_URL"]),
+        "kimi" => (
+            &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
+            &["MOONSHOT_BASE_URL"],
+        ),
+        _ => (&["OPENAI_API_KEY"], &["OPENAI_BASE_URL"]),
+    };
+    let terminal_key = first_env_value(key_names);
+    let api_key = terminal_key
+        .clone()
+        .or_else(|| first_setting_value(&settings, key_names));
+    let base_url = first_env_value(url_names).or_else(|| first_setting_value(&settings, url_names));
+    let credential_source = if terminal_key.is_some() {
+        "terminal environment"
+    } else if api_key.is_some() {
+        "Clawie settings"
+    } else {
+        "not configured"
+    };
+
+    TerminalConnection {
+        provider,
+        model,
+        api_key,
+        base_url,
+        credential_source,
+    }
+}
+
+fn read_webui_settings() -> serde_json::Value {
+    let path = runtime::default_config_home().join("settings.json");
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_else(|| json!({}))
+}
+
+fn env_value(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn setting_string(settings: &serde_json::Value, name: &str) -> Option<String> {
+    settings
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn first_env_value(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| env_value(name))
+}
+
+fn first_setting_value(settings: &serde_json::Value, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| setting_string(settings, name))
+}
+
+fn normalize_provider(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" => "anthropic",
+        "gemini" | "google" => "gemini",
+        "xai" | "grok" => "xai",
+        "kimi" | "moonshot" => "kimi",
+        _ => "openai",
+    }
+    .to_string()
+}
+
+fn default_model_for_provider(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" => "claude-3-5-sonnet",
+        "gemini" => "gemini-1.5-pro",
+        "xai" => "grok-3",
+        "kimi" => "moonshot-v1-auto",
+        _ => "gpt-4.1",
+    }
+}
+
 fn test_api_connection(req: &TestConnectionRequest) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -1521,6 +1662,39 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     .sidebar.collapsed > *, .right-sidebar.collapsed > * {
       opacity: 0 !important;
       pointer-events: none !important;
+    }
+
+    #file-sidebar-content, .custom-sidebar-content {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .custom-sidebar-content {
+      overflow-y: auto;
+    }
+
+    .custom-sidebar-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.025);
+      padding: 0.8rem;
+    }
+
+    .custom-sidebar-card h3 {
+      margin: 0 0 0.4rem;
+      font-size: 0.78rem;
+      color: var(--text-primary);
+    }
+
+    .custom-sidebar-card p, .custom-sidebar-empty {
+      margin: 0;
+      white-space: pre-wrap;
+      font-size: 0.75rem;
+      line-height: 1.45;
+      color: var(--text-secondary);
     }
 
     .sidebar-title {
@@ -3836,19 +4010,22 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
   <div class="app">
     <!-- Sidebar -->
     <aside class="sidebar">
-      <div class="sidebar-title">
-        <h2>Files</h2>
-        <button class="icon-btn-circle" id="new-file" title="Create a new file">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-        </button>
+      <div id="file-sidebar-content">
+        <div class="sidebar-title">
+          <h2>Files</h2>
+          <button class="icon-btn-circle" id="new-file" title="Create a new file">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+        </div>
+        <div id="current-folder">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose a save location</span>
+        </div>
+        <div class="file-list" id="file-list">
+          <span class="hint">Loading files...</span>
+        </div>
       </div>
-      <div id="current-folder">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose a save location</span>
-      </div>
-      <div class="file-list" id="file-list">
-        <span class="hint">Loading files...</span>
-      </div>
+      <div id="custom-sidebar-content" class="custom-sidebar-content" hidden></div>
     </aside>
 
     <!-- Main Workspace -->
@@ -3878,6 +4055,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         </div>
         <div style="display: flex; align-items: center; gap: 0.75rem;">
           <div id="status" class="status-pill idle">Ready</div>
+          <div id="terminal-connection" class="status-pill idle" title="Checking the terminal connection">Terminal: checking…</div>
           <button class="icon-btn-circle" id="toggle-folders-btn" title="Toggle Folders Panel">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg>
           </button>
@@ -4425,6 +4603,24 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
                 <option value="slim">Slim Sidebar</option>
               </select>
             </div>
+            <div class="settings-group">
+              <label for="settings-left-sidebar-content">Left Sidebar Content</label>
+              <select id="settings-left-sidebar-content">
+                <option value="files">File Explorer</option>
+                <option value="custom">Custom Panels</option>
+                <option value="hidden">Hide Left Sidebar</option>
+              </select>
+            </div>
+            <div id="custom-sidebar-settings" class="settings-group settings-wide" hidden>
+              <label>Custom Left Panels</label>
+              <p class="settings-help">Add text panels to replace the File Explorer on the left side.</p>
+              <div style="display: grid; grid-template-columns: minmax(120px, 0.6fr) minmax(180px, 1.4fr) auto; gap: 0.5rem; margin-top: 0.5rem; align-items: start;">
+                <input id="custom-sidebar-title" placeholder="Panel title" maxlength="80">
+                <textarea id="custom-sidebar-body" placeholder="What should appear in this panel?" maxlength="1000" rows="2" style="resize: vertical;"></textarea>
+                <button id="custom-sidebar-add" class="settings-btn-secondary" type="button" style="padding: 0.45rem 0.7rem;">Add</button>
+              </div>
+              <div id="custom-sidebar-items" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.65rem;"></div>
+            </div>
             <div class="settings-group settings-wide" style="display: flex; flex-direction: column; gap: 0.5rem;">
               <label>Effects & Animations</label>
               <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.25rem;">
@@ -4448,6 +4644,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         <!-- AI Provider Tab Pane -->
         <div id="tab-provider" class="settings-tab-content">
           <div class="settings-pane-grid">
+            <div class="settings-group settings-wide">
+              <label>Terminal Connection</label>
+              <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.3rem;">
+                <span id="terminal-connection-detail" class="settings-help">Checking the provider available to the terminal…</span>
+                <button id="terminal-connection-test-btn" class="settings-btn-secondary" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Test Terminal Connection</button>
+              </div>
+            </div>
             <div class="settings-group">
               <label for="settings-provider">Active Provider</label>
               <select id="settings-provider">
@@ -5693,11 +5896,20 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const settingsTestConnBtn = document.querySelector('#settings-test-conn-btn');
     const settingsConnStatusContainer = document.querySelector('#settings-conn-status-container');
     const settingsConnStatusText = document.querySelector('#settings-conn-status-text');
+    const terminalConnection = document.querySelector('#terminal-connection');
+    const terminalConnectionDetail = document.querySelector('#terminal-connection-detail');
+    const terminalConnectionTestBtn = document.querySelector('#terminal-connection-test-btn');
 
     const settingsFontUi = document.querySelector('#settings-font-ui');
     const settingsFontCode = document.querySelector('#settings-font-code');
     const settingsLayoutDensity = document.querySelector('#settings-layout-density');
     const settingsSidebarLayout = document.querySelector('#settings-sidebar-layout');
+    const settingsLeftSidebarContent = document.querySelector('#settings-left-sidebar-content');
+    const customSidebarSettings = document.querySelector('#custom-sidebar-settings');
+    const customSidebarTitle = document.querySelector('#custom-sidebar-title');
+    const customSidebarBody = document.querySelector('#custom-sidebar-body');
+    const customSidebarAdd = document.querySelector('#custom-sidebar-add');
+    const customSidebarItems = document.querySelector('#custom-sidebar-items');
     const settingsCustomAccentToggle = document.querySelector('#settings-custom-accent-toggle');
     const settingsCustomAccentColor = document.querySelector('#settings-custom-accent-color');
     const settingsAmbientGlow = document.querySelector('#settings-ambient-glow');
@@ -5723,6 +5935,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     let selectedFontCode = localStorage.getItem('clawie-font-code') || 'jetbrains';
     let selectedLayoutDensity = localStorage.getItem('clawie-layout-density') || 'comfortable';
     let selectedSidebarLayout = localStorage.getItem('clawie-sidebar-layout') || 'expanded';
+    let selectedLeftSidebar = localStorage.getItem('clawie-left-sidebar')
+      || (localStorage.getItem('clawie-files-collapsed') === 'true' ? 'hidden' : 'files');
+    let selectedCustomSidebarItems = readCustomSidebarItems();
     let selectedCustomAccentToggle = localStorage.getItem('clawie-custom-accent-toggle') === "true";
     let selectedCustomAccentColor = localStorage.getItem('clawie-custom-accent-color') || '#f97316';
     let selectedAmbientGlow = localStorage.getItem('clawie-ambient-glow') !== "false";
@@ -5730,6 +5945,101 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     let selectedStatusPulsate = localStorage.getItem('clawie-status-pulsate') !== "false";
 
     let deferredInstallPrompt = null;
+    let designPersistenceReady = false;
+    let designSaveTimer = null;
+
+    function webUiDesignSettings() {
+      return {
+        theme: selectedTheme,
+        app_theme: selectedAppTheme,
+        font_ui: selectedFontUi,
+        font_code: selectedFontCode,
+        layout_density: selectedLayoutDensity,
+        sidebar_layout: selectedSidebarLayout,
+        left_sidebar: selectedLeftSidebar,
+        custom_sidebar_items: selectedCustomSidebarItems,
+        custom_accent_enabled: selectedCustomAccentToggle,
+        custom_accent_color: selectedCustomAccentColor,
+        ambient_glow: selectedAmbientGlow,
+        terminal_glow: selectedTerminalGlow,
+        status_pulsate: selectedStatusPulsate
+      };
+    }
+
+    async function persistWebUiDesign() {
+      if (!designPersistenceReady) return;
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ webui_design: webUiDesignSettings() }),
+          keepalive: true
+        });
+      } catch (error) {
+        console.warn('Failed to persist WebUI design settings', error);
+      }
+    }
+
+    function queueWebUiDesignPersist() {
+      if (!designPersistenceReady) return;
+      clearTimeout(designSaveTimer);
+      designSaveTimer = setTimeout(persistWebUiDesign, 250);
+    }
+
+    async function restoreWebUiDesign() {
+      try {
+        const response = await fetch('/api/settings');
+        const result = await response.json();
+        const design = result?.settings?.webui_design;
+        if (!response.ok || !result.ok || !design || typeof design !== 'object') return;
+        if (design.theme) applyTheme(design.theme);
+        if (design.app_theme) applyAppTheme(design.app_theme);
+        if (design.font_ui) applyFontUi(design.font_ui);
+        if (design.font_code) applyFontCode(design.font_code);
+        if (design.layout_density) applyLayoutDensity(design.layout_density);
+        if (design.sidebar_layout) applySidebarLayout(design.sidebar_layout);
+        if (design.left_sidebar) applyLeftSidebar(design.left_sidebar);
+        if (Array.isArray(design.custom_sidebar_items)) {
+          selectedCustomSidebarItems = sanitizeCustomSidebarItems(design.custom_sidebar_items);
+          localStorage.setItem('clawie-custom-sidebar-items', JSON.stringify(selectedCustomSidebarItems));
+          renderCustomSidebar();
+          renderCustomSidebarSettings();
+        }
+        if (typeof design.ambient_glow === 'boolean') applyAmbientGlow(design.ambient_glow);
+        if (typeof design.terminal_glow === 'boolean') applyTerminalGlow(design.terminal_glow);
+        if (typeof design.status_pulsate === 'boolean') applyStatusPulsate(design.status_pulsate);
+        applyCustomAccent(
+          design.custom_accent_enabled === true,
+          design.custom_accent_color || selectedCustomAccentColor
+        );
+      } catch (error) {
+        console.warn('Failed to restore saved WebUI design settings', error);
+      } finally {
+        designPersistenceReady = true;
+      }
+    }
+
+    async function refreshTerminalConnection() {
+      try {
+        const response = await fetch('/api/terminal-connection');
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Terminal status unavailable');
+        const ready = result.ready === true;
+        const label = `${result.provider} · ${result.model}`;
+        terminalConnection.textContent = ready ? `Terminal ready · ${label}` : `Terminal needs API key · ${label}`;
+        terminalConnection.className = 'status-pill ' + (ready ? 'saved' : 'error');
+        terminalConnection.title = ready
+          ? `Provider: ${result.provider}; model: ${result.model}; credentials from ${result.credential_source}`
+          : `Provider: ${result.provider}; no API key found in the terminal environment or Clawie settings`;
+        terminalConnectionDetail.textContent = ready
+          ? `${label} · API key available from ${result.credential_source}${result.base_url_configured ? ' · custom base URL' : ''}`
+          : `${label} · no API key is available to the terminal`;
+      } catch (error) {
+        terminalConnection.textContent = 'Terminal status unavailable';
+        terminalConnection.className = 'status-pill error';
+        terminalConnectionDetail.textContent = 'Could not read the terminal connection status.';
+      }
+    }
 
     // Appearance helpers
     function applyFontUi(font) {
@@ -5737,6 +6047,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-font-ui', font);
       selectedFontUi = font;
       if (settingsFontUi) settingsFontUi.value = font;
+      queueWebUiDesignPersist();
     }
 
     function applyFontCode(font) {
@@ -5744,6 +6055,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-font-code', font);
       selectedFontCode = font;
       if (settingsFontCode) settingsFontCode.value = font;
+      queueWebUiDesignPersist();
     }
 
     function applyLayoutDensity(density) {
@@ -5751,6 +6063,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-layout-density', density);
       selectedLayoutDensity = density;
       if (settingsLayoutDensity) settingsLayoutDensity.value = density;
+      queueWebUiDesignPersist();
     }
 
     function applySidebarLayout(layout) {
@@ -5758,6 +6071,98 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-sidebar-layout', layout);
       selectedSidebarLayout = layout;
       if (settingsSidebarLayout) settingsSidebarLayout.value = layout;
+      queueWebUiDesignPersist();
+    }
+
+    function sanitizeCustomSidebarItems(items) {
+      return items
+        .filter(item => item && typeof item.title === 'string' && typeof item.body === 'string')
+        .slice(0, 20)
+        .map(item => ({ title: item.title.trim().slice(0, 80), body: item.body.trim().slice(0, 1000) }))
+        .filter(item => item.title || item.body);
+    }
+
+    function readCustomSidebarItems() {
+      try {
+        return sanitizeCustomSidebarItems(JSON.parse(localStorage.getItem('clawie-custom-sidebar-items') || '[]'));
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function saveCustomSidebarItems() {
+      localStorage.setItem('clawie-custom-sidebar-items', JSON.stringify(selectedCustomSidebarItems));
+      renderCustomSidebar();
+      renderCustomSidebarSettings();
+      queueWebUiDesignPersist();
+    }
+
+    function renderCustomSidebar() {
+      const fileContent = document.querySelector('#file-sidebar-content');
+      const customContent = document.querySelector('#custom-sidebar-content');
+      if (!fileContent || !customContent) return;
+      const useCustomPanels = selectedLeftSidebar === 'custom';
+      fileContent.hidden = useCustomPanels;
+      customContent.hidden = !useCustomPanels;
+      customContent.replaceChildren();
+      if (!useCustomPanels) return;
+      const heading = document.createElement('h2');
+      heading.textContent = 'Panels';
+      customContent.append(heading);
+      if (selectedCustomSidebarItems.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'custom-sidebar-empty';
+        empty.textContent = 'No custom panels yet. Add one in Settings → Appearance.';
+        customContent.append(empty);
+        return;
+      }
+      selectedCustomSidebarItems.forEach(item => {
+        const card = document.createElement('section');
+        card.className = 'custom-sidebar-card';
+        const title = document.createElement('h3');
+        title.textContent = item.title || 'Untitled panel';
+        const body = document.createElement('p');
+        body.textContent = item.body;
+        card.append(title, body);
+        customContent.append(card);
+      });
+    }
+
+    function renderCustomSidebarSettings() {
+      if (!customSidebarItems) return;
+      customSidebarItems.replaceChildren();
+      selectedCustomSidebarItems.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:0.75rem; border:1px solid var(--border); border-radius:var(--radius-sm); padding:0.45rem 0.6rem;';
+        const text = document.createElement('span');
+        text.style.cssText = 'font-size:0.75rem; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+        text.textContent = item.title || item.body;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'settings-btn-secondary';
+        remove.textContent = 'Remove';
+        remove.style.cssText = 'padding:0.25rem 0.5rem; font-size:0.68rem;';
+        remove.addEventListener('click', () => {
+          selectedCustomSidebarItems.splice(index, 1);
+          saveCustomSidebarItems();
+        });
+        row.append(text, remove);
+        customSidebarItems.append(row);
+      });
+    }
+
+    function applyLeftSidebar(content) {
+      const next = ['files', 'custom', 'hidden'].includes(content) ? content : 'files';
+      selectedLeftSidebar = next;
+      localStorage.setItem('clawie-left-sidebar', next);
+      localStorage.setItem('clawie-files-collapsed', next === 'hidden');
+      const leftSidebar = document.querySelector('.sidebar');
+      if (leftSidebar) leftSidebar.classList.toggle('collapsed', next === 'hidden');
+      if (settingsLeftSidebarContent) settingsLeftSidebarContent.value = next;
+      if (customSidebarSettings) customSidebarSettings.hidden = next !== 'custom';
+      renderCustomSidebar();
+      renderCustomSidebarSettings();
+      queueWebUiDesignPersist();
     }
 
     function applyAmbientGlow(enabled) {
@@ -5765,6 +6170,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-ambient-glow', enabled ? "true" : "false");
       selectedAmbientGlow = enabled;
       if (settingsAmbientGlow) settingsAmbientGlow.checked = enabled;
+      queueWebUiDesignPersist();
     }
 
     function applyTerminalGlow(enabled) {
@@ -5772,6 +6178,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-terminal-glow', enabled ? "true" : "false");
       selectedTerminalGlow = enabled;
       if (settingsTerminalGlow) settingsTerminalGlow.checked = enabled;
+      queueWebUiDesignPersist();
     }
 
     function applyStatusPulsate(enabled) {
@@ -5779,6 +6186,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       localStorage.setItem('clawie-status-pulsate', enabled ? "true" : "false");
       selectedStatusPulsate = enabled;
       if (settingsStatusPulsate) settingsStatusPulsate.checked = enabled;
+      queueWebUiDesignPersist();
     }
 
     function applyCustomAccent(enabled, hexColor) {
@@ -5802,6 +6210,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       } else {
         applyTheme(selectedTheme);
       }
+      queueWebUiDesignPersist();
     }
 
     function adjustColorBrightness(hex, percent) {
@@ -5827,10 +6236,13 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     applyFontCode(selectedFontCode);
     applyLayoutDensity(selectedLayoutDensity);
     applySidebarLayout(selectedSidebarLayout);
+    applyLeftSidebar(selectedLeftSidebar);
     applyAmbientGlow(selectedAmbientGlow);
     applyTerminalGlow(selectedTerminalGlow);
     applyStatusPulsate(selectedStatusPulsate);
     applyCustomAccent(selectedCustomAccentToggle, selectedCustomAccentColor);
+    restoreWebUiDesign();
+    refreshTerminalConnection();
 
     async function openSettingsPanel(focusTarget = 'openai') {
       try {
@@ -5881,6 +6293,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       applyFontCode(selectedFontCode);
       applyLayoutDensity(selectedLayoutDensity);
       applySidebarLayout(selectedSidebarLayout);
+      applyLeftSidebar(selectedLeftSidebar);
       applyAmbientGlow(selectedAmbientGlow);
       applyTerminalGlow(selectedTerminalGlow);
       applyStatusPulsate(selectedStatusPulsate);
@@ -5995,6 +6408,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       if (themeColorMeta) {
         themeColorMeta.setAttribute('content', themeColor);
       }
+      queueWebUiDesignPersist();
     }
 
     function applyTheme(colorName) {
@@ -6006,6 +6420,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       document.querySelectorAll('.theme-opt').forEach(opt => {
         opt.classList.toggle('active', opt.dataset.color === colorName);
       });
+      queueWebUiDesignPersist();
     }
 
     // Tab switching event listener
@@ -6048,6 +6463,12 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       } else if (provider === 'gemini') {
         key = settingsGeminiKey.value.trim();
         baseUrl = settingsGeminiUrl.value.trim();
+      } else if (provider === 'xai') {
+        key = settingsXaiKey.value.trim();
+        baseUrl = settingsXaiUrl.value.trim();
+      } else if (provider === 'kimi') {
+        key = settingsKimiKey.value.trim();
+        baseUrl = settingsKimiUrl.value.trim();
       } else {
         key = settingsOpenAiKey.value.trim();
         baseUrl = settingsOpenAiUrl.value.trim();
@@ -6092,6 +6513,26 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       }
     });
 
+    terminalConnectionTestBtn.addEventListener('click', async () => {
+      terminalConnectionTestBtn.disabled = true;
+      terminalConnectionTestBtn.textContent = 'Testing terminal…';
+      terminalConnectionDetail.textContent = 'Testing the provider using the credentials available to Clawie in the terminal…';
+      try {
+        const response = await fetch('/api/terminal-connection/test', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Terminal connection failed');
+        terminalConnectionDetail.textContent = 'Terminal connection verified successfully.';
+        terminalConnection.className = 'status-pill saved';
+      } catch (error) {
+        terminalConnectionDetail.textContent = error.message || 'Terminal connection failed.';
+        terminalConnection.className = 'status-pill error';
+      } finally {
+        terminalConnectionTestBtn.disabled = false;
+        terminalConnectionTestBtn.textContent = 'Test Terminal Connection';
+        refreshTerminalConnection();
+      }
+    });
+
     // Custom Accent Color listeners
     settingsCustomAccentToggle.addEventListener('change', () => {
       applyCustomAccent(settingsCustomAccentToggle.checked, settingsCustomAccentColor.value);
@@ -6099,6 +6540,22 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     settingsCustomAccentColor.addEventListener('input', () => {
       applyCustomAccent(settingsCustomAccentToggle.checked, settingsCustomAccentColor.value);
+    });
+
+    settingsLeftSidebarContent.addEventListener('change', () => {
+      applyLeftSidebar(settingsLeftSidebarContent.value);
+    });
+
+    customSidebarAdd.addEventListener('click', () => {
+      const title = customSidebarTitle.value.trim();
+      const body = customSidebarBody.value.trim();
+      if (!title && !body) return;
+      selectedCustomSidebarItems.push({ title, body });
+      selectedCustomSidebarItems = sanitizeCustomSidebarItems(selectedCustomSidebarItems);
+      customSidebarTitle.value = '';
+      customSidebarBody.value = '';
+      applyLeftSidebar('custom');
+      saveCustomSidebarItems();
     });
 
     settingsToggle.addEventListener('click', () => openSettingsPanel());
@@ -6152,6 +6609,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       applyFontCode(settingsFontCode.value);
       applyLayoutDensity(settingsLayoutDensity.value);
       applySidebarLayout(settingsSidebarLayout.value);
+      applyLeftSidebar(settingsLeftSidebarContent.value);
       applyAmbientGlow(settingsAmbientGlow.checked);
       applyTerminalGlow(settingsTerminalGlow.checked);
       applyStatusPulsate(settingsStatusPulsate.checked);
@@ -6168,7 +6626,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           GEMINI_BASE_URL: settingsGeminiUrl.value.trim() || null,
           CLAWIE_LEAN_MODE: selectedLeanMode,
           CLAWIE_MAX_TURNS: selectedMaxTurns,
-          CLAWIE_MAX_BUDGET_TOKENS: selectedTokenBudget
+          CLAWIE_MAX_BUDGET_TOKENS: selectedTokenBudget,
+          webui_design: webUiDesignSettings()
         };
         await fetch('/api/settings', {
           method: 'POST',
@@ -6514,9 +6973,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     const rightSidebar = document.querySelector('.right-sidebar');
 
     toggleFilesBtn.addEventListener('click', () => {
-      sidebar.classList.toggle('collapsed');
-      const collapsed = sidebar.classList.contains('collapsed');
-      localStorage.setItem('clawie-files-collapsed', collapsed);
+      applyLeftSidebar(sidebar.classList.contains('collapsed') ? 'files' : 'hidden');
     });
 
     toggleFoldersBtn.addEventListener('click', () => {
@@ -6526,7 +6983,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     });
 
     if (localStorage.getItem('clawie-files-collapsed') === 'true') {
-      sidebar.classList.add('collapsed');
+      applyLeftSidebar('hidden');
     }
     if (localStorage.getItem('clawie-folders-collapsed') === 'true') {
       rightSidebar.classList.add('collapsed');
