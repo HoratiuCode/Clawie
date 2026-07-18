@@ -106,6 +106,46 @@ pub fn launch() -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
     Ok((url, output_dir))
 }
 
+/// Keeps the Web UI process available from the macOS menu bar.
+///
+/// This is intentionally run only after the HTTP server and browser have been
+/// started. Closing the terminal is no longer required to keep the Web UI
+/// running while the Web Console is active.
+#[cfg(target_os = "macos")]
+pub fn keep_alive_in_menu_bar() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    };
+    use objc2_foundation::NSString;
+
+    // AppKit owns the event loop until the user chooses Quit Clawie. The
+    // status-bar item retains its menu, so it remains visible for that whole
+    // period without needing a Dock icon.
+    let mtm = MainThreadMarker::new().expect("the Web UI must start on the main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+    let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
+    let button = status_item
+        .button(mtm)
+        .expect("status-bar item has a button");
+    button.setTitle(&NSString::from_str("C"));
+    button.setToolTip(Some(&NSString::from_str("Clawie Web Console")));
+
+    let menu = NSMenu::new(mtm);
+    let running = NSMenuItem::new(mtm);
+    running.setTitle(&NSString::from_str("Clawie Web Console is running"));
+    running.setEnabled(false);
+    menu.addItem(&running);
+    status_item.setMenu(Some(&menu));
+
+    app.run();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn keep_alive_in_menu_bar() {}
+
 fn documents_output_dir() -> io::Result<PathBuf> {
     let home = env::var_os("HOME")
         .map(PathBuf::from)

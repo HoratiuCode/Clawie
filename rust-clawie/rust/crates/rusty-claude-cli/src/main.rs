@@ -169,6 +169,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "Web UI opened\n  URL              {url}\n  Saved files      {}",
                 output_dir.display()
             );
+            webui::keep_alive_in_menu_bar();
         }
         CliAction::Repl {
             model,
@@ -4017,6 +4018,7 @@ impl LiveCli {
                     "Web UI opened\n  URL              {url}\n  Saved files      {}",
                     output_dir.display()
                 );
+                webui::keep_alive_in_menu_bar();
                 false
             }
             SlashCommand::Diff => {
