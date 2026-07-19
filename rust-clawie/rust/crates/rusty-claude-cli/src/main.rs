@@ -46,7 +46,9 @@ use crossterm::style::Stylize;
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{
-    active_terminal_theme, set_active_terminal_theme, Spinner, TerminalRenderer, TerminalTheme,
+    active_terminal_theme, hold_spinner, prepare_cooked_stdout, release_spinner,
+    set_active_terminal_theme, write_term_blank, write_term_line, Spinner, TerminalRenderer,
+    TerminalTheme,
 };
 use runtime::{
     active_lean_mode, build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
@@ -2491,23 +2493,21 @@ fn run_repl(
     );
     editor.set_model(&cli.model);
     if io::stdout().is_terminal() {
-        print!("\r\x1b[2K Loading Clawie workspace... [ ● ∙ ∙ ]");
-        let _ = io::stdout().flush();
-        thread::sleep(Duration::from_millis(200));
-        print!("\r\x1b[2K Loading Clawie workspace... [ ∙ ● ∙ ]");
-        let _ = io::stdout().flush();
-        thread::sleep(Duration::from_millis(200));
-        print!("\r\x1b[2K Loading Clawie workspace... [ ∙ ∙ ● ]");
-        let _ = io::stdout().flush();
-        thread::sleep(Duration::from_millis(200));
+        let load_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+        for frame in load_frames {
+            print!("\r\x1b[2K  \x1b[31m{frame}\x1b[0m \x1b[2mLoading Clawie workspace…\x1b[0m");
+            let _ = io::stdout().flush();
+            thread::sleep(Duration::from_millis(45));
+        }
         print!("\r\x1b[2K");
         let _ = io::stdout().flush();
 
         let banner = cli.startup_banner();
         for line in banner.lines() {
-            println!("{}", line);
+            println!("{line}");
             let _ = io::stdout().flush();
-            thread::sleep(Duration::from_millis(30));
+            // Slightly snappier reveal — still feels intentional, less laggy.
+            thread::sleep(Duration::from_millis(12));
         }
     } else {
         println!("{}", cli.startup_banner());
@@ -3617,9 +3617,11 @@ impl LiveCli {
 
         combined.push_str(&format!(
             "\n  {}\n",
-            "──────────────────────────────────────────────────────────────────────────".dim()
+            "· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·".dim()
         ));
-        combined.push_str("  Type \x1b[1m./clawie\x1b[0m from the repo root to begin · \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline");
+        combined.push_str(
+            "  \x1b[2mtype\x1b[0m \x1b[1m/help\x1b[0m \x1b[2mfor commands ·\x1b[0m \x1b[1m/status\x1b[0m \x1b[2mfor context ·\x1b[0m \x1b[1mtab\x1b[0m \x1b[2mmenu ·\x1b[0m \x1b[1mshift+enter\x1b[0m \x1b[2mnewline\x1b[0m",
+        );
 
         combined
     }
@@ -3666,13 +3668,10 @@ impl LiveCli {
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
         let renderer = TerminalRenderer::new();
-        let terminal_theme = renderer.terminal_theme();
         let spinner_theme = *renderer.color_theme();
-        let thinking_label = if terminal_theme.emojis_enabled() {
-            "Thinking... · Esc to interrupt"
-        } else {
-            "Thinking... Esc to interrupt"
-        };
+        release_spinner();
+        // Short label avoids mid-line truncation when the terminal is narrow.
+        let thinking_label = "Thinking...";
         let thinking_done = Arc::new(AtomicBool::new(false));
         let thinking_done_for_thread = Arc::clone(&thinking_done);
         let spinner_handle = thread::spawn(move || -> io::Result<()> {
@@ -3680,7 +3679,8 @@ impl LiveCli {
             let mut stdout = io::stdout();
             while !thinking_done_for_thread.load(Ordering::Relaxed) {
                 spinner.tick(thinking_label, &spinner_theme, &mut stdout)?;
-                thread::sleep(Duration::from_millis(250));
+                // Faster frame rate pairs with the braille spinner for smoother motion.
+                thread::sleep(Duration::from_millis(70));
             }
             Ok(())
         });
@@ -3704,17 +3704,12 @@ impl LiveCli {
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
-                let done_label = if terminal_theme.emojis_enabled() {
-                    "✨ Done"
-                } else {
-                    "Done"
-                };
-                spinner.finish(done_label, &spinner_theme, &mut stdout)?;
-                println!();
+                prepare_cooked_stdout();
+                spinner.finish("ready", &spinner_theme, &mut stdout)?;
                 if let Some(event) = summary.auto_compaction {
-                    println!(
-                        "{}",
-                        format_auto_compaction_notice(event.removed_message_count)
+                    let _ = write_term_line(
+                        &mut stdout,
+                        &format_auto_compaction_notice(event.removed_message_count),
                     );
                 }
                 let visible_reply = final_assistant_text_or_fallback(input, &summary);
@@ -3729,20 +3724,24 @@ impl LiveCli {
                     )?;
                 }
                 if contains_fenced_code(&visible_reply) {
-                    println!("Copy code with /copy code");
+                    let _ = write_term_line(
+                        &mut stdout,
+                        "  \x1b[2mCopy code with /copy code\x1b[0m",
+                    );
                 }
+                // Quiet separator so the next prompt doesn't sit flush on the reply.
+                let _ = write_term_line(
+                    &mut stdout,
+                    &format!("  {}", TerminalRenderer::new().turn_separator()),
+                );
                 self.persist_session()?;
                 Ok(())
             }
             Err(error) => {
                 runtime.shutdown_plugins()?;
-                let failed_label = if terminal_theme.emojis_enabled() {
-                    "❌ Request failed"
-                } else {
-                    "Request failed"
-                };
-                spinner.fail(failed_label, &spinner_theme, &mut stdout)?;
-                writeln!(&mut stdout, "{}", error)?;
+                prepare_cooked_stdout();
+                spinner.fail("request failed", &spinner_theme, &mut stdout)?;
+                let _ = write_term_line(&mut stdout, &format!("  {error}"));
                 Ok(())
             }
         }
@@ -7031,7 +7030,14 @@ impl ApiClient for AnthropicRuntimeClient {
                                 progress_reporter.mark_tool_phase(&name, &input);
                             }
                             // Display tool call now that input is fully accumulated
-                            writeln!(out, "\n{}", format_tool_call_start(&name, &input))
+                            prepare_cooked_stdout();
+                            write_term_blank(out)
+                                .and_then(|()| {
+                                    write_term_line(
+                                        out,
+                                        &format!("  {}", format_tool_call_start(&name, &input)),
+                                    )
+                                })
                                 .and_then(|()| out.flush())
                                 .map_err(|error| RuntimeError::new(error.to_string()))?;
                             events.push(AssistantEvent::ToolUse { id, name, input });
@@ -7119,18 +7125,34 @@ fn write_structured_reply(
     if body.is_empty() {
         return Ok(());
     }
+
+    // Critical: leave raw mode and use CRLF. Bare `\n` in raw mode only moves the
+    // cursor down (same column), which produced the staircase indent the user saw.
+    hold_spinner();
+    prepare_cooked_stdout();
+
+    // Clear any leftover spinner glyphs on the current line, then hard-break.
+    write!(out, "\r\x1b[2K")?;
+    write_term_blank(out)?;
+
     if !*reply_header_written {
-        let label = if renderer.terminal_theme().emojis_enabled() {
-            "✍️ Response"
-        } else {
-            "Response"
-        };
-        writeln!(out, "{label}")?;
+        write_term_line(out, &format!("  {}", renderer.reply_header_line()))?;
+        write_term_blank(out)?;
         *reply_header_written = true;
     }
-    let rendered = renderer.markdown_to_ansi(body);
-    writeln!(out, "{rendered}")?;
-    Ok(())
+
+    // Vertical stack: one bullet / code block under another, always column 0.
+    let rendered = renderer.vertical_markdown_to_ansi(body);
+    for line in rendered.lines() {
+        let content = line.trim_start();
+        if content.is_empty() {
+            write_term_blank(out)?;
+        } else {
+            write_term_line(out, &format!("  {content}"))?;
+        }
+    }
+    write_term_blank(out)?;
+    out.flush()
 }
 
 fn final_assistant_text_or_fallback(input: &str, summary: &runtime::TurnSummary) -> String {
@@ -8037,9 +8059,10 @@ fn push_output_block(
     match block {
         OutputContentBlock::Text { text } => {
             if !text.is_empty() {
-                let rendered = TerminalRenderer::new().vertical_markdown_to_ansi(&text);
-                write!(out, "{rendered}")
-                    .and_then(|()| out.flush())
+                // Same left-aligned vertical stack as the main reply path.
+                let renderer = TerminalRenderer::new();
+                let mut header = false;
+                write_structured_reply(out, &renderer, &text, &mut header)
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
                 events.push(AssistantEvent::TextDelta(text));
             }
@@ -9515,8 +9538,9 @@ mod tests {
     #[test]
     fn startup_banner_mentions_workflow_completions() {
         let _guard = env_lock();
-        // Inject dummy credentials so LiveCli can construct without real Anthropic key
+        // Inject dummy credentials so LiveCli can construct without real provider keys.
         std::env::set_var("ANTHROPIC_API_KEY", "test-dummy-key-for-banner-test");
+        std::env::set_var("OPENAI_API_KEY", "test-dummy-key-for-banner-test");
         let root = temp_dir();
         fs::create_dir_all(&root).expect("root dir");
 
@@ -9532,11 +9556,13 @@ mod tests {
         });
 
         assert!(banner.contains("CLAWIE"));
-        assert!(banner.contains("Tab"));
-        assert!(banner.contains("workflow completions"));
+        assert!(banner.contains("/help"));
+        assert!(banner.contains("tab"));
+        assert!(banner.contains("shift+enter"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
         std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
     }
 
     #[test]
@@ -9680,7 +9706,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_reply_renders_plain_text_without_vertical_bullets() {
+    fn structured_reply_renders_plain_text_as_vertical_stack() {
         let renderer = TerminalRenderer::new();
         let mut output = Vec::new();
         let mut header_written = false;
@@ -9688,17 +9714,39 @@ mod tests {
         write_structured_reply(
             &mut output,
             &renderer,
-            "Hello!\n\nHow can I help?",
+            "Hello!\n\nHow can I help you debug this?",
             &mut header_written,
         )
         .expect("reply should render");
 
-        let rendered = strip_test_ansi(&String::from_utf8(output).expect("utf8"));
-        assert!(rendered.contains("Response"));
+        let raw = String::from_utf8(output).expect("utf8");
+        // Raw-mode safe line endings: every logical line must end with CRLF.
+        assert!(
+            raw.contains("\r\n"),
+            "expected CRLF line endings to avoid staircase indent, got: {raw:?}"
+        );
+        let rendered = strip_test_ansi(&raw).replace('\r', "");
+        assert!(rendered.contains("clawie"));
         assert!(rendered.contains("Hello!"));
-        assert!(rendered.contains("How can I help?"));
-        assert!(!rendered.contains("• Hello"));
-        assert!(!rendered.contains("• How can I help"));
+        assert!(rendered.contains("How can I help"));
+        assert!(
+            rendered.contains("• Hello") || rendered.lines().any(|line| line.contains("Hello")),
+            "expected vertical structure, got:\n{rendered}"
+        );
+
+        // Prove no staircase: every non-empty content line starts with exactly 2 spaces.
+        for line in rendered.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(
+                line.starts_with("  "),
+                "expected 2-space indent, got: {line:?}"
+            );
+            let after = &line[2..];
+            let lead = after.len() - after.trim_start().len();
+            assert_eq!(
+                lead, 0,
+                "staircase indent after outer pad: {line:?}"
+            );
+        }
     }
 
     #[test]

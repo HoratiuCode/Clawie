@@ -12,5 +12,11 @@ if [[ "${1:-}" == "--ide" ]]; then
 	exec "$repo_root/clawie_ide/scripts/code.sh" "$repo_root" --open-devtools "$@"
 fi
 
-# Default: run the Clawie agent CLI directly
-exec cargo run --manifest-path "$repo_root/rust-clawie/rust/Cargo.toml" -p rusty-claude-cli --bin claw -- "$@"
+# Default: build latest CLI then run it (avoids stale binaries).
+manifest="$repo_root/rust-clawie/rust/Cargo.toml"
+if ! cargo build --manifest-path "$manifest" -p rusty-claude-cli --bin claw; then
+  echo "error: failed to build claw" >&2
+  exit 1
+fi
+bin="$repo_root/rust-clawie/rust/target/debug/claw"
+exec "$bin" "$@"

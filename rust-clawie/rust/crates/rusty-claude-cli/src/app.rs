@@ -597,13 +597,21 @@ impl CliApp {
         if body.is_empty() {
             return Ok(());
         }
+        crate::render::hold_spinner();
         if !*reply_header_written {
-            writeln!(out, "✍️ Response")?;
+            writeln!(out, "  {}", renderer.reply_header_line())?;
             *reply_header_written = true;
         }
         let rendered = renderer.vertical_markdown_to_ansi(body);
-        writeln!(out, "{rendered}")?;
-        Ok(())
+        for line in rendered.lines() {
+            if line.is_empty() {
+                writeln!(out)?;
+            } else {
+                writeln!(out, "  {line}")?;
+            }
+        }
+        writeln!(out)?;
+        out.flush()
     }
 
     fn handle_stream_event(
@@ -673,11 +681,19 @@ impl CliApp {
         match self.config.output_format {
             OutputFormat::Text => {
                 if !summary.assistant_text.trim().is_empty() {
-                    writeln!(out, "✍️ Response")?;
+                    writeln!(out)?;
+                    writeln!(out, "  {}", self.renderer.reply_header_line())?;
                     let rendered = self
                         .renderer
                         .vertical_markdown_to_ansi(summary.assistant_text.trim());
-                    writeln!(out, "{rendered}")?;
+                    for line in rendered.lines() {
+                        if line.is_empty() {
+                            writeln!(out)?;
+                        } else {
+                            writeln!(out, "  {line}")?;
+                        }
+                    }
+                    writeln!(out)?;
                 }
                 writeln!(
                     out,

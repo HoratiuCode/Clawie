@@ -42,6 +42,7 @@ static SLASH_MENU_REQUESTED: AtomicBool = AtomicBool::new(false);
 static FOLLOW_UP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub fn prompt_prefix() -> &'static str {
+    // Keep this free of ANSI: rustyline measures the active prompt for cursor x.
     "📁 clawie › "
 }
 
@@ -50,8 +51,7 @@ pub fn prompt_prefix() -> &'static str {
 #[must_use]
 pub fn render_input_status_bar(model: &str) -> String {
     format!(
-        "\x1b[2m  model: {}  ·  Ctrl+C / Esc to interrupt\x1b[0m",
-        model
+        "\x1b[2m╭\x1b[0m \x1b[2mmodel\x1b[0m \x1b[37m{model}\x1b[0m  \x1b[2m·  ctrl+c / esc interrupt  ·  tab menu\x1b[0m"
     )
 }
 
@@ -276,14 +276,14 @@ impl LineEditor {
 
         let mut initial_text = String::new();
         loop {
-            // Build a three-line prompt: branding on first line, status bar on second, input cursor prompt on third.
+            // Two-line composer: quiet status rail, then the branded input cursor.
             let full_prompt = if self.model.is_empty() {
                 self.prompt.clone()
             } else {
                 format!(
-                    "{}\n{}\n› ",
-                    self.prompt.trim_end(),
-                    render_input_status_bar(&self.model)
+                    "{}\n{}",
+                    render_input_status_bar(&self.model),
+                    self.prompt.trim_end()
                 )
             };
 
@@ -743,11 +743,11 @@ impl TerminalComponent for MenuFrame<'_> {
     fn render(&self, terminal_width: usize) -> Vec<String> {
         let max_width = terminal_width.saturating_sub(4).clamp(36, 96);
         let query_line = if self.query.is_empty() {
-            "Search: ".to_string()
+            "search  ".to_string()
         } else {
-            format!("Search: {}", self.query)
+            format!("search  {}", self.query)
         };
-        let footer = "↑↓ move · Enter select · Backspace edit · Ctrl+U clear · Esc cancel";
+        let footer = "↑↓ move · enter select · esc cancel";
         let mut body = vec![
             self.kind.title().to_string(),
             dim(self.kind.subtitle()),
@@ -765,18 +765,19 @@ impl TerminalComponent for MenuFrame<'_> {
             .max(34);
 
         let mut lines = Vec::with_capacity(body.len() + 2);
-        lines.push(red(&format!("╭{}╮", "─".repeat(inner_width + 2))));
+        // Soft dim frame reads less harsh than a solid red box.
+        lines.push(dim(&format!("╭{}╮", "─".repeat(inner_width + 2))));
         for (index, line) in body.iter().enumerate() {
             let content = truncate_to_width(line, inner_width);
             let padded = pad_to_width(&content, inner_width);
             let rendered = if index == 0 {
-                red(&format!("│ {padded} │"))
+                format!("{} {} {}", dim("│"), red(&padded), dim("│"))
             } else {
-                format!("│ {padded} │")
+                format!("{} {padded} {}", dim("│"), dim("│"))
             };
             lines.push(rendered);
         }
-        lines.push(red(&format!("╰{}╯", "─".repeat(inner_width + 2))));
+        lines.push(dim(&format!("╰{}╯", "─".repeat(inner_width + 2))));
         lines
     }
 }
@@ -1254,7 +1255,8 @@ mod tests {
     fn input_status_bar_includes_model_and_interrupt_hint() {
         let bar = render_input_status_bar("claude-3-5-sonnet");
         assert!(bar.contains("claude-3-5-sonnet"));
-        assert!(bar.contains("Ctrl+C"));
-        assert!(bar.contains("Esc"));
+        assert!(bar.contains("ctrl+c"));
+        assert!(bar.contains("esc"));
+        assert!(bar.contains("tab menu"));
     }
 }

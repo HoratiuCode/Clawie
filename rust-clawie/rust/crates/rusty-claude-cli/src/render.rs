@@ -1,9 +1,9 @@
 use std::fmt::Write as FmtWrite;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Instant;
 
-use crossterm::cursor::{MoveToColumn, RestorePosition, SavePosition};
+use crossterm::cursor::MoveToColumn;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor, Stylize};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{execute, queue};
@@ -14,6 +14,44 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
 
 static ACTIVE_TERMINAL_THEME: AtomicU8 = AtomicU8::new(TerminalTheme::Emoji as u8);
+/// When true, the live spinner stops redrawing so reply text can own the line.
+static SPINNER_HELD: AtomicBool = AtomicBool::new(false);
+
+/// Pause the thinking spinner so streamed / structured replies are not overwritten.
+pub fn hold_spinner() {
+    SPINNER_HELD.store(true, Ordering::Relaxed);
+}
+
+/// Allow the thinking spinner to redraw again (call at the start of each turn).
+pub fn release_spinner() {
+    SPINNER_HELD.store(false, Ordering::Relaxed);
+}
+
+/// Ensure the terminal is not in raw mode and every line starts at column 0.
+///
+/// In raw mode, bare `\n` only moves the cursor down (same column) — that is what
+/// produced the staircase:
+/// ```text
+///   ✦ clawie
+///             • Hello!
+///                       • How can I help?
+/// ```
+pub fn prepare_cooked_stdout() {
+    let _ = crossterm::terminal::disable_raw_mode();
+}
+
+/// Write one left-aligned terminal line using CRLF (raw-mode safe).
+pub fn write_term_line(out: &mut (impl Write + ?Sized), line: &str) -> io::Result<()> {
+    out.write_all(line.as_bytes())?;
+    out.write_all(b"\r\n")?;
+    Ok(())
+}
+
+/// Write a blank terminal line (raw-mode safe).
+pub fn write_term_blank(out: &mut (impl Write + ?Sized)) -> io::Result<()> {
+    out.write_all(b"\r\n")?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalTheme {
@@ -116,7 +154,8 @@ impl ColorTheme {
                 quote: Color::DarkGrey,
                 table_border: Color::DarkRed,
                 code_block_border: Color::DarkGrey,
-                spinner_active: Color::White,
+                // Soft red pulse on the active frame reads smoother than pure white.
+                spinner_active: Color::DarkRed,
                 spinner_done: Color::Green,
                 spinner_failed: Color::Red,
             },
@@ -129,7 +168,7 @@ impl ColorTheme {
                 quote: Color::DarkGrey,
                 table_border: Color::Grey,
                 code_block_border: Color::DarkGrey,
-                spinner_active: Color::White,
+                spinner_active: Color::Grey,
                 spinner_done: Color::White,
                 spinner_failed: Color::Grey,
             },
@@ -153,7 +192,8 @@ impl Default for Spinner {
 }
 
 impl Spinner {
-    const FRAMES: [&str; 1] = ["●"];
+    /// Braille spinner frames — reads as continuous motion in the terminal.
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     const TRAILING_DOTS: [&str; 4] = [".  ", ".. ", "...", "   "];
 
     #[must_use]
@@ -167,6 +207,10 @@ impl Spinner {
         theme: &ColorTheme,
         out: &mut impl Write,
     ) -> io::Result<()> {
+        // Reply text owns the terminal — do not fight it for the current line.
+        if SPINNER_HELD.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let frame = Self::FRAMES[self.frame_index % Self::FRAMES.len()];
         let animated_label = if let Some(prefix) = label.strip_suffix("...") {
             let dots = Self::TRAILING_DOTS[self.frame_index % Self::TRAILING_DOTS.len()];
@@ -176,20 +220,21 @@ impl Spinner {
         };
         let elapsed_seconds = self.started_at.elapsed().as_secs();
         let display_label = if elapsed_seconds > 0 {
-            format!("{animated_label} {elapsed_seconds}s")
+            format!("{animated_label}  \x1b[2m{elapsed_seconds}s\x1b[0m")
         } else {
             animated_label
         };
         self.frame_index += 1;
+        // Always redraw from column 0. End with \r so the cursor sits at the
+        // start of this line for the next tick / reply takeover.
         queue!(
             out,
-            SavePosition,
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             SetForegroundColor(theme.spinner_active),
-            Print(format!("{frame} {display_label}")),
+            Print(format!("  {frame} {display_label}")),
             ResetColor,
-            RestorePosition
+            Print("\r")
         )?;
         out.flush()
     }
@@ -201,12 +246,13 @@ impl Spinner {
         out: &mut impl Write,
     ) -> io::Result<()> {
         self.frame_index = 0;
+        prepare_cooked_stdout();
         execute!(
             out,
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             SetForegroundColor(theme.spinner_done),
-            Print(format!("✔ {label}\n")),
+            Print(format!("  ✓ {label}\r\n")),
             ResetColor
         )?;
         out.flush()
@@ -219,12 +265,13 @@ impl Spinner {
         out: &mut impl Write,
     ) -> io::Result<()> {
         self.frame_index = 0;
+        prepare_cooked_stdout();
         execute!(
             out,
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             SetForegroundColor(theme.spinner_failed),
-            Print(format!("✘ {label}\n")),
+            Print(format!("  ✗ {label}\r\n")),
             ResetColor
         )?;
         out.flush()
@@ -345,7 +392,22 @@ pub struct TerminalRenderer {
     color_theme: ColorTheme,
 }
 
-const VERTICAL_REPLY_WRAP_WIDTH: usize = 42;
+/// Keep replies intentionally narrow so long answers stack vertically
+/// (one idea / step / command under another) instead of wide walls of text.
+const VERTICAL_REPLY_WRAP_WIDTH_MIN: usize = 40;
+const VERTICAL_REPLY_WRAP_WIDTH_MAX: usize = 56;
+const VERTICAL_REPLY_WRAP_WIDTH_FALLBACK: usize = 48;
+
+fn reply_wrap_width() -> usize {
+    crossterm::terminal::size()
+        .ok()
+        .map(|(cols, _)| {
+            // Prefer ~half a typical terminal so blocks stack top-to-bottom.
+            let usable = (cols as usize).saturating_sub(8).min(cols as usize * 2 / 3);
+            usable.clamp(VERTICAL_REPLY_WRAP_WIDTH_MIN, VERTICAL_REPLY_WRAP_WIDTH_MAX)
+        })
+        .unwrap_or(VERTICAL_REPLY_WRAP_WIDTH_FALLBACK)
+}
 
 impl Default for TerminalRenderer {
     fn default() -> Self {
@@ -409,9 +471,158 @@ impl TerminalRenderer {
 
     #[must_use]
     pub fn vertical_markdown_to_ansi(&self, markdown: &str) -> String {
-        let normalized = normalize_reply_markdown(markdown);
-        let reflowed = reflow_markdown_for_vertical_layout(&normalized, VERTICAL_REPLY_WRAP_WIDTH);
-        self.render_markdown(&reflowed)
+        // Custom vertical stack — do NOT route structured bullets through the
+        // general markdown list renderer (that path was producing staircase indents).
+        self.render_vertical_chat(markdown)
+    }
+
+    /// Soft chat-style header for assistant replies.
+    #[must_use]
+    pub fn reply_header_line(&self) -> String {
+        let accent = match self.terminal_theme {
+            TerminalTheme::Chrome => "\x1b[37m",
+            _ => "\x1b[31m",
+        };
+        if self.terminal_theme.emojis_enabled() {
+            format!("{accent}✦\x1b[0m \x1b[1mclawie\x1b[0m")
+        } else {
+            format!("{accent}·\x1b[0m \x1b[1mclawie\x1b[0m")
+        }
+    }
+
+    /// Dim horizontal rule used as a quiet turn separator.
+    #[must_use]
+    pub fn turn_separator(&self) -> String {
+        let width = reply_wrap_width().min(36);
+        format!("\x1b[2m{}\x1b[0m", "·".repeat(width.max(10)))
+    }
+
+    /// Build a left-aligned vertical chat body:
+    ///   • sentence one
+    ///   • sentence two
+    ///   ╭─ bash
+    ///   │ command
+    ///   ╰─
+    fn render_vertical_chat(&self, markdown: &str) -> String {
+        let structured = structure_reply_markdown(markdown);
+        let wrap = reply_wrap_width();
+        let mut lines: Vec<String> = Vec::new();
+        let mut in_fence = false;
+        let mut fence_lang = String::new();
+        let mut fence_body = String::new();
+
+        let push_blank = |lines: &mut Vec<String>| {
+            if lines.last().is_some_and(|l| !l.is_empty()) {
+                lines.push(String::new());
+            }
+        };
+
+        for raw in structured.lines() {
+            // Never inherit accidental leading spaces — force column 0 content.
+            let line = raw.trim_start();
+
+            if line.starts_with("```") || line.starts_with("~~~") {
+                if !in_fence {
+                    in_fence = true;
+                    fence_lang = line
+                        .trim_start_matches('`')
+                        .trim_start_matches('~')
+                        .trim()
+                        .to_string();
+                    if fence_lang.is_empty() {
+                        fence_lang = "code".to_string();
+                    }
+                    fence_body.clear();
+                } else {
+                    in_fence = false;
+                    push_blank(&mut lines);
+                    lines.extend(self.format_code_rail_block(&fence_lang, &fence_body));
+                    push_blank(&mut lines);
+                    fence_lang.clear();
+                    fence_body.clear();
+                }
+                continue;
+            }
+
+            if in_fence {
+                if !fence_body.is_empty() {
+                    fence_body.push('\n');
+                }
+                fence_body.push_str(raw.trim_end());
+                continue;
+            }
+
+            if line.is_empty() {
+                push_blank(&mut lines);
+                continue;
+            }
+
+            if line.starts_with('#') {
+                push_blank(&mut lines);
+                let heading = line.trim_start_matches('#').trim();
+                lines.push(format!(
+                    "{}",
+                    heading.bold().with(self.color_theme.heading)
+                ));
+                push_blank(&mut lines);
+                continue;
+            }
+
+            if line.starts_with('>') {
+                let quote = line.trim_start_matches('>').trim();
+                for wrapped in wrap_with_prefix(quote, "│ ", "│ ", wrap) {
+                    lines.push(format!("{}", wrapped.with(self.color_theme.quote)));
+                }
+                continue;
+            }
+
+            if let Some((marker, rest)) = split_list_marker(line) {
+                let is_ordered = marker.as_bytes().first().is_some_and(u8::is_ascii_digit);
+                let (first_prefix, cont_prefix) = if is_ordered {
+                    (marker.to_string(), " ".repeat(marker.chars().count()))
+                } else {
+                    // Always top-level bullets — never nested staircase.
+                    ("• ".to_string(), "  ".to_string())
+                };
+                for wrapped in wrap_with_prefix(rest, &first_prefix, &cont_prefix, wrap) {
+                    lines.push(wrapped);
+                }
+                continue;
+            }
+
+            // Plain prose line → top-level bullet, always left-aligned.
+            for wrapped in wrap_with_prefix(line, "• ", "  ", wrap) {
+                lines.push(wrapped);
+            }
+        }
+
+        if in_fence {
+            push_blank(&mut lines);
+            lines.extend(self.format_code_rail_block(&fence_lang, &fence_body));
+        }
+
+        // Collapse trailing blanks.
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
+    fn format_code_rail_block(&self, language: &str, code: &str) -> Vec<String> {
+        let border = self.color_theme.code_block_border;
+        let label = if language.is_empty() { "code" } else { language };
+        let mut lines = Vec::new();
+        lines.push(format!("{}", format!("╭─ {label}").bold().with(border)));
+        let highlighted = self.highlight_code(code, language);
+        for line in highlighted.split_inclusive('\n') {
+            let content = line.strip_suffix('\n').unwrap_or(line);
+            lines.push(format!("{}{content}", format!("│ ").with(border)));
+        }
+        if code.is_empty() {
+            lines.push(format!("{}", "│ ".with(border)));
+        }
+        lines.push(format!("{}", "╰─".bold().with(border)));
+        lines
     }
 
     #[allow(clippy::too_many_lines)]
@@ -609,6 +820,9 @@ impl TerminalRenderer {
         } else {
             code_language.to_string()
         };
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
         let _ = writeln!(
             output,
             "{}",
@@ -622,13 +836,31 @@ impl TerminalRenderer {
         if code_language == "diff" {
             output.push_str(&self.render_pretty_diff(code_buffer));
         } else {
-            output.push_str(&self.highlight_code(code_buffer, code_language));
-            let _ = write!(
+            let rail = format!("{}", "│ ".with(self.color_theme.code_block_border));
+            let highlighted = self.highlight_code(code_buffer, code_language);
+            for line in highlighted.split_inclusive('\n') {
+                let (content, newline) = line
+                    .strip_suffix('\n')
+                    .map_or((line, false), |body| (body, true));
+                // Skip pure-empty trailing lines from the highlighter.
+                if content.is_empty() && !newline {
+                    continue;
+                }
+                output.push_str(&rail);
+                output.push_str(content);
+                if newline {
+                    output.push('\n');
+                }
+            }
+            if !output.ends_with('\n') {
+                output.push('\n');
+            }
+            let _ = writeln!(
                 output,
                 "{}",
                 "╰─".bold().with(self.color_theme.code_block_border)
             );
-            output.push_str("\n\n");
+            output.push('\n');
         }
     }
 
@@ -867,39 +1099,162 @@ fn reflow_markdown_for_vertical_layout(markdown: &str, wrap_width: usize) -> Str
     output.join("\n")
 }
 
-fn normalize_reply_markdown(markdown: &str) -> String {
-    if looks_structured(markdown) {
-        return markdown.to_string();
+/// Rewrite assistant markdown so long answers read as a vertical stack:
+/// one sentence / step / block under another, with blank lines between sections.
+fn structure_reply_markdown(markdown: &str) -> String {
+    let mut output: Vec<String> = Vec::new();
+    let mut in_fence = false;
+    let mut fence_buf: Vec<String> = Vec::new();
+    let mut para_buf: Vec<String> = Vec::new();
+
+    let flush_para = |para_buf: &mut Vec<String>, output: &mut Vec<String>| {
+        if para_buf.is_empty() {
+            return;
+        }
+        let text = para_buf
+            .drain(..)
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.is_empty() {
+            return;
+        }
+        // Keep short one-liners as a single bullet; split denser prose.
+        let sentences = split_into_sentences(&text)
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        if sentences.is_empty() {
+            output.push(format!("- {text}"));
+        } else {
+            for sentence in sentences {
+                output.push(format!("- {sentence}"));
+            }
+        }
+        output.push(String::new());
+    };
+
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            flush_para(&mut para_buf, &mut output);
+            if !in_fence {
+                in_fence = true;
+                fence_buf.clear();
+                fence_buf.push(trimmed.to_string());
+            } else {
+                in_fence = false;
+                fence_buf.push(trimmed.to_string());
+                // Blank line before / after code so it sits alone in the stack.
+                if output.last().is_some_and(|l| !l.is_empty()) {
+                    output.push(String::new());
+                }
+                output.extend(fence_buf.drain(..));
+                output.push(String::new());
+            }
+            continue;
+        }
+
+        if in_fence {
+            // Preserve code body (trim only trailing whitespace noise).
+            fence_buf.push(line.trim_end().to_string());
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            flush_para(&mut para_buf, &mut output);
+            continue;
+        }
+
+        if trimmed.starts_with('#') {
+            flush_para(&mut para_buf, &mut output);
+            if output.last().is_some_and(|l| !l.is_empty()) {
+                output.push(String::new());
+            }
+            output.push(trimmed.to_string());
+            output.push(String::new());
+            continue;
+        }
+
+        if is_markdown_list_item(trimmed) || trimmed.starts_with('>') || trimmed.starts_with('|') {
+            flush_para(&mut para_buf, &mut output);
+            // Long list items → one sentence per line under the same marker when dense.
+            if let Some((marker, rest)) = split_list_marker(trimmed) {
+                let sentences = split_into_sentences(rest)
+                    .into_iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>();
+                // Always same-level items — nested "  - " caused staircase indents.
+                if sentences.is_empty() {
+                    output.push(format!("{marker}{rest}"));
+                } else {
+                    for sentence in sentences {
+                        output.push(format!("{marker}{sentence}"));
+                    }
+                }
+            } else {
+                output.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        para_buf.push(trimmed.to_string());
     }
 
-    let sentences = split_into_sentences(markdown)
-        .into_iter()
-        .filter(|sentence| !sentence.trim().is_empty())
-        .map(|sentence| format!("- {}", sentence.trim()))
-        .collect::<Vec<_>>();
-
-    if sentences.is_empty() {
-        markdown.to_string()
-    } else {
-        sentences.join("\n")
+    flush_para(&mut para_buf, &mut output);
+    if in_fence {
+        // Unclosed fence — still emit what we have.
+        if output.last().is_some_and(|l| !l.is_empty()) {
+            output.push(String::new());
+        }
+        output.extend(fence_buf.drain(..));
     }
+
+    // Collapse runs of more than one blank line.
+    let mut cleaned: Vec<String> = Vec::with_capacity(output.len());
+    for line in output {
+        if line.is_empty() && cleaned.last().is_some_and(String::is_empty) {
+            continue;
+        }
+        cleaned.push(line);
+    }
+    while cleaned.last().is_some_and(String::is_empty) {
+        cleaned.pop();
+    }
+    cleaned.join("\n")
 }
 
-fn looks_structured(markdown: &str) -> bool {
-    markdown.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with('#')
-            || trimmed.starts_with("- ")
-            || trimmed.starts_with("* ")
-            || trimmed.starts_with("+ ")
-            || trimmed.starts_with("1. ")
-            || trimmed.starts_with("2. ")
-            || trimmed.starts_with("3. ")
-            || trimmed.starts_with('>')
-            || trimmed.starts_with('|')
-            || trimmed.starts_with("```")
-            || trimmed.starts_with("~~~")
-    })
+fn is_markdown_list_item(trimmed: &str) -> bool {
+    if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+        return true;
+    }
+    let digits = trimmed
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .count();
+    digits > 0 && trimmed[digits..].starts_with(". ")
+}
+
+fn split_list_marker(trimmed: &str) -> Option<(&str, &str)> {
+    for prefix in ["- ", "* ", "+ "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return Some((prefix, rest.trim()));
+        }
+    }
+    let digits = trimmed
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .count();
+    if digits > 0 && trimmed[digits..].starts_with(". ") {
+        let marker = &trimmed[..digits + 2];
+        let rest = trimmed[digits + 2..].trim();
+        return Some((marker, rest));
+    }
+    None
 }
 
 fn split_into_sentences(text: &str) -> Vec<String> {
@@ -1115,9 +1470,43 @@ mod tests {
         let plain_text = strip_ansi(&markdown_output);
 
         assert!(plain_text.contains("╭─ rust"));
+        assert!(plain_text.contains("│ "));
         assert!(plain_text.contains("fn hi"));
+        assert!(plain_text.contains("╰─"));
         assert!(markdown_output.contains('\u{1b}'));
         assert!(markdown_output.contains("[48;5;236m"));
+    }
+
+    #[test]
+    fn structures_mixed_prose_and_code_vertically() {
+        let terminal_renderer = TerminalRenderer::new();
+        let markdown_output = terminal_renderer.vertical_markdown_to_ansi(
+            "I can’t open folders outside the workspace. On macOS, run:\n\n```bash\nopen ~/Downloads\n```\n\nThat opens Finder to your Downloads folder.",
+        );
+        let plain_text = strip_ansi(&markdown_output);
+        let lines: Vec<&str> = plain_text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        assert!(
+            lines.iter().any(|line| line.starts_with('•') || line.starts_with("- ")),
+            "prose should become vertical bullets: {plain_text}"
+        );
+        assert!(plain_text.contains("╭─ bash"));
+        assert!(plain_text.contains("open ~/Downloads"));
+        assert!(plain_text.contains("╰─"));
+        // Code body should be left-railed, not drifting far right.
+        for line in plain_text.lines() {
+            if line.contains("open ~/Downloads") {
+                let leading = line.len() - line.trim_start().len();
+                assert!(
+                    leading < 4,
+                    "code line should be left-aligned, got leading={leading}: {line:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1137,18 +1526,27 @@ mod tests {
     fn vertically_reflows_long_bullets_before_rendering() {
         let terminal_renderer = TerminalRenderer::new();
         let markdown_output = terminal_renderer.vertical_markdown_to_ansi(
-            "- Open and view the file's contents\n- Edit or replace text in the file",
+            "- Open and view the file's contents and more detail here\n- Edit or replace text in the file with a longer description",
         );
         let plain_text = strip_ansi(&markdown_output);
 
         assert!(plain_text
             .lines()
             .any(|line| line.contains("Open and view the file")));
-        assert!(plain_text.lines().any(|line| line.contains("contents")));
         assert!(plain_text
             .lines()
-            .any(|line| line.contains("Edit or replace text in the")));
-        assert!(plain_text.lines().any(|line| line.contains("file")));
+            .any(|line| line.contains("Edit or replace text")));
+        // New bullets start at column 0; wrap continuations may use 2 spaces only.
+        for line in plain_text.lines().filter(|l| !l.is_empty()) {
+            let lead = line.len() - line.trim_start().len();
+            assert!(
+                lead == 0 || lead == 2,
+                "staircase indent in: {line:?} (lead={lead})"
+            );
+            if line.trim_start().starts_with('•') {
+                assert_eq!(lead, 0, "bullet must be left-aligned: {line:?}");
+            }
+        }
     }
 
     #[test]
@@ -1165,6 +1563,34 @@ mod tests {
         assert!(plain_text
             .lines()
             .any(|line| line.contains("Please specify")));
+        for line in plain_text.lines().filter(|l| !l.is_empty()) {
+            let lead = line.len() - line.trim_start().len();
+            assert!(
+                lead == 0 || lead == 2,
+                "staircase indent in: {line:?} (lead={lead})"
+            );
+            if line.trim_start().starts_with('•') {
+                assert_eq!(lead, 0, "bullet must be left-aligned: {line:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn hello_reply_is_left_aligned_vertical_stack() {
+        let terminal_renderer = TerminalRenderer::new();
+        let plain = strip_ansi(
+            &terminal_renderer.vertical_markdown_to_ansi("Hello!\n\nHow can I help?"),
+        );
+        let lines: Vec<&str> = plain.lines().filter(|l| !l.is_empty()).collect();
+        assert!(lines[0].starts_with("• Hello"), "got: {plain:?}");
+        assert!(
+            lines.iter().any(|l| l.starts_with('•') && l.contains("How can I help")),
+            "got: {plain:?}"
+        );
+        for line in &lines {
+            let lead = line.len() - line.trim_start().len();
+            assert_eq!(lead, 0, "bullet lines must be flush left: {line:?}");
+        }
     }
 
     #[test]
