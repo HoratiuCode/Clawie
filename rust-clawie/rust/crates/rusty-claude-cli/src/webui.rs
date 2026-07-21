@@ -71,6 +71,39 @@ struct InstanceActionRequest {
     action: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct AutomationSaveRequest {
+    id: Option<String>,
+    name: Option<String>,
+    workflow: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct AutomationDeleteRequest {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AutomationRunRequest {
+    /// Full workflow document (preferred for unsaved canvas runs).
+    workflow: Option<serde_json::Value>,
+    /// Saved workflow id (loaded from disk when workflow body omitted).
+    id: Option<String>,
+    model: Option<String>,
+    openai_api_key: Option<String>,
+    anthropic_api_key: Option<String>,
+    gemini_api_key: Option<String>,
+    xai_api_key: Option<String>,
+    kimi_api_key: Option<String>,
+    openai_base_url: Option<String>,
+    gemini_base_url: Option<String>,
+    xai_base_url: Option<String>,
+    kimi_base_url: Option<String>,
+    lean_mode: Option<String>,
+    max_turns: Option<u32>,
+    token_budget: Option<u32>,
+}
+
 pub fn launch() -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
     let output_dir = documents_output_dir()?;
     fs::create_dir_all(&output_dir)?;
@@ -106,45 +139,155 @@ pub fn launch() -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
     Ok((url, output_dir))
 }
 
-/// Keeps the Web UI process available from the macOS menu bar.
+/// Keeps the Web UI process available from the macOS menu bar ("C" status item).
 ///
-/// This is intentionally run only after the HTTP server and browser have been
-/// started. Closing the terminal is no longer required to keep the Web UI
-/// running while the Web Console is active.
+/// Menu actions:
+/// - **Open Web UI** — re-open the local console in the default browser
+/// - **Stop Web Console** — terminate this process (stops the local server)
+///
+/// Closing the terminal is not required while the menu-bar item is alive.
 #[cfg(target_os = "macos")]
-pub fn keep_alive_in_menu_bar() {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{
-        NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    };
-    use objc2_foundation::NSString;
+pub fn keep_alive_in_menu_bar(url: &str) {
+    use std::sync::OnceLock;
 
-    // AppKit owns the event loop until the user chooses Quit Clawie. The
-    // status-bar item retains its menu, so it remains visible for that whole
-    // period without needing a Dock icon.
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, Sel};
+    use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuItem, NSStatusBar,
+    };
+    use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
+
+    static WEBUI_URL: OnceLock<String> = OnceLock::new();
+    let _ = WEBUI_URL.set(url.to_string());
+
+    /// Target for status-bar menu item actions.
+    #[derive(Debug, Default)]
+    struct StatusBarIvars;
+
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements; controller has no Drop.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = StatusBarIvars]
+        #[name = "ClawieWebUiStatusBarController"]
+        struct StatusBarController;
+
+        unsafe impl NSObjectProtocol for StatusBarController {}
+
+        impl StatusBarController {
+            /// Re-open the local Web UI in the default browser.
+            #[unsafe(method(openWebUi:))]
+            fn open_web_ui(&self, _sender: Option<&AnyObject>) {
+                if let Some(url) = WEBUI_URL.get() {
+                    let _ = Command::new("open").arg(url).spawn();
+                }
+            }
+
+            /// Stop the Web Console instance (terminates this process + HTTP server).
+            #[unsafe(method(stopWebConsole:))]
+            fn stop_web_console(&self, _sender: Option<&AnyObject>) {
+                let mtm = MainThreadMarker::from(self);
+                let app = NSApplication::sharedApplication(mtm);
+                app.terminate(None);
+            }
+        }
+    );
+
+    impl StatusBarController {
+        fn new(mtm: MainThreadMarker) -> Retained<Self> {
+            let this = Self::alloc(mtm).set_ivars(StatusBarIvars);
+            // SAFETY: NSObject's init signature is correct.
+            unsafe { msg_send![super(this), init] }
+        }
+
+        fn as_any(&self) -> &AnyObject {
+            // StatusBarController is an NSObject subclass; cast to AnyObject for setTarget.
+            let ptr = self as *const Self as *const AnyObject;
+            // SAFETY: Self is a valid Objective-C object for the menu lifetime.
+            unsafe { &*ptr }
+        }
+    }
+
+    fn menu_item(
+        mtm: MainThreadMarker,
+        title: &str,
+        action: Option<Sel>,
+        key: &str,
+        target: Option<&AnyObject>,
+        enabled: bool,
+    ) -> Retained<NSMenuItem> {
+        // SAFETY: initWithTitle:action:keyEquivalent: is the standard AppKit initializer.
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(title),
+                action,
+                &NSString::from_str(key),
+            )
+        };
+        if let Some(target) = target {
+            // SAFETY: target is retained on the stack for the whole AppKit run loop.
+            unsafe { item.setTarget(Some(target)) };
+        }
+        item.setEnabled(enabled);
+        item
+    }
+
     let mtm = MainThreadMarker::new().expect("the Web UI must start on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+    let controller = StatusBarController::new(mtm);
+    let target = controller.as_any();
 
     let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
     let button = status_item
         .button(mtm)
         .expect("status-bar item has a button");
     button.setTitle(&NSString::from_str("C"));
-    button.setToolTip(Some(&NSString::from_str("Clawie Web Console")));
+    button.setToolTip(Some(&NSString::from_str(
+        "Clawie Web Console — click for Open / Stop",
+    )));
 
     let menu = NSMenu::new(mtm);
-    let running = NSMenuItem::new(mtm);
-    running.setTitle(&NSString::from_str("Clawie Web Console is running"));
-    running.setEnabled(false);
-    menu.addItem(&running);
+    menu.setTitle(&NSString::from_str("Clawie"));
+
+    menu.addItem(&menu_item(
+        mtm,
+        "Clawie Web Console is running",
+        None,
+        "",
+        None,
+        false,
+    ));
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    menu.addItem(&menu_item(
+        mtm,
+        "Open Web UI",
+        Some(sel!(openWebUi:)),
+        "o",
+        Some(target),
+        true,
+    ));
+    menu.addItem(&menu_item(
+        mtm,
+        "Stop Web Console",
+        Some(sel!(stopWebConsole:)),
+        "q",
+        Some(target),
+        true,
+    ));
+
     status_item.setMenu(Some(&menu));
 
+    // Keep controller + status item alive for the AppKit run loop.
+    let _keep = (controller, status_item);
     app.run();
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn keep_alive_in_menu_bar() {}
+pub fn keep_alive_in_menu_bar(_url: &str) {}
 
 fn documents_output_dir() -> io::Result<PathBuf> {
     let home = env::var_os("HOME")
@@ -507,6 +650,67 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                     "path": file_path.display().to_string(),
                 })
                 .to_string(),
+            )
+        }
+        // ── Automations API (Phase A: persist + run once + history) ──────────
+        line if line.starts_with("GET /automations ")
+            || line.starts_with("GET /automations?") =>
+        {
+            let workflows = list_automations()?;
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({"ok": true, "workflows": workflows}).to_string(),
+            )
+        }
+        line if line.starts_with("GET /automations/get?") => {
+            let id = query_value(request_line, "id").ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "missing automation id")
+            })?;
+            let workflow = load_automation(&id)?;
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({"ok": true, "workflow": workflow}).to_string(),
+            )
+        }
+        line if line.starts_with("POST /automations/save ") => {
+            let payload: AutomationSaveRequest =
+                parse_json_body(&request, header_end, "automation save")?;
+            let saved = save_automation(
+                payload.id.as_deref(),
+                payload.name.as_deref(),
+                payload.workflow,
+            )?;
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({"ok": true, "workflow": saved}).to_string(),
+            )
+        }
+        line if line.starts_with("POST /automations/delete ") => {
+            let payload: AutomationDeleteRequest =
+                parse_json_body(&request, header_end, "automation delete")?;
+            delete_automation(&payload.id)?;
+            write_json_response(stream, "200 OK", r#"{"ok":true}"#)
+        }
+        line if line.starts_with("GET /automations/runs") => {
+            let workflow_id = query_value(request_line, "workflow_id");
+            let runs = list_automation_runs(workflow_id.as_deref())?;
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({"ok": true, "runs": runs}).to_string(),
+            )
+        }
+        line if line.starts_with("POST /automations/run ") => {
+            let payload: AutomationRunRequest =
+                parse_json_body(&request, header_end, "automation run")?;
+            let run = run_automation_once(&payload)?;
+            write_json_response(
+                stream,
+                "200 OK",
+                &json!({"ok": true, "run": run}).to_string(),
             )
         }
         _ => write_json_response(
@@ -1433,6 +1637,468 @@ fn run_clawie_prompt(
     }))
 }
 
+// ── Automations persistence + run-once executor ─────────────────────────────
+
+fn automations_root() -> io::Result<PathBuf> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("USERPROFILE").map(PathBuf::from))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
+    let root = env::var_os("CLAW_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claw"))
+        .join("automations");
+    fs::create_dir_all(root.join("workflows"))?;
+    fs::create_dir_all(root.join("runs"))?;
+    Ok(root)
+}
+
+fn safe_automation_id(id: &str) -> io::Result<String> {
+    let id = id.trim();
+    if id.is_empty()
+        || id.len() > 80
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid automation id",
+        ));
+    }
+    Ok(id.to_string())
+}
+
+fn new_automation_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("wf_{nanos}")
+}
+
+fn now_rfc3339() -> String {
+    // Keep dependency-free: unix seconds is enough for UI sorting/display.
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
+}
+
+fn list_automations() -> io::Result<Vec<serde_json::Value>> {
+    let dir = automations_root()?.join("workflows");
+    let mut items = Vec::new();
+    if !dir.exists() {
+        return Ok(items);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)?;
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+            items.push(json!({
+                "id": value.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                "name": value.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled"),
+                "updated_at": value.get("updated_at").cloned().unwrap_or(json!("")),
+                "trigger": value.get("trigger").cloned().unwrap_or(json!({})),
+                "action_count": value.get("actions").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0),
+            }));
+        }
+    }
+    items.sort_by(|a, b| {
+        let ab = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+        let aa = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+        ab.cmp(aa)
+    });
+    Ok(items)
+}
+
+fn load_automation(id: &str) -> io::Result<serde_json::Value> {
+    let id = safe_automation_id(id)?;
+    let path = automations_root()?.join("workflows").join(format!("{id}.json"));
+    let content = fs::read_to_string(&path).map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            io::Error::new(io::ErrorKind::NotFound, "automation not found")
+        } else {
+            e
+        }
+    })?;
+    serde_json::from_str(&content)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+}
+
+fn save_automation(
+    id: Option<&str>,
+    name: Option<&str>,
+    mut workflow: serde_json::Value,
+) -> io::Result<serde_json::Value> {
+    let id = match id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(existing) => safe_automation_id(existing)?,
+        None => new_automation_id(),
+    };
+    let name = name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            workflow
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("Untitled workflow")
+        .to_string();
+
+    if let Some(obj) = workflow.as_object_mut() {
+        obj.insert("id".into(), json!(id));
+        obj.insert("name".into(), json!(name));
+        obj.insert("updated_at".into(), json!(now_rfc3339()));
+    } else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "workflow must be a JSON object",
+        ));
+    }
+
+    let path = automations_root()?.join("workflows").join(format!("{id}.json"));
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&workflow)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?,
+    )?;
+    Ok(workflow)
+}
+
+fn delete_automation(id: &str) -> io::Result<()> {
+    let id = safe_automation_id(id)?;
+    let path = automations_root()?.join("workflows").join(format!("{id}.json"));
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn list_automation_runs(workflow_id: Option<&str>) -> io::Result<Vec<serde_json::Value>> {
+    let dir = automations_root()?.join("runs");
+    let mut runs = Vec::new();
+    if !dir.exists() {
+        return Ok(runs);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)?;
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(filter) = workflow_id {
+                let wid = value
+                    .get("workflow_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if wid != filter {
+                    continue;
+                }
+            }
+            runs.push(value);
+        }
+    }
+    runs.sort_by(|a, b| {
+        let ab = b.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
+        let aa = a.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
+        ab.cmp(aa)
+    });
+    // Keep the list bounded for the UI.
+    runs.truncate(50);
+    Ok(runs)
+}
+
+fn save_automation_run(run: &serde_json::Value) -> io::Result<()> {
+    let id = run
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "run missing id"))?;
+    let id = safe_automation_id(id)?;
+    let path = automations_root()?.join("runs").join(format!("{id}.json"));
+    fs::write(
+        path,
+        serde_json::to_string_pretty(run)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?,
+    )?;
+    Ok(())
+}
+
+fn run_automation_once(payload: &AutomationRunRequest) -> io::Result<serde_json::Value> {
+    let workflow = if let Some(wf) = &payload.workflow {
+        wf.clone()
+    } else if let Some(id) = payload.id.as_deref() {
+        load_automation(id)?
+    } else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "provide workflow body or saved id",
+        ));
+    };
+
+    let workflow_id = workflow
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unsaved")
+        .to_string();
+    let workflow_name = workflow
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Untitled workflow")
+        .to_string();
+    let actions = workflow
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let run_id = format!(
+        "run_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let started_at = now_rfc3339();
+    let mut steps = Vec::new();
+    let mut overall_ok = true;
+    let mut context_snippets: Vec<String> = Vec::new();
+
+    // Trigger is recorded as a synthetic first step (manual run always fires).
+    let trigger_type = workflow
+        .get("trigger")
+        .and_then(|t| t.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Manual");
+    let trigger_value = workflow
+        .get("trigger")
+        .and_then(|t| t.get("value"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    steps.push(json!({
+        "node_id": "trigger",
+        "title": format!("Trigger: {trigger_type}"),
+        "type": "trigger",
+        "status": "success",
+        "output": if trigger_value.is_empty() {
+            "Manual run started".to_string()
+        } else {
+            format!("{trigger_type}: {trigger_value}")
+        },
+        "error": null,
+    }));
+
+    for action in actions {
+        let node_id = action
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("action")
+            .to_string();
+        let title = action
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Action")
+            .to_string();
+        let node_type = action
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let values = action
+            .get("values")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let primary = values
+            .first()
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let continue_on_error = action
+            .get("settings")
+            .and_then(|s| s.get("continueOnError"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let retry = action
+            .get("settings")
+            .and_then(|s| s.get("retryOnFailure"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let mut attempts = 0u32;
+        let max_attempts = if retry { 3 } else { 1 };
+        let (step_status, step_output, step_error) = loop {
+            attempts += 1;
+            match execute_automation_action(
+                &node_type,
+                &title,
+                &primary,
+                &values,
+                &context_snippets,
+                payload,
+            ) {
+                Ok(output) => break ("success", output, None),
+                Err(err) => {
+                    if attempts >= max_attempts {
+                        break ("failed", String::new(), Some(err.to_string()));
+                    }
+                }
+            }
+        };
+
+        if step_status == "success" && !step_output.is_empty() {
+            context_snippets.push(format!("{title}: {step_output}"));
+            // Cap context growth for later AI steps.
+            if context_snippets.len() > 6 {
+                context_snippets.remove(0);
+            }
+        }
+        if step_status == "failed" {
+            overall_ok = false;
+        }
+
+        steps.push(json!({
+            "node_id": node_id,
+            "title": title,
+            "type": node_type,
+            "status": step_status,
+            "output": step_output,
+            "error": step_error,
+            "attempts": attempts,
+        }));
+
+        if step_status == "failed" && !continue_on_error {
+            break;
+        }
+    }
+
+    let finished_at = now_rfc3339();
+    let run = json!({
+        "id": run_id,
+        "workflow_id": workflow_id,
+        "workflow_name": workflow_name,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "status": if overall_ok { "success" } else { "failed" },
+        "steps": steps,
+    });
+    // Best-effort persistence — still return the run if write fails.
+    let _ = save_automation_run(&run);
+    Ok(run)
+}
+
+fn execute_automation_action(
+    node_type: &str,
+    title: &str,
+    primary: &str,
+    values: &[serde_json::Value],
+    context: &[String],
+    payload: &AutomationRunRequest,
+) -> io::Result<String> {
+    let kind = node_type.to_ascii_lowercase();
+    // Normalize class-ish type names from the UI (ai-agent, bash, notify, …).
+    let is_ai = kind.contains("ai")
+        || kind.contains("agent")
+        || kind.contains("summarize")
+        || kind.contains("email")
+        || kind == "simple-agent"
+        || kind == "ai-agent";
+    let is_notify = kind.contains("notify") || kind.contains("slack");
+    let is_bash = kind.contains("bash") || kind.contains("shell");
+    let is_http = kind.contains("http");
+
+    if is_notify {
+        let msg = if primary.is_empty() {
+            format!("Notification: {title}")
+        } else {
+            primary.to_string()
+        };
+        return Ok(msg);
+    }
+
+    if is_http {
+        return Ok(
+            "HTTP nodes are saved but not executed in Phase A (use AI/bash for now).".into(),
+        );
+    }
+
+    if is_bash {
+        // Intentionally not executing arbitrary shell in Phase A for safety.
+        return Ok(
+            "Shell node recorded (execution disabled in Phase A — use AI Agent for tasks)."
+                .into(),
+        );
+    }
+
+    if is_ai || !primary.is_empty() {
+        let mut prompt = if primary.is_empty() {
+            format!(
+                "You are running as an automation step titled \"{title}\". \
+                 Complete this automation step and report what you did in under 12 bullet points."
+            )
+        } else {
+            primary.to_string()
+        };
+        if !context.is_empty() {
+            prompt.push_str("\n\n## Previous automation step outputs\n");
+            for item in context {
+                prompt.push_str("- ");
+                prompt.push_str(item);
+                prompt.push('\n');
+            }
+        }
+        // Prefer shorter turns for automation steps unless user set max_turns.
+        let max_turns = payload.max_turns.or(Some(8));
+        let result = run_clawie_prompt(
+            &prompt,
+            payload.model.as_deref(),
+            payload.openai_api_key.as_deref(),
+            payload.anthropic_api_key.as_deref(),
+            payload.gemini_api_key.as_deref(),
+            payload.xai_api_key.as_deref(),
+            payload.kimi_api_key.as_deref(),
+            payload.openai_base_url.as_deref(),
+            payload.gemini_base_url.as_deref(),
+            payload.xai_base_url.as_deref(),
+            payload.kimi_base_url.as_deref(),
+            payload.lean_mode.as_deref(),
+            max_turns,
+            payload.token_budget,
+        )?;
+        let reply = result
+            .get("reply")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if reply.is_empty() {
+            Ok("Step finished with no text output.".into())
+        } else {
+            Ok(reply)
+        }
+    } else if kind.contains("routing") || kind.contains("iterator") || kind.contains("nested") {
+        Ok(format!(
+            "Step \"{title}\" skipped (type `{node_type}` not executed in Phase A)."
+        ))
+    } else {
+        // Unknown node with no prompt — skip gracefully.
+        let _ = values;
+        Ok(format!(
+            "Step \"{title}\" recorded (no runnable payload for type `{node_type}`)."
+        ))
+    }
+}
+
 fn clean_api_key(key: Option<&str>) -> Option<&str> {
     let key = key?.trim();
     if key.is_empty() || is_placeholder_api_key(key) {
@@ -1765,6 +2431,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       width: 100%;
       background: transparent;
       border: none;
+      border-left: 3px solid transparent;
       color: var(--text-secondary);
       padding: 0.5rem 0.75rem;
       text-align: left;
@@ -1778,18 +2445,25 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      transition: all 0.15s ease;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
     }
-
     .file:hover {
       background: var(--hover-bg);
       color: var(--text-primary);
     }
-
     .file.active {
       background: var(--accent-soft);
+      border-left-color: var(--accent);
       color: var(--text-primary);
       font-weight: 600;
+    }
+    .file .file-ext {
+      margin-left: auto;
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding-left: 0.5rem;
     }
 
     .hint {
@@ -1942,20 +2616,93 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     .workspace-content-wrap {
       width: 100%;
-      max-width: 1400px;
+      max-width: 1600px;
       height: 100%;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1.5rem;
+      display: flex;
+      flex-direction: row;
+      gap: 0;
+      min-height: 0;
+      align-items: stretch;
+    }
+
+    .workspace-content-wrap .chat-panel {
+      flex: 0 0 var(--code-chat-width, 42%);
+      width: var(--code-chat-width, 42%);
+      max-width: 70%;
+      min-width: 280px;
+    }
+
+    .workspace-content-wrap .editor-panel {
+      flex: 1 1 auto;
+      min-width: 280px;
+      height: auto !important;
+    }
+
+    .code-split-handle {
+      flex: 0 0 8px;
+      cursor: col-resize;
+      position: relative;
+      z-index: 5;
+      background: transparent;
+    }
+    .code-split-handle::after {
+      content: "";
+      position: absolute;
+      top: 12%;
+      bottom: 12%;
+      left: 3px;
+      width: 2px;
+      border-radius: 99px;
+      background: var(--border);
+      transition: background 0.15s ease, box-shadow 0.15s ease;
+    }
+    .code-split-handle:hover::after,
+    .code-split-handle.dragging::after {
+      background: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .code-context-strip {
+      width: 100%;
+      max-width: 1600px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.35rem 0.15rem 0.85rem;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      flex: none;
+    }
+    .code-context-strip strong {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+    .code-context-strip .ctx-sep {
+      opacity: 0.45;
+      margin: 0 0.35rem;
+    }
+    .code-context-strip .ctx-ready {
+      color: var(--ok);
     }
 
     @media (max-width: 1200px) {
       .workspace-content-wrap {
-        grid-template-columns: 1fr;
+        flex-direction: column;
         overflow-y: auto;
       }
-      .editor-panel {
+      .workspace-content-wrap .chat-panel,
+      .workspace-content-wrap .editor-panel {
+        width: 100% !important;
+        max-width: none;
+        min-width: 0;
+        flex: none;
+      }
+      .workspace-content-wrap .editor-panel {
         height: 450px !important;
+      }
+      .code-split-handle {
+        display: none;
       }
     }
 
@@ -2695,26 +3442,34 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       background: var(--bg-code);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
-      margin: 0.5rem 0;
+      margin: 0.55rem 0 0.35rem;
       overflow: hidden;
       font-family: var(--font-code);
-      font-size: 0.8rem;
+      font-size: 0.78rem;
+      box-shadow: inset 3px 0 0 rgba(var(--accent-rgb), 0.45);
     }
     .code-header {
-      background: var(--bg-sidebar);
+      background: rgba(255,255,255,0.03);
       padding: 0.35rem 0.75rem;
-      font-size: 0.7rem;
+      font-size: 0.68rem;
       font-weight: 600;
       color: var(--text-muted);
       border-bottom: 1px solid var(--border);
-      text-transform: uppercase;
+      text-transform: lowercase;
+      letter-spacing: 0.02em;
     }
     .code-block code {
       display: block;
       padding: 0.75rem;
       overflow-x: auto;
       white-space: pre;
-      color: var(--text-secondary);
+      color: var(--editor-text);
+      border-left: 1px solid transparent;
+    }
+    .code-line-count {
+      color: var(--text-muted);
+      font-weight: 500;
+      margin-left: 0.35rem;
     }
     code {
       background: var(--inline-code-bg);
@@ -2830,11 +3585,14 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     .chat-messages {
       flex: 1;
       overflow-y: auto;
-      padding: 1.25rem;
+      padding: 1.1rem 1.15rem 1.25rem;
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      gap: 0.85rem;
       scroll-behavior: smooth;
+      background:
+        radial-gradient(circle at top left, rgba(var(--accent-rgb), 0.04), transparent 42%),
+        var(--bg-card);
     }
 
     .chat-messages::-webkit-scrollbar {
@@ -2846,41 +3604,108 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     }
 
     .message {
-      max-width: 85%;
-      padding: 0.75rem 1rem;
-      border-radius: var(--radius-lg);
-      line-height: 1.5;
+      max-width: min(92%, 560px);
+      padding: 0.7rem 0.9rem;
+      border-radius: 12px;
+      line-height: 1.55;
       font-size: 0.85rem;
       display: flex;
       flex-direction: column;
-      gap: 0.25rem;
+      gap: 0.35rem;
+      animation: msgIn 0.18s ease-out;
+    }
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: none; }
     }
 
     .message-label {
-      font-size: 0.65rem;
+      font-size: 0.62rem;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.06em;
       color: var(--text-muted);
+    }
+
+    .message-meta {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+    }
+
+    .message-body {
+      color: inherit;
+    }
+    .message-body ul.md-stack {
+      margin: 0.25rem 0 0;
+      padding-left: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .message-body ul.md-stack li {
+      padding-left: 0.15rem;
+    }
+    .message-body p {
+      margin: 0 0 0.45rem;
+    }
+    .message-body p:last-child {
+      margin-bottom: 0;
+    }
+
+    .tool-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      margin: 0.2rem 0;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--subtle-bg);
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      font-family: var(--font-code);
+    }
+    .tool-chip::before {
+      content: "▸";
+      color: var(--accent);
+      font-weight: 700;
     }
 
     .message.clawie {
       align-self: flex-start;
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(255, 255, 255, 0.025);
       border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
       color: var(--text-secondary);
-      border-top-left-radius: 4px;
+      border-radius: 4px 12px 12px 12px;
+      max-width: min(96%, 640px);
     }
 
     .message.user {
       align-self: flex-end;
-      background: var(--accent);
-      color: #ffffff;
-      border-top-right-radius: 4px;
+      background: rgba(var(--accent-rgb), 0.16);
+      border: 1px solid rgba(var(--accent-rgb), 0.28);
+      color: var(--text-primary);
+      border-radius: 12px 4px 12px 12px;
     }
 
     .message.user .message-label {
-      color: rgba(255, 255, 255, 0.7);
+      color: rgba(var(--accent-rgb), 0.85);
+    }
+
+    .message.thinking .message-body {
+      color: var(--text-muted);
+    }
+    .thinking-dots::after {
+      content: "";
+      animation: thinkingDots 1.2s steps(4, end) infinite;
+    }
+    @keyframes thinkingDots {
+      0% { content: ""; }
+      25% { content: "."; }
+      50% { content: ".."; }
+      75% { content: "..."; }
     }
 
     .error-action-panel {
@@ -2924,31 +3749,157 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     .chat-input-row {
       border-top: 1px solid var(--border);
-      background: var(--panel-overlay);
-      padding: 1rem;
+      background: rgba(0, 0, 0, 0.18);
+      padding: 0.75rem 0.85rem 0.9rem;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.55rem;
+    }
+
+    .composer-shell {
       display: flex;
       align-items: flex-end;
-      gap: 0.75rem;
+      gap: 0.55rem;
+      width: 100%;
+      padding: 0.45rem 0.5rem 0.45rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--bg-input);
+      box-shadow: 0 0 0 0 transparent;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .composer-shell:focus-within {
+      border-color: rgba(var(--accent-rgb), 0.65);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .composer-model-chip {
+      flex: none;
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      background: var(--subtle-bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.28rem 0.55rem;
+      max-width: 120px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--font-code);
+    }
+
+    .composer-hint {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      padding: 0 0.15rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
     }
 
     .chat-input-row textarea {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
+      background: transparent;
+      border: none;
+      border-radius: 0;
       color: var(--text-primary);
-      padding: 0.75rem 1rem;
+      padding: 0.45rem 0.25rem;
       font-family: var(--font-ui);
       font-size: 0.9rem;
-      min-height: 44px;
-      max-height: 160px;
+      min-height: 40px;
+      max-height: 150px;
       flex: 1;
       outline: none;
       resize: none;
-      transition: border-color 0.15s ease;
+      transition: none;
+      box-shadow: none;
     }
 
     .chat-input-row textarea:focus {
-      border-color: var(--accent-hover);
+      border-color: transparent;
+      box-shadow: none;
+    }
+
+    .suggestion-chip {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      color: var(--text-secondary);
+      padding: 0.35rem 0.85rem;
+      font-size: 0.7rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .editor-tabs {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      min-width: 0;
+      flex: 1;
+    }
+    .editor-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      max-width: 220px;
+      padding: 0.28rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      color: var(--text-secondary);
+      font-family: var(--font-code);
+      font-size: 0.78rem;
+      min-width: 0;
+    }
+    .editor-tab .tab-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .editor-tab .tab-path {
+      color: var(--text-muted);
+      font-size: 0.68rem;
+    }
+    .editor-tab .dirty-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex: none;
+      opacity: 0;
+    }
+    .editor-tab.dirty .dirty-dot {
+      opacity: 1;
+    }
+    .editor-tab.empty {
+      border-style: dashed;
+      color: var(--text-muted);
+    }
+
+    .editor-empty-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.35rem;
+    }
+    .editor-empty-actions button {
+      background: var(--subtle-bg);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 999px;
+      padding: 0.4rem 0.85rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    .editor-empty-actions button:hover {
+      border-color: var(--accent);
+      color: var(--text-primary);
     }
 
     .icon-btn-round {
@@ -4055,7 +5006,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         </div>
         <div style="display: flex; align-items: center; gap: 0.75rem;">
           <div id="status" class="status-pill idle">Ready</div>
-          <div id="terminal-connection" class="status-pill idle" title="Checking the terminal connection">Terminal: checking…</div>
+          <div id="terminal-connection" class="status-pill idle" title="Checking the terminal connection" style="display:none">Terminal: checking…</div>
           <button class="icon-btn-circle" id="toggle-folders-btn" title="Toggle Folders Panel">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg>
           </button>
@@ -4066,13 +5017,25 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       </header>
       
       <main>
-        <div class="workspace-content-wrap">
+        <div class="code-context-strip" id="code-context-strip">
+          <div>
+            <strong id="ctx-model">model</strong>
+            <span class="ctx-sep">·</span>
+            <span id="ctx-file">no file</span>
+            <span class="ctx-sep">·</span>
+            <span id="ctx-cost">$0.0000</span>
+          </div>
+          <div>
+            <span class="ctx-ready" id="ctx-status">● Ready</span>
+          </div>
+        </div>
+        <div class="workspace-content-wrap" id="code-workspace-split">
           <!-- Left Pane: Chat Panel -->
           <div class="chat-panel">
             <div class="chat-header" style="height: 44px; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.15); display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; flex: none;">
               <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-                Chat Assistant
+                Chat
               </span>
               <button id="chat-clear-btn" class="icon-btn-circle" title="Clear Chat" style="width: 24px; height: 24px;">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
@@ -4081,58 +5044,80 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             <div class="chat-messages" id="chat-messages">
               <div class="message clawie">
                 <span class="message-label">Clawie</span>
-                <span>Hello! 👋 How can I assist you today with your software engineering tasks?</span>
+                <div class="message-body">
+                  <p>Hello — ready to help with this workspace.</p>
+                  <ul class="md-stack">
+                    <li>Open a file from the sidebar, or ask me to create one</li>
+                    <li>Use the chips below for common tasks</li>
+                  </ul>
+                </div>
               </div>
             </div>
-            <div class="chat-input-row" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
-              <div class="suggestions-row" style="display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.25rem; scrollbar-width: none;">
-                <button class="suggestion-chip" onclick="applySuggestion('Explain this code')" style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 99px; color: var(--text-secondary); padding: 0.35rem 0.85rem; font-size: 0.7rem; cursor: pointer; white-space: nowrap; transition: all 0.15s ease; font-weight: 500; display: flex; align-items: center; gap: 0.25rem;">💡 Explain Code</button>
-                <button class="suggestion-chip" onclick="applySuggestion('Find bugs in this code')" style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 99px; color: var(--text-secondary); padding: 0.35rem 0.85rem; font-size: 0.7rem; cursor: pointer; white-space: nowrap; transition: all 0.15s ease; font-weight: 500; display: flex; align-items: center; gap: 0.25rem;">🐛 Find Bugs</button>
-                <button class="suggestion-chip" onclick="applySuggestion('Write unit tests for this code')" style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 99px; color: var(--text-secondary); padding: 0.35rem 0.85rem; font-size: 0.7rem; cursor: pointer; white-space: nowrap; transition: all 0.15s ease; font-weight: 500; display: flex; align-items: center; gap: 0.25rem;">🧪 Write Tests</button>
-                <button class="suggestion-chip" onclick="applySuggestion('Refactor and clean this code')" style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 99px; color: var(--text-secondary); padding: 0.35rem 0.85rem; font-size: 0.7rem; cursor: pointer; white-space: nowrap; transition: all 0.15s ease; font-weight: 500; display: flex; align-items: center; gap: 0.25rem;">⚡ Refactor</button>
+            <div class="chat-input-row">
+              <div class="suggestions-row" style="display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.1rem; scrollbar-width: none;">
+                <button class="suggestion-chip" type="button" onclick="applySuggestion('Explain this code')">Explain</button>
+                <button class="suggestion-chip" type="button" onclick="applySuggestion('Find bugs in this code')">Find bugs</button>
+                <button class="suggestion-chip" type="button" onclick="applySuggestion('Write unit tests for this code')">Tests</button>
+                <button class="suggestion-chip" type="button" onclick="applySuggestion('Refactor and clean this code')">Refactor</button>
+                <button class="suggestion-chip" type="button" id="chip-explain-selection" style="display: none;" onclick="applySelectionSuggestion()">Explain selection</button>
               </div>
-              <div style="display: flex; align-items: flex-end; gap: 0.75rem; width: 100%;">
-                <textarea id="chat-input" rows="1" placeholder="Ask Clawie to create or edit code..."></textarea>
-                <button class="icon-btn-circle" id="voice-input-btn" title="Start voice input" aria-label="Start voice input" style="width: 34px; height: 34px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;">
+              <div class="composer-shell">
+                <span class="composer-model-chip" id="composer-model-chip" title="Active model">model</span>
+                <textarea id="chat-input" rows="1" placeholder="Ask Clawie to create or edit code…"></textarea>
+                <button class="icon-btn-circle" id="voice-input-btn" title="Start voice input" aria-label="Start voice input" style="width: 32px; height: 32px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
                 </button>
                 <button class="icon-btn-round" id="chat-send" title="Send message" aria-label="Send message">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                 </button>
               </div>
+              <div class="composer-hint">
+                <span>Open file is used as context when relevant</span>
+                <span>⌘/Ctrl+Enter send · Shift+Enter newline</span>
+              </div>
             </div>
           </div>
 
+          <div class="code-split-handle" id="code-split-handle" title="Drag to resize"></div>
+
           <!-- Right Pane: Code Editor Panel -->
-          <div class="editor-panel" id="editor-panel" style="border: 1px solid var(--border); background: var(--bg-card); border-radius: var(--radius-lg); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);">
-            <div class="editor-header" style="height: 44px; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.15); display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; flex: none;">
-              <span id="editor-filename" style="font-family: var(--font-code); font-size: 0.85rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
-                <span class="brand-dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);"></span>
-                No file open
-              </span>
-              <div style="display: flex; gap: 0.5rem;">
+          <div class="editor-panel" id="editor-panel" style="border: 1px solid var(--border); background: var(--bg-card); border-radius: var(--radius-lg); display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--panel-shadow);">
+            <div class="editor-header" style="height: 44px; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.15); display: flex; align-items: center; justify-content: space-between; padding: 0 0.75rem 0 0.65rem; flex: none; gap: 0.5rem;">
+              <div class="editor-tabs">
+                <div class="editor-tab empty" id="editor-tab">
+                  <span class="dirty-dot" aria-hidden="true"></span>
+                  <span class="tab-path" id="editor-tab-path"></span>
+                  <span class="tab-name" id="editor-filename">No file open</span>
+                </div>
+              </div>
+              <div style="display: flex; gap: 0.5rem; flex: none;">
                 <button id="editor-diff-btn" class="accent-btn" style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.75rem; display: none; background: var(--bg-hover); color: var(--text); border: 1px solid var(--border);">Show Diff</button>
                 <button id="editor-save-btn" class="accent-btn" style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.75rem; display: none;">Save</button>
               </div>
             </div>
             
-            <div class="editor-content-container" style="flex: 1; position: relative; display: flex; flex-direction: row; background: #050507; overflow: hidden;">
+            <div class="editor-content-container" style="flex: 1; position: relative; display: flex; flex-direction: row; background: var(--bg-code); overflow: hidden;">
               <div id="editor-placeholder" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); gap: 0.75rem; background: var(--bg-card); z-index: 5;">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg>
-                <span style="font-size: 0.85rem;">Select a file from the sidebar to view and edit</span>
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 600;">No file open</span>
+                <span style="font-size: 0.8rem; max-width: 260px; text-align: center; line-height: 1.4;">Open a file from the sidebar, or ask Clawie to create one in chat.</span>
+                <div class="editor-empty-actions">
+                  <button type="button" id="empty-new-file">New file</button>
+                  <button type="button" id="empty-ask-clawie">Ask Clawie</button>
+                </div>
               </div>
               
               <div id="editor-line-numbers" style="display: none; width: 45px; padding: 1rem 0; text-align: right; color: var(--text-muted); font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; background: rgba(0,0,0,0.25); border-right: 1px solid var(--border); user-select: none; overflow-y: hidden; box-sizing: border-box; padding-right: 0.75rem;">1</div>
-              <textarea id="editor-textarea" style="display: none; flex: 1; height: 100%; background: transparent; border: none; outline: none; resize: none; color: #a9b1d6; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; padding: 1rem; box-sizing: border-box; overflow-y: auto; white-space: pre; overflow-wrap: normal;" spellcheck="false"></textarea>
+              <textarea id="editor-textarea" style="display: none; flex: 1; height: 100%; background: transparent; border: none; outline: none; resize: none; color: var(--editor-text); font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; padding: 1rem; box-sizing: border-box; overflow-y: auto; white-space: pre; overflow-wrap: normal;" spellcheck="false"></textarea>
               
-              <div id="diff-container" style="display: none; flex: 1; height: 100%; flex-direction: row; background: #050507; overflow: hidden; width: 100%;">
+              <div id="diff-container" style="display: none; flex: 1; height: 100%; flex-direction: row; background: var(--bg-code); overflow: hidden; width: 100%;">
                 <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden; border-right: 1px solid var(--border);">
-                  <div style="background: rgba(255,255,255,0.03); padding: 0.25rem 0.5rem; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; border-bottom: 1px solid var(--border);">Original File</div>
-                  <pre id="diff-left" style="flex: 1; margin: 0; padding: 1rem; overflow: auto; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; white-space: pre; color: #a9b1d6; box-sizing: border-box;"></pre>
+                  <div style="background: rgba(255,255,255,0.03); padding: 0.25rem 0.5rem; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; border-bottom: 1px solid var(--border);">Original</div>
+                  <pre id="diff-left" style="flex: 1; margin: 0; padding: 1rem; overflow: auto; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; white-space: pre; color: var(--editor-text); box-sizing: border-box;"></pre>
                 </div>
                 <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-                  <div style="background: rgba(255,255,255,0.03); padding: 0.25rem 0.5rem; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; border-bottom: 1px solid var(--border);">Improvements / Edited</div>
-                  <pre id="diff-right" style="flex: 1; margin: 0; padding: 1rem; overflow: auto; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; white-space: pre; color: #a9b1d6; box-sizing: border-box;"></pre>
+                  <div style="background: rgba(255,255,255,0.03); padding: 0.25rem 0.5rem; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; border-bottom: 1px solid var(--border);">Edited</div>
+                  <pre id="diff-right" style="flex: 1; margin: 0; padding: 1rem; overflow: auto; font-family: var(--font-code); font-size: 0.85rem; line-height: 1.5; white-space: pre; color: var(--editor-text); box-sizing: border-box;"></pre>
                 </div>
               </div>
             </div>
@@ -4202,22 +5187,23 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
             <div class="automation-canvas">
               <div class="canvas-header">
                 <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                  <h3>Automation Flow Canvas</h3>
-                  <span class="canvas-subtitle">Drag blocks to position, pan/zoom canvas, and click any block to configure settings.</span>
+                  <h3 id="auto-workflow-title">Automation Flow</h3>
+                  <span class="canvas-subtitle">Build a flow, save it, then <strong>Run once</strong> with the real Clawie agent.</span>
+                  <input type="text" id="auto-workflow-name" value="Untitled workflow" placeholder="Workflow name" style="max-width: 280px; margin-top: 0.25rem; font-size: 0.8rem;">
+                  <input type="hidden" id="auto-workflow-id" value="">
                 </div>
-                <div class="canvas-actions">
-                  <button class="settings-btn-secondary" id="auto-btn-clear" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Reset Flow</button>
+                <div class="canvas-actions" style="display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;">
+                  <button class="settings-btn-secondary" id="auto-btn-new" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">New</button>
+                  <button class="settings-btn-secondary" id="auto-btn-clear" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Reset</button>
+                  <button class="settings-btn-save" id="auto-btn-save-server" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Save</button>
+                  <button class="accent-btn" id="auto-btn-run" type="button" style="padding: 0.35rem 0.9rem; font-size: 0.75rem; width: auto;">▶ Run once</button>
                   <div class="dropdown-container" style="position: relative; display: inline-block;">
-                    <button class="settings-btn-save" id="auto-btn-save" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem;">
-                      Save Workflow <span style="font-size: 0.6rem;">▼</span>
+                    <button class="settings-btn-secondary" id="auto-btn-save" type="button" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem;">
+                      Export <span style="font-size: 0.6rem;">▼</span>
                     </button>
-                    <div class="dropdown-menu" id="workflow-save-dropdown" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 0.5rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--panel-shadow); z-index: 100; min-width: 160px; overflow: hidden;">
-                      <button class="dropdown-item" type="button" id="btn-save-json" style="width: 100%; text-align: left; background: none; border: none; padding: 0.6rem 1rem; color: var(--text-primary); font-size: 0.75rem; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; gap: 0.5rem;">
-                        📁 Save as JSON File
-                      </button>
-                      <button class="dropdown-item" type="button" id="btn-save-clawie" style="width: 100%; text-align: left; background: none; border: none; padding: 0.6rem 1rem; color: var(--text-primary); font-size: 0.75rem; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; gap: 0.5rem; border-top: 1px solid var(--border);">
-                        🧠 Save in Clawie
-                      </button>
+                    <div class="dropdown-menu" id="workflow-save-dropdown" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 0.5rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--panel-shadow); z-index: 100; min-width: 180px; overflow: hidden;">
+                      <button class="dropdown-item" type="button" id="btn-save-json" style="width: 100%; text-align: left; background: none; border: none; padding: 0.6rem 1rem; color: var(--text-primary); font-size: 0.75rem; cursor: pointer;">Save as JSON file</button>
+                      <button class="dropdown-item" type="button" id="btn-save-clawie" style="width: 100%; text-align: left; background: none; border: none; padding: 0.6rem 1rem; color: var(--text-primary); font-size: 0.75rem; cursor: pointer; border-top: 1px solid var(--border);">Also cache in browser</button>
                     </div>
                   </div>
                 </div>
@@ -4302,36 +5288,43 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
             <!-- Right Panel: Toolbox -->
             <div class="automation-toolbox">
-              <h3>Workflow Toolbox</h3>
-              <p class="toolbox-desc">Click template blocks below to inject them into the active canvas.</p>
+              <h3>Workflows</h3>
+              <p class="toolbox-desc">Saved under <code>~/.claw/automations</code>. Run once uses the real Clawie agent.</p>
+
+              <div class="toolbox-section">
+                <h4>My workflows</h4>
+                <div id="auto-workflow-list" style="display: flex; flex-direction: column; gap: 0.35rem; max-height: 160px; overflow-y: auto; margin-bottom: 0.75rem;">
+                  <span class="hint" style="font-size: 0.72rem;">Loading…</span>
+                </div>
+              </div>
+
+              <div class="toolbox-section">
+                <h4>Run history</h4>
+                <div id="auto-run-history" style="display: flex; flex-direction: column; gap: 0.4rem; max-height: 180px; overflow-y: auto; margin-bottom: 0.75rem;">
+                  <span class="hint" style="font-size: 0.72rem;">No runs yet. Click Run once.</span>
+                </div>
+                <pre id="auto-run-detail" style="display: none; font-size: 0.68rem; background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.5rem; max-height: 140px; overflow: auto; white-space: pre-wrap; color: var(--text-secondary);"></pre>
+              </div>
               
               <!-- Preset Templates -->
               <div class="toolbox-section">
-                <h4>1. Preset Quick Flows</h4>
+                <h4>Templates (working)</h4>
                 <div class="template-presets-grid">
+                  <button class="template-chip" type="button" id="tpl-manual-task">
+                    <strong>▶ Manual Task</strong>
+                    <span>Run an AI task once</span>
+                  </button>
                   <button class="template-chip" type="button" id="tpl-code-guard">
                     <strong>🛡️ Code Guard</strong>
-                    <span>Test and fix on save</span>
-                  </button>
-                  <button class="template-chip" type="button" id="tpl-auto-sync">
-                    <strong>🔄 Daily Commit Sync</strong>
-                    <span>Auto-commit summaries</span>
-                  </button>
-                  <button class="template-chip" type="button" id="tpl-email-responder">
-                    <strong>📧 AI Email Support</strong>
-                    <span>Auto-answer support queries</span>
-                  </button>
-                  <button class="template-chip" type="button" id="tpl-custom-agent">
-                    <strong>🧠 AI Custom Agent</strong>
-                    <span>Provision simple support agent</span>
-                  </button>
-                  <button class="template-chip" type="button" id="tpl-webhook-http">
-                    <strong>🔌 API Webhook Sync</strong>
-                    <span>Webhook triggering REST call</span>
+                    <span>Audit code (run once)</span>
                   </button>
                   <button class="template-chip" type="button" id="tpl-cron-runner">
                     <strong>⏱️ Cron Runner</strong>
-                    <span>Timed folder tasks</span>
+                    <span>Scheduled task shape</span>
+                  </button>
+                  <button class="template-chip" type="button" id="tpl-auto-sync">
+                    <strong>🔄 Daily Commit Sync</strong>
+                    <span>Summary template</span>
                   </button>
                 </div>
               </div>
@@ -4905,6 +5898,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       const nextState = statusStates.has(state) ? state : 'idle';
       status.textContent = message;
       status.className = 'status-pill ' + nextState;
+      if (typeof updateCodeContextStrip === 'function') updateCodeContextStrip();
       syncInstancePanel();
     }
 
@@ -4920,13 +5914,21 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     function setWorkspaceView(view) {
       const showInstance = view === 'instance';
       const showAutomations = view === 'automations';
+      const showCode = !showInstance && !showAutomations;
       workspaceContentWrap.hidden = showInstance || showAutomations;
       instancePage.hidden = !showInstance;
       automationsPage.hidden = !showAutomations;
+      const ctxStrip = document.getElementById('code-context-strip');
+      if (ctxStrip) ctxStrip.style.display = showCode ? 'flex' : 'none';
       codeViewTab.classList.toggle('active', !showInstance && !showAutomations);
       instanceViewTab.classList.toggle('active', showInstance);
       automationsViewTab.classList.toggle('active', showAutomations);
       localStorage.setItem('clawie-workspace-view', showAutomations ? 'automations' : showInstance ? 'instance' : 'code');
+      if (showAutomations && typeof refreshWorkflowList === 'function') {
+        refreshWorkflowList();
+        const wid = document.getElementById('auto-workflow-id')?.value;
+        if (typeof refreshRunHistory === 'function') refreshRunHistory(wid || undefined);
+      }
       syncInstancePanel();
       if (showInstance) refreshInstances();
     }
@@ -5360,6 +6362,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       const usageText = document.querySelector('#usage-text');
       const usageBarFill = document.querySelector('#usage-bar-fill');
       const costText = document.querySelector('#cost-text');
+      const usageContainer = document.querySelector('#usage-container');
       
       if (usageText && usageBarFill) {
         usageText.textContent = `${totalUsed.toLocaleString()} / ${maxTokensLimit.toLocaleString()}`;
@@ -5379,33 +6382,71 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       if (costText) {
         costText.textContent = `$${totalCost.toFixed(4)}`;
       }
+      if (usageContainer && totalUsed > 0) {
+        usageContainer.style.display = 'flex';
+      }
+      updateCodeContextStrip();
       syncInstancePanel();
+    }
+
+    function updateCodeContextStrip() {
+      const modelEl = document.getElementById('ctx-model');
+      const fileEl = document.getElementById('ctx-file');
+      const costEl = document.getElementById('ctx-cost');
+      const statusEl = document.getElementById('ctx-status');
+      const chip = document.getElementById('composer-model-chip');
+      if (modelEl) modelEl.textContent = (typeof selectedModel !== 'undefined' && selectedModel) ? selectedModel : 'model';
+      if (chip) chip.textContent = shortModelLabel(typeof selectedModel !== 'undefined' ? selectedModel : 'model');
+      if (fileEl) fileEl.textContent = activeFileName || 'no file';
+      if (costEl) costEl.textContent = `$${totalCost.toFixed(4)}`;
+      if (statusEl) {
+        const pill = document.getElementById('status');
+        const text = (pill && pill.textContent) || 'Ready';
+        const lower = text.toLowerCase();
+        if (lower.includes('error') || lower.includes('fail')) {
+          statusEl.textContent = '● ' + text;
+          statusEl.style.color = '#f87171';
+        } else if (lower.includes('think') || lower.includes('run') || lower.includes('busy') || lower.includes('sav') || lower.includes('open')) {
+          statusEl.textContent = '● ' + text;
+          statusEl.style.color = 'var(--accent)';
+        } else {
+          statusEl.textContent = '● ' + text;
+          statusEl.style.color = 'var(--ok)';
+        }
+      }
+    }
+
+    function shortModelLabel(model) {
+      const m = String(model || 'model');
+      if (m.length <= 18) return m;
+      return m.replace(/^claude-/, '').replace(/^gpt-/, 'gpt-').slice(0, 16) + '…';
     }
 
     function formatMarkdown(text) {
       if (!text) return '';
       let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // Tool-style lines → chips
+      html = html.replace(/(^|\n)(?:▸|→)\s*([^\n]+)/g, (m, pre, body) => `${pre}<span class="tool-chip">${body.trim()}</span>`);
       html = html.replace(/```([\s\S]*?)```/g, (match, codeBlock) => {
         const lines = codeBlock.split('\n');
         let lang = 'code', code = codeBlock;
         if (lines[0] && lines[0].trim().length < 15 && !lines[0].includes(' ') && !lines[0].includes('\n')) {
-          lang = lines[0].trim();
+          lang = lines[0].trim() || 'code';
           code = lines.slice(1).join('\n');
         }
-        const cleanCode = code.trim();
+        const cleanCode = code.replace(/^\n+/, '').replace(/\n+$/, '');
+        const lineCount = cleanCode ? cleanCode.split('\n').length : 0;
         const escapedCode = btoa(unescape(encodeURIComponent(cleanCode)));
         
         return `<pre class="code-block">
           <div class="code-header" style="display: flex; justify-content: space-between; align-items: center;">
-            <span>${lang}</span>
+            <span>${lang}<span class="code-line-count">${lineCount ? '· ' + lineCount + ' lines' : ''}</span></span>
             <div style="display: flex; gap: 0.5rem;">
               <button class="code-action-btn copy-btn" onclick="copyCodeBlock(this, '${escapedCode}')" style="background: transparent; border: none; color: var(--text-muted); font-size: 0.65rem; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 Copy
               </button>
               <button class="code-action-btn apply-btn" onclick="applyToEditor(this, '${escapedCode}')" style="background: transparent; border: none; color: var(--text-muted); font-size: 0.65rem; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg>
-                Open in Editor
+                Apply
               </button>
             </div>
           </div>
@@ -5414,20 +6455,41 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       });
       html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
       html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      html = html.replace(/\n/g, '<br>');
+      // Vertical bullet stacks
+      html = html.replace(/(?:^|\n)(?:[-*•]\s+.+(?:\n[-*•]\s+.+)*)/g, (block) => {
+        const items = block.trim().split('\n').map(line => line.replace(/^[-*•]\s+/, '').trim()).filter(Boolean);
+        if (!items.length) return block;
+        return '<ul class="md-stack">' + items.map(i => `<li>${i}</li>`).join('') + '</ul>';
+      });
+      // Paragraphs from remaining double newlines
+      html = html.split(/\n{2,}/).map(chunk => {
+        if (chunk.includes('code-block') || chunk.includes('md-stack') || chunk.includes('tool-chip')) return chunk;
+        return '<p>' + chunk.replace(/\n/g, '<br>') + '</p>';
+      }).join('');
       return html;
     }
 
-    function appendChatMessage(role, text) {
+    function appendChatMessage(role, text, meta = null) {
       const message = document.createElement('div');
-      message.className = 'message ' + role;
+      message.className = 'message ' + role + (text === 'Thinking...' ? ' thinking' : '');
       const label = document.createElement('span');
       label.className = 'message-label';
       label.textContent = role === 'user' ? 'You' : 'Clawie';
       message.append(label);
-      const content = document.createElement('span');
-      content.innerHTML = formatMarkdown(text);
+      const content = document.createElement('div');
+      content.className = 'message-body';
+      if (text === 'Thinking...') {
+        content.innerHTML = '<span class="thinking-dots">Thinking</span>';
+      } else {
+        content.innerHTML = formatMarkdown(text);
+      }
       message.append(content);
+      if (meta) {
+        const metaEl = document.createElement('div');
+        metaEl.className = 'message-meta';
+        metaEl.textContent = meta;
+        message.append(metaEl);
+      }
       chatMessages.append(message);
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return message;
@@ -5465,28 +6527,40 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || 'Chat failed');
-        pending.replaceChildren();
-        const label = document.createElement('span');
-        label.className = 'message-label';
-        label.textContent = 'Clawie';
-        pending.append(label);
-        const content = document.createElement('span');
-        content.innerHTML = formatMarkdown(result.reply);
-        pending.append(content);
-        
+        const inTok = result.input_tokens || 0;
+        const outTok = result.output_tokens || 0;
         let costVal = 0.0;
         if (result.estimated_cost) {
           costVal = parseFloat(result.estimated_cost.replace('$', '')) || 0.0;
         }
-        updateUsageDisplay(result.input_tokens || 0, result.output_tokens || 0, costVal);
-        setStatus('Clawie replied', 'saved');
-      } catch (error) {
+        pending.classList.remove('thinking');
         pending.replaceChildren();
         const label = document.createElement('span');
         label.className = 'message-label';
         label.textContent = 'Clawie';
         pending.append(label);
-        const content = document.createElement('span');
+        const content = document.createElement('div');
+        content.className = 'message-body';
+        content.innerHTML = formatMarkdown(result.reply);
+        pending.append(content);
+        const meta = document.createElement('div');
+        meta.className = 'message-meta';
+        const tokBits = [];
+        if (inTok || outTok) tokBits.push(`${(inTok + outTok).toLocaleString()} tokens`);
+        if (costVal) tokBits.push(`$${costVal.toFixed(4)}`);
+        meta.textContent = tokBits.length ? tokBits.join(' · ') : 'done';
+        pending.append(meta);
+        updateUsageDisplay(inTok, outTok, costVal);
+        setStatus('Ready', 'saved');
+      } catch (error) {
+        pending.classList.remove('thinking');
+        pending.replaceChildren();
+        const label = document.createElement('span');
+        label.className = 'message-label';
+        label.textContent = 'Clawie';
+        pending.append(label);
+        const content = document.createElement('div');
+        content.className = 'message-body';
         const isFetchFailure = error instanceof TypeError && /fetch/i.test(error.message);
         const displayError = isFetchFailure
           ? 'Could not reach the local Clawie server. Reload this Web UI from the latest URL printed in the terminal.'
@@ -5496,7 +6570,6 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         if (action) {
           content.appendChild(createErrorActionPanel(action));
         }
-        
         pending.append(content);
         setStatus(displayError, 'error');
       } finally {
@@ -5510,16 +6583,28 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       chatInput.style.height = 'auto';
       chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
     });
-    chatInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } });
+    chatInput.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        sendChatMessage();
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
 
     document.querySelector('#chat-clear-btn').addEventListener('click', () => {
       chatMessages.innerHTML = `
         <div class="message clawie">
           <span class="message-label">Clawie</span>
-          <span>Chat cleared. How else can I help you?</span>
+          <div class="message-body">
+            <p>Chat cleared. How else can I help you?</p>
+          </div>
         </div>
       `;
-      setStatus('Chat history cleared', 'saved');
+      setStatus('Ready', 'saved');
     });
 
     window.copyCodeBlock = function(btn, encodedCode) {
@@ -5621,7 +6706,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           item.className = 'file';
           item.title = name;
           if (activeFileName === name) item.classList.add('active');
-          item.innerHTML = getFileIcon(name) + `<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${name}</span>`;
+          const ext = (name.split('.').pop() || '').slice(0, 6);
+          item.innerHTML = getFileIcon(name) + `<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${name}</span><span class="file-ext">${ext}</span>`;
           item.addEventListener('click', () => loadFile(name, item));
           fileList.append(item);
         });
@@ -5630,6 +6716,27 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     const textarea = document.querySelector('#editor-textarea');
     const lineNumbers = document.querySelector('#editor-line-numbers');
+    let editorBaseline = '';
+
+    function setEditorTab(name, dirty = false) {
+      const tab = document.getElementById('editor-tab');
+      const tabName = document.getElementById('editor-filename');
+      const tabPath = document.getElementById('editor-tab-path');
+      if (!tab || !tabName) return;
+      if (!name) {
+        tab.classList.add('empty');
+        tab.classList.remove('dirty');
+        tabName.textContent = 'No file open';
+        if (tabPath) tabPath.textContent = '';
+        return;
+      }
+      tab.classList.remove('empty');
+      tab.classList.toggle('dirty', !!dirty);
+      const parts = String(name).split('/');
+      const base = parts.pop();
+      tabName.textContent = base;
+      if (tabPath) tabPath.textContent = parts.length ? parts.join('/') + '/' : '';
+    }
 
     function updateLineNumbers() {
       const lines = textarea.value.split('\n');
@@ -5641,10 +6748,42 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       lineNumbers.innerHTML = numbersHtml;
     }
 
-    textarea.addEventListener('input', updateLineNumbers);
+    function markEditorDirty() {
+      if (!activeFileName) return;
+      const dirty = textarea.value !== editorBaseline;
+      setEditorTab(activeFileName, dirty);
+      const saveBtn = document.querySelector('#editor-save-btn');
+      if (saveBtn) saveBtn.style.opacity = dirty ? '1' : '0.75';
+    }
+
+    textarea.addEventListener('input', () => {
+      updateLineNumbers();
+      markEditorDirty();
+      updateSelectionChip();
+    });
     textarea.addEventListener('scroll', () => {
       lineNumbers.scrollTop = textarea.scrollTop;
     });
+    textarea.addEventListener('mouseup', updateSelectionChip);
+    textarea.addEventListener('keyup', updateSelectionChip);
+
+    function updateSelectionChip() {
+      const chip = document.getElementById('chip-explain-selection');
+      if (!chip || !textarea) return;
+      const start = textarea.selectionStart || 0;
+      const end = textarea.selectionEnd || 0;
+      chip.style.display = (activeFileName && end > start) ? 'inline-flex' : 'none';
+    }
+
+    window.applySelectionSuggestion = function() {
+      if (!textarea) return;
+      const start = textarea.selectionStart || 0;
+      const end = textarea.selectionEnd || 0;
+      const selected = textarea.value.slice(start, end).trim();
+      if (!selected) return;
+      const snippet = selected.length > 1200 ? selected.slice(0, 1200) + '\n…' : selected;
+      applySuggestion(`Explain this selection from ${activeFileName || 'the open file'}:\n\n\`\`\`\n${snippet}\n\`\`\``);
+    };
 
     editorDiffBtn.addEventListener('click', () => {
       if (diffContainer.style.display === 'none') {
@@ -5741,11 +6880,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         activeFileName = name;
         originalCode = result.code;
         improvementsCode = result.improvements || '';
+        editorBaseline = result.code;
         
-        document.querySelector('#editor-filename').innerHTML = `
-          <span class="brand-dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok);"></span>
-          ${name}
-        `;
+        setEditorTab(name, false);
         document.querySelector('#editor-placeholder').style.display = 'none';
         
         textarea.value = result.code;
@@ -5759,8 +6896,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         document.querySelectorAll('.file').forEach(f => f.classList.remove('active'));
         item.classList.add('active');
         updateLineNumbers();
+        updateCodeContextStrip();
         syncInstancePanel();
-        setStatus('Opened ' + name, 'saved');
+        setStatus('Ready', 'saved');
       } catch (error) { setStatus(error.message, 'error'); }
     }
 
@@ -5782,6 +6920,9 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || 'Save failed');
+        originalCode = textarea.value;
+        editorBaseline = textarea.value;
+        setEditorTab(activeFileName, false);
         setStatus('Saved ' + activeFileName, 'saved');
       } catch (error) {
         setStatus(error.message, 'error');
@@ -6588,6 +7729,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       selectedLeanMode = settingsLeanMode.value;
       selectedMaxTurns = parseInt(settingsMaxTurns.value, 10) || 64;
       selectedTokenBudget = parseInt(settingsTokenBudget.value, 10) || 12000;
+      if (typeof updateCodeContextStrip === 'function') updateCodeContextStrip();
 
       localStorage.setItem('clawie-model-setting', selectedModel);
       localStorage.setItem('clawie-provider', selectedProvider);
@@ -6748,6 +7890,50 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     applyAppTheme(selectedAppTheme);
     applyTheme(selectedTheme);
     updateUsageDisplay(0, 0);
+    if (typeof updateCodeContextStrip === 'function') updateCodeContextStrip();
+
+    // Code page: resizable chat/editor split
+    (function initCodeSplit() {
+      const handle = document.getElementById('code-split-handle');
+      const wrap = document.getElementById('code-workspace-split');
+      if (!handle || !wrap) return;
+      const saved = localStorage.getItem('clawie-code-chat-width');
+      if (saved) wrap.style.setProperty('--code-chat-width', saved);
+      let dragging = false;
+      handle.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        handle.classList.add('dragging');
+        handle.setPointerCapture(e.pointerId);
+      });
+      handle.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const rect = wrap.getBoundingClientRect();
+        if (rect.width < 100) return;
+        let pct = ((e.clientX - rect.left) / rect.width) * 100;
+        pct = Math.max(28, Math.min(68, pct));
+        const value = pct.toFixed(1) + '%';
+        wrap.style.setProperty('--code-chat-width', value);
+        localStorage.setItem('clawie-code-chat-width', value);
+      });
+      const stop = () => {
+        dragging = false;
+        handle.classList.remove('dragging');
+      };
+      handle.addEventListener('pointerup', stop);
+      handle.addEventListener('pointercancel', stop);
+    })();
+
+    document.getElementById('empty-new-file')?.addEventListener('click', () => {
+      document.getElementById('new-file')?.click();
+    });
+    document.getElementById('empty-ask-clawie')?.addEventListener('click', () => {
+      const input = document.getElementById('chat-input');
+      if (input) {
+        input.focus();
+        input.value = 'Create a new file for this project: ';
+        input.dispatchEvent(new Event('input'));
+      }
+    });
     renderInstanceRooms([]);
     setInstanceZoom(instanceZoom);
     const savedWorkspaceView = localStorage.getItem('clawie-workspace-view');
@@ -7543,62 +8729,73 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       setStatus('Automation canvas reset', 'saved');
     });
 
-    // Preset Templates Loader
-    document.querySelector('#tpl-code-guard').addEventListener('click', () => {
-      autoBtnClear.click();
+    // Preset Templates Loader (Phase A: real Run once works for AI + notify steps)
+    function setManualTrigger() {
       setTriggerType('file');
-      document.querySelector('#auto-input-trigger-glob').value = '**/*.rs';
-      appendActionNode('bash', 'cargo test', 'Run Tests');
-      appendActionNode('ai-agent', 'Fix all compile errors and failing cargo test warnings found in the repository.', 'Clawie Auto-Fixer');
-      setStatus('Loaded "Code Guard" template', 'saved');
+      autoTriggerName.textContent = 'Manual Run';
+      const body = document.getElementById('auto-trigger-body');
+      if (body) {
+        body.innerHTML = '<label>Manual</label><div style="font-size:0.72rem;color:var(--text-muted);">Click <strong>Run once</strong> to execute this workflow with the real Clawie agent.</div>';
+      }
+    }
+
+    document.querySelector('#tpl-manual-task')?.addEventListener('click', () => {
+      autoBtnClear.click();
+      document.getElementById('auto-workflow-id').value = '';
+      document.getElementById('auto-workflow-name').value = 'Manual Task';
+      document.getElementById('auto-workflow-title').textContent = 'Manual Task';
+      setManualTrigger();
+      appendActionNode(
+        'ai-agent',
+        'You are Clawie running a one-shot automation. Summarize the current workspace health (build/test risks) and list the top 5 concrete next actions as short bullets.',
+        'Clawie Task Agent'
+      );
+      appendActionNode('notify', 'Manual task completed.', 'Emit Alert Notification');
+      setStatus('Loaded "Manual Task" template — click Run once', 'saved');
     });
 
-    document.querySelector('#tpl-auto-sync').addEventListener('click', () => {
+    document.querySelector('#tpl-code-guard')?.addEventListener('click', () => {
       autoBtnClear.click();
+      document.getElementById('auto-workflow-id').value = '';
+      document.getElementById('auto-workflow-name').value = 'Code Guard';
+      document.getElementById('auto-workflow-title').textContent = 'Code Guard';
+      setManualTrigger();
+      appendActionNode(
+        'ai-agent',
+        'You are a code auditor for this repository. Review the project for code quality risks, missing tests, and style issues. Output: (1) severity-ranked findings, (2) files to touch, (3) a short fix plan. Do not invent file paths that do not exist.',
+        'Clawie Code Auditor'
+      );
+      appendActionNode(
+        'ai-agent',
+        'Based on the previous audit findings, propose the safest minimal patches as a checklist. Prefer small, lean changes.',
+        'Clawie Fix Planner'
+      );
+      appendActionNode('notify', 'Code Guard audit finished.', 'Emit Alert Notification');
+      setStatus('Loaded "Code Guard" template — click Run once', 'saved');
+    });
+
+    document.querySelector('#tpl-auto-sync')?.addEventListener('click', () => {
+      autoBtnClear.click();
+      document.getElementById('auto-workflow-name').value = 'Daily Commit Sync';
       setTriggerType('git');
-      appendActionNode('ai-agent', 'Analyze all staged files in git and generate a detailed commit description using standard conventional commits guidelines.', 'Clawie Commit Summarizer');
-      appendActionNode('notify', 'Commit description generated and staged.', 'Emit Alert Notification');
+      appendActionNode('ai-agent', 'Analyze git status and staged/unstaged changes. Generate a conventional commit message and a short summary of risk.', 'Clawie Commit Summarizer');
+      appendActionNode('notify', 'Commit description generated.', 'Emit Alert Notification');
       setStatus('Loaded "Daily Commit Sync" template', 'saved');
     });
 
-    document.querySelector('#tpl-email-responder').addEventListener('click', () => {
+    document.querySelector('#tpl-cron-runner')?.addEventListener('click', () => {
       autoBtnClear.click();
+      document.getElementById('auto-workflow-name').value = 'Cron Runner';
       setTriggerType('cron');
-      document.querySelector('#auto-input-trigger-cron').value = '*/15 * * * *';
-      appendActionNode('simple-agent', 'Support Helper Agent', 'You are a helpful customer support agent for Clawie. Be polite and concise.');
-      appendActionNode('summarize', '3 concise bullet points outlining key requests', 'trigger-output');
-      appendActionNode('email', 'subject:support', 'Draft a polite response answering the customer\'s technical query.');
-      appendActionNode('slack', '#support-alerts', '📢 *New Support Alert!* Email summarized and responded.');
-      setStatus('Loaded "AI Email Support" template', 'saved');
-    });
-
-    document.querySelector('#tpl-custom-agent').addEventListener('click', () => {
-      autoBtnClear.click();
-      setTriggerType('file');
-      document.querySelector('#auto-input-trigger-glob').value = '**/*.rs';
-      appendActionNode('simple-agent', 'Rust Expert Auditor', 'You are a Senior Rust compiler specialist. Review the code for safety and performance.');
-      appendActionNode('ai-agent', 'Run the custom auditor agent to perform linting.', 'Clawie AI Agent');
-      appendActionNode('notify', 'Custom agent execution complete.', 'Emit Alert Notification');
-      setStatus('Loaded "AI Custom Agent" template', 'saved');
-    });
-
-    document.querySelector('#tpl-webhook-http').addEventListener('click', () => {
-      autoBtnClear.click();
-      setTriggerType('webhook');
-      appendActionNode('routing', '{agent.exit_code}', 'Conditional Branch', '0');
-      appendActionNode('iterator', '{trigger.changed_files}', 'Loop Over Files', '1');
-      appendActionNode('http', 'https://api.example.com/v1/alert', 'Call API Endpoint');
-      appendActionNode('slack', '#support-alerts', 'Notify Team on Slack');
-      setStatus('Loaded "API Webhook Sync" template', 'saved');
-    });
-
-    document.querySelector('#tpl-cron-runner').addEventListener('click', () => {
-      autoBtnClear.click();
-      setTriggerType('cron');
-      document.querySelector('#auto-input-trigger-cron').value = '0 9 * * *';
-      appendActionNode('bash', './scripts/daily-backup.sh', 'Execute Backup Script');
-      appendActionNode('notify', 'Daily file sync completed successfully.', 'Emit Alert Notification');
-      setStatus('Loaded "Cron Runner" template', 'saved');
+      const cronInput = document.querySelector('#auto-input-trigger-cron');
+      if (cronInput) cronInput.value = '0 9 * * *';
+      appendActionNode(
+        'ai-agent',
+        'Morning automation: list important repo todos for today based on recent changes and open risks. Keep under 10 bullets.',
+        'Scheduled Agent Task'
+      );
+      appendActionNode('notify', 'Daily automation completed.', 'Emit Alert Notification');
+      setStatus('Loaded "Cron Runner" template (run once manually for now)', 'saved');
     });
 
     // Save Button Dropdown Toggle
@@ -7615,7 +8812,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
     });
 
     // Extract workflow JSON representation
-    window.getWorkflowJson = function() {
+    window.getWorkflowObject = function() {
       const triggerType = autoTriggerName.textContent;
       let triggerVal = '';
       const globInput = document.getElementById('auto-input-trigger-glob');
@@ -7669,7 +8866,11 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         });
       });
 
-      return JSON.stringify({
+      const idInput = document.getElementById('auto-workflow-id');
+      const nameInput = document.getElementById('auto-workflow-name');
+      return {
+        id: (idInput && idInput.value) || undefined,
+        name: (nameInput && nameInput.value.trim()) || 'Untitled workflow',
         trigger: {
           type: triggerType,
           value: triggerVal
@@ -7679,15 +8880,326 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         zoom: currentZoom,
         panX: panX,
         panY: panY
-      }, null, 2);
+      };
     };
 
-    // Save in Clawie Action
+    window.getWorkflowJson = function() {
+      return JSON.stringify(window.getWorkflowObject(), null, 2);
+    };
+
+    function chatAuthPayload() {
+      return {
+        model: typeof selectedModel !== 'undefined' ? selectedModel : undefined,
+        openai_api_key: localStorage.getItem('clawie-openai-key') || '',
+        anthropic_api_key: localStorage.getItem('clawie-anthropic-key') || '',
+        gemini_api_key: localStorage.getItem('clawie-gemini-key') || '',
+        xai_api_key: localStorage.getItem('clawie-xai-key') || '',
+        kimi_api_key: localStorage.getItem('clawie-kimi-key') || '',
+        openai_base_url: localStorage.getItem('clawie-openai-url') || '',
+        gemini_base_url: localStorage.getItem('clawie-gemini-url') || '',
+        xai_base_url: localStorage.getItem('clawie-xai-url') || '',
+        kimi_base_url: localStorage.getItem('clawie-kimi-url') || '',
+        lean_mode: typeof selectedLeanMode !== 'undefined' ? selectedLeanMode : undefined,
+        max_turns: typeof selectedMaxTurns !== 'undefined' ? selectedMaxTurns : undefined,
+        token_budget: typeof selectedTokenBudget !== 'undefined' ? selectedTokenBudget : undefined
+      };
+    }
+
+    function clearNodeRunStyles() {
+      document.querySelectorAll('.flow-node').forEach(n => {
+        n.style.outline = '';
+        n.style.boxShadow = '';
+      });
+    }
+
+    function applyNodeRunStatus(steps) {
+      clearNodeRunStyles();
+      (steps || []).forEach(step => {
+        if (!step.node_id || step.node_id === 'trigger') {
+          const t = document.getElementById('trigger-node-main');
+          if (t) {
+            t.style.outline = step.status === 'success' ? '2px solid #10b981' : '2px solid #ef4444';
+          }
+          return;
+        }
+        const el = document.getElementById(step.node_id);
+        if (!el) return;
+        if (step.status === 'success') {
+          el.style.outline = '2px solid #10b981';
+          el.style.boxShadow = '0 0 0 4px rgba(16,185,129,0.15)';
+        } else if (step.status === 'failed') {
+          el.style.outline = '2px solid #ef4444';
+          el.style.boxShadow = '0 0 0 4px rgba(239,68,68,0.15)';
+        } else if (step.status === 'running') {
+          el.style.outline = '2px solid #f59e0b';
+        }
+      });
+    }
+
+    async function refreshWorkflowList() {
+      const list = document.getElementById('auto-workflow-list');
+      if (!list) return;
+      try {
+        const res = await fetch('/automations');
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'list failed');
+        const workflows = data.workflows || [];
+        if (!workflows.length) {
+          list.innerHTML = '<span class="hint" style="font-size: 0.72rem;">No saved workflows yet. Click Save.</span>';
+          return;
+        }
+        list.innerHTML = workflows.map(wf => `
+          <div class="tool-item" data-wf-id="${wf.id}" style="cursor: pointer; padding: 0.45rem 0.5rem;">
+            <div style="flex: 1; min-width: 0;">
+              <strong style="font-size: 0.75rem; display: block; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(wf.name || 'Untitled')}</strong>
+              <span style="font-size: 0.65rem;">${wf.action_count || 0} steps · ${escapeHtml(wf.id)}</span>
+            </div>
+            <button type="button" class="wf-delete-btn" data-id="${wf.id}" title="Delete" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.9rem;">×</button>
+          </div>
+        `).join('');
+        list.querySelectorAll('[data-wf-id]').forEach(row => {
+          row.addEventListener('click', async (e) => {
+            if (e.target.closest('.wf-delete-btn')) return;
+            await loadWorkflowById(row.getAttribute('data-wf-id'));
+          });
+        });
+        list.querySelectorAll('.wf-delete-btn').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.getAttribute('data-id');
+            if (!confirm('Delete this workflow?')) return;
+            await fetch('/automations/delete', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ id })
+            });
+            const current = document.getElementById('auto-workflow-id')?.value;
+            if (current === id) {
+              document.getElementById('auto-workflow-id').value = '';
+            }
+            await refreshWorkflowList();
+            setStatus('Workflow deleted', 'saved');
+          });
+        });
+      } catch (err) {
+        list.innerHTML = `<span class="hint" style="font-size: 0.72rem; color: #f87171;">${escapeHtml(err.message)}</span>`;
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    async function refreshRunHistory(workflowId) {
+      const box = document.getElementById('auto-run-history');
+      const detail = document.getElementById('auto-run-detail');
+      if (!box) return;
+      try {
+        const q = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : '';
+        const res = await fetch('/automations/runs' + q);
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'runs failed');
+        const runs = data.runs || [];
+        if (!runs.length) {
+          box.innerHTML = '<span class="hint" style="font-size: 0.72rem;">No runs yet. Click Run once.</span>';
+          if (detail) detail.style.display = 'none';
+          return;
+        }
+        box.innerHTML = runs.slice(0, 12).map(run => {
+          const ok = run.status === 'success';
+          const when = run.started_at || '';
+          return `<button type="button" class="run-history-item" data-run='${escapeHtml(JSON.stringify(run))}' style="text-align: left; background: var(--bg-main); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.5rem; cursor: pointer; color: var(--text-primary);">
+            <strong style="font-size: 0.72rem; color: ${ok ? '#10b981' : '#f87171'};">${ok ? '✓' : '✗'} ${escapeHtml(run.workflow_name || 'run')}</strong>
+            <div style="font-size: 0.62rem; color: var(--text-muted);">${escapeHtml(String(when))} · ${(run.steps||[]).length} steps</div>
+          </button>`;
+        }).join('');
+        box.querySelectorAll('.run-history-item').forEach(btn => {
+          btn.addEventListener('click', () => {
+            try {
+              const run = JSON.parse(btn.getAttribute('data-run'));
+              showRunDetail(run);
+            } catch (_) {}
+          });
+        });
+      } catch (err) {
+        box.innerHTML = `<span class="hint" style="font-size: 0.72rem;">${escapeHtml(err.message)}</span>`;
+      }
+    }
+
+    function showRunDetail(run) {
+      const detail = document.getElementById('auto-run-detail');
+      if (!detail) return;
+      applyNodeRunStatus(run.steps || []);
+      const lines = (run.steps || []).map(s => {
+        const mark = s.status === 'success' ? '✓' : '✗';
+        const body = s.error || s.output || '';
+        return `${mark} ${s.title}\n${body}`.trim();
+      });
+      detail.style.display = 'block';
+      detail.textContent = `Run ${run.id} · ${run.status}\n\n` + lines.join('\n\n');
+    }
+
+    async function saveWorkflowToServer() {
+      const wf = window.getWorkflowObject();
+      setStatus('Saving workflow…', 'uploading');
+      const res = await fetch('/automations/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          id: wf.id || null,
+          name: wf.name,
+          workflow: wf
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'save failed');
+      const saved = data.workflow || {};
+      if (saved.id) document.getElementById('auto-workflow-id').value = saved.id;
+      if (saved.name) document.getElementById('auto-workflow-name').value = saved.name;
+      document.getElementById('auto-workflow-title').textContent = saved.name || 'Automation Flow';
+      localStorage.setItem('clawie-saved-workflow', JSON.stringify(saved));
+      await refreshWorkflowList();
+      await refreshRunHistory(saved.id);
+      setStatus('Workflow saved to ~/.claw/automations', 'saved');
+      if (window.logAutomationEvent) window.logAutomationEvent(`Saved workflow ${saved.name || saved.id}`);
+      return saved;
+    }
+
+    async function loadWorkflowById(id) {
+      setStatus('Loading workflow…', 'thinking');
+      const res = await fetch('/automations/get?id=' + encodeURIComponent(id));
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'load failed');
+      applyWorkflowObject(data.workflow);
+      setStatus('Workflow loaded', 'saved');
+      await refreshRunHistory(id);
+    }
+
+    function applyWorkflowObject(wf) {
+      if (!wf) return;
+      document.getElementById('auto-workflow-id').value = wf.id || '';
+      document.getElementById('auto-workflow-name').value = wf.name || 'Untitled workflow';
+      document.getElementById('auto-workflow-title').textContent = wf.name || 'Automation Flow';
+      // Reset canvas nodes except trigger, then rebuild from saved actions.
+      Array.from(flowNodesList.querySelectorAll('.flow-node')).forEach(n => {
+        if (n.id !== 'trigger-node-main') n.remove();
+      });
+      const triggerType = (wf.trigger && wf.trigger.type) || 'Manual Run';
+      const triggerVal = (wf.trigger && wf.trigger.value) || '';
+      // Map common trigger labels
+      if (/cron/i.test(triggerType)) {
+        setTriggerType('cron');
+        const cronInput = document.getElementById('auto-input-trigger-cron');
+        if (cronInput) cronInput.value = triggerVal || '0 9 * * *';
+      } else if (/git/i.test(triggerType)) {
+        setTriggerType('git');
+      } else if (/webhook/i.test(triggerType)) {
+        setTriggerType('webhook');
+      } else if (/file/i.test(triggerType) || /save/i.test(triggerType)) {
+        setTriggerType('file');
+        const globInput = document.getElementById('auto-input-trigger-glob');
+        if (globInput) globInput.value = triggerVal || '**/*.{rs,ts,js,py}';
+      } else {
+        // Manual — use file trigger UI but label as Manual Run
+        setTriggerType('file');
+        autoTriggerName.textContent = 'Manual Run';
+        const body = document.getElementById('auto-trigger-body');
+        if (body) {
+          body.innerHTML = '<label>Manual</label><div style="font-size:0.72rem;color:var(--text-muted);">Click <strong>Run once</strong> to execute this workflow.</div>';
+        }
+      }
+      (wf.actions || []).forEach(action => {
+        const type = action.type || 'ai-agent';
+        const val = (action.values && action.values[0]) || '';
+        const title = action.title || 'Action';
+        appendActionNode(type, val, title);
+        // Restore position if present
+        const node = document.getElementById(action.id) || flowNodesList.querySelector('.flow-node:last-child');
+        if (node && action.left) node.style.left = action.left;
+        if (node && action.top) node.style.top = action.top;
+        if (node && action.id) node.id = action.id;
+        if (node && action.settings) {
+          const r = node.querySelector('.node-opt-retry');
+          const c = node.querySelector('.node-opt-continue');
+          if (r) r.checked = !!action.settings.retryOnFailure;
+          if (c) c.checked = !!action.settings.continueOnError;
+        }
+      });
+      if (typeof drawConnections === 'function') drawConnections();
+      clearNodeRunStyles();
+    }
+
+    async function runWorkflowOnce() {
+      const btn = document.getElementById('auto-btn-run');
+      if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+      clearNodeRunStyles();
+      setStatus('Running automation (real Clawie agent)…', 'thinking');
+      try {
+        // Auto-save first so history has a stable workflow id.
+        let wf = window.getWorkflowObject();
+        try {
+          const saved = await saveWorkflowToServer();
+          wf = saved;
+        } catch (_) {
+          // Still allow unsaved canvas runs.
+        }
+        const res = await fetch('/automations/run', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            workflow: wf,
+            ...chatAuthPayload()
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'run failed');
+        const run = data.run;
+        applyNodeRunStatus(run.steps || []);
+        showRunDetail(run);
+        await refreshRunHistory(run.workflow_id);
+        if (window.logAutomationEvent) {
+          window.logAutomationEvent(`Run ${run.status}: ${run.workflow_name} (${(run.steps||[]).length} steps)`);
+        }
+        setStatus(run.status === 'success' ? 'Automation finished successfully' : 'Automation finished with errors', run.status === 'success' ? 'saved' : 'error');
+      } catch (err) {
+        setStatus(err.message || 'Run failed', 'error');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '▶ Run once'; }
+      }
+    }
+
+    // Save in browser cache
     document.querySelector('#btn-save-clawie').addEventListener('click', () => {
       const workflowData = getWorkflowJson();
       localStorage.setItem('clawie-saved-workflow', workflowData);
-      setStatus('Workflow successfully saved in Clawie config!', 'saved');
-      if (window.logAutomationEvent) window.logAutomationEvent('Workflow successfully saved in Clawie config');
+      setStatus('Workflow cached in browser localStorage', 'saved');
+      if (window.logAutomationEvent) window.logAutomationEvent('Workflow cached in browser');
+    });
+
+    document.getElementById('auto-btn-save-server')?.addEventListener('click', async () => {
+      try { await saveWorkflowToServer(); } catch (e) { setStatus(e.message, 'error'); }
+    });
+    document.getElementById('auto-btn-run')?.addEventListener('click', () => { runWorkflowOnce(); });
+    document.getElementById('auto-btn-new')?.addEventListener('click', () => {
+      document.getElementById('auto-workflow-id').value = '';
+      document.getElementById('auto-workflow-name').value = 'Untitled workflow';
+      document.getElementById('auto-workflow-title').textContent = 'Automation Flow';
+      document.getElementById('auto-btn-clear')?.click();
+      clearNodeRunStyles();
+      // Manual default
+      if (typeof setTriggerType === 'function') {
+        setTriggerType('file');
+        autoTriggerName.textContent = 'Manual Run';
+        const body = document.getElementById('auto-trigger-body');
+        if (body) {
+          body.innerHTML = '<label>Manual</label><div style="font-size:0.72rem;color:var(--text-muted);">Click <strong>Run once</strong> to execute this workflow.</div>';
+        }
+      }
+      setStatus('New blank workflow', 'saved');
     });
 
     // Save as JSON Action (Open custom modal)
@@ -7927,8 +9439,9 @@ self.addEventListener('activate', event => {
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_api_key, list_code_files, load_workspace_files, resolve_output_directory,
-        safe_filename, safe_relative_path, save_workspace_files, SaveRequest,
+        clean_api_key, list_automations, list_code_files, load_workspace_files,
+        resolve_output_directory, safe_automation_id, safe_filename, safe_relative_path,
+        save_automation, save_workspace_files, SaveRequest,
     };
     use std::fs;
     use std::path::Path;
@@ -7959,6 +9472,46 @@ mod tests {
         assert_eq!(clean_api_key(Some("test-dummy-key")), None);
         assert_eq!(clean_api_key(Some("  ")), None);
         assert_eq!(clean_api_key(Some("sk-real")), Some("sk-real"));
+    }
+
+    #[test]
+    fn automation_ids_are_sanitized() {
+        assert!(safe_automation_id("wf_123").is_ok());
+        assert!(safe_automation_id("../etc").is_err());
+        assert!(safe_automation_id("").is_err());
+    }
+
+    #[test]
+    fn saves_and_lists_automations() {
+        let original = std::env::var_os("CLAW_CONFIG_HOME");
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("clawie-auto-{nonce}"));
+        fs::create_dir_all(&root).expect("temp root");
+        std::env::set_var("CLAW_CONFIG_HOME", &root);
+
+        let saved = save_automation(
+            None,
+            Some("Code Guard"),
+            serde_json::json!({
+                "trigger": {"type": "Manual Run", "value": ""},
+                "actions": [{"id": "a1", "type": "ai-agent", "title": "Audit", "values": ["review code"]}]
+            }),
+        )
+        .expect("save automation");
+        assert_eq!(saved["name"], "Code Guard");
+        assert!(saved["id"].as_str().unwrap().starts_with("wf_"));
+
+        let listed = list_automations().expect("list");
+        assert!(listed.iter().any(|w| w["name"] == "Code Guard"));
+
+        match original {
+            Some(v) => std::env::set_var("CLAW_CONFIG_HOME", v),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

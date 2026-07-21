@@ -46,9 +46,10 @@ use crossterm::style::Stylize;
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{
-    active_terminal_theme, hold_spinner, prepare_cooked_stdout, release_spinner,
-    set_active_terminal_theme, write_term_blank, write_term_line, Spinner, TerminalRenderer,
-    TerminalTheme,
+    active_terminal_theme, clear_current_line, format_tool_timeline_line, format_turn_footer,
+    format_turn_separator_line, format_user_turn_header, hold_spinner, lock_stdout,
+    prepare_cooked_stdout, release_spinner, set_active_terminal_theme, spinner_is_held,
+    write_term_blank, write_term_line, Spinner, TerminalRenderer, TerminalTheme,
 };
 use runtime::{
     active_lean_mode, build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
@@ -169,10 +170,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::WebUi => {
             let (url, output_dir) = webui::launch()?;
             println!(
-                "Web UI opened\n  URL              {url}\n  Saved files      {}",
+                "Web UI opened\n  URL              {url}\n  Saved files      {}\n  Menu bar         C · Open Web UI / Stop Web Console",
                 output_dir.display()
             );
-            webui::keep_alive_in_menu_bar();
+            webui::keep_alive_in_menu_bar(&url);
         }
         CliAction::Repl {
             model,
@@ -3666,11 +3667,26 @@ impl LiveCli {
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let turn_started = Instant::now();
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
         let renderer = TerminalRenderer::new();
         let spinner_theme = *renderer.color_theme();
+
+        // Calm turn chrome: show the user message once, left-aligned.
+        prepare_cooked_stdout();
+        {
+            let _guard = lock_stdout();
+            let mut stdout = io::stdout();
+            let _ = write_term_blank(&mut stdout);
+            let _ = write_term_line(&mut stdout, &format_user_turn_header());
+            for line in input.lines() {
+                let _ = write_term_line(&mut stdout, &format!("  {line}"));
+            }
+            let _ = write_term_blank(&mut stdout);
+            let _ = stdout.flush();
+        }
+
         release_spinner();
-        // Short label avoids mid-line truncation when the terminal is narrow.
         let thinking_label = "Thinking...";
         let thinking_done = Arc::new(AtomicBool::new(false));
         let thinking_done_for_thread = Arc::clone(&thinking_done);
@@ -3678,8 +3694,11 @@ impl LiveCli {
             let mut spinner = Spinner::new();
             let mut stdout = io::stdout();
             while !thinking_done_for_thread.load(Ordering::Relaxed) {
+                // Exit early once reply owns the terminal.
+                if spinner_is_held() {
+                    break;
+                }
                 spinner.tick(thinking_label, &spinner_theme, &mut stdout)?;
-                // Faster frame rate pairs with the braille spinner for smoother motion.
                 thread::sleep(Duration::from_millis(70));
             }
             Ok(())
@@ -3689,6 +3708,7 @@ impl LiveCli {
         let result = runtime.run_turn(&expanded_input, Some(&mut permission_prompter));
         hook_abort_monitor.stop();
         thinking_done.store(true, Ordering::Relaxed);
+        hold_spinner();
         match spinner_handle.join() {
             Ok(Ok(())) => {}
             Ok(Err(error)) => return Err(Box::new(error)),
@@ -3699,14 +3719,16 @@ impl LiveCli {
             }
         }
         let mut spinner = Spinner::new();
+        // Preserve "did we paint" semantics from the background spinner via hold flag.
         let mut stdout = io::stdout();
         let mut reply_header_written = false;
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
                 prepare_cooked_stdout();
-                spinner.finish("ready", &spinner_theme, &mut stdout)?;
+                let _ = spinner.clear_line(&mut stdout);
                 if let Some(event) = summary.auto_compaction {
+                    let _guard = lock_stdout();
                     let _ = write_term_line(
                         &mut stdout,
                         &format_auto_compaction_notice(event.removed_message_count),
@@ -3724,16 +3746,26 @@ impl LiveCli {
                     )?;
                 }
                 if contains_fenced_code(&visible_reply) {
+                    let _guard = lock_stdout();
                     let _ = write_term_line(
                         &mut stdout,
                         "  \x1b[2mCopy code with /copy code\x1b[0m",
                     );
                 }
-                // Quiet separator so the next prompt doesn't sit flush on the reply.
-                let _ = write_term_line(
-                    &mut stdout,
-                    &format!("  {}", TerminalRenderer::new().turn_separator()),
-                );
+                // Quiet footer: time + tokens, then separator before next prompt.
+                {
+                    let _guard = lock_stdout();
+                    let footer = format_turn_footer(
+                        turn_started.elapsed(),
+                        summary.usage.input_tokens,
+                        summary.usage.output_tokens,
+                        false,
+                    );
+                    let _ = write_term_line(&mut stdout, &footer);
+                    let _ = write_term_line(&mut stdout, &format_turn_separator_line());
+                    let _ = write_term_blank(&mut stdout);
+                    let _ = stdout.flush();
+                }
                 self.persist_session()?;
                 Ok(())
             }
@@ -3741,7 +3773,13 @@ impl LiveCli {
                 runtime.shutdown_plugins()?;
                 prepare_cooked_stdout();
                 spinner.fail("request failed", &spinner_theme, &mut stdout)?;
+                let _guard = lock_stdout();
                 let _ = write_term_line(&mut stdout, &format!("  {error}"));
+                let _ = write_term_line(
+                    &mut stdout,
+                    &format_turn_footer(turn_started.elapsed(), 0, 0, true),
+                );
+                let _ = write_term_blank(&mut stdout);
                 Ok(())
             }
         }
@@ -4045,10 +4083,10 @@ impl LiveCli {
             SlashCommand::WebUi => {
                 let (url, output_dir) = webui::launch()?;
                 println!(
-                    "Web UI opened\n  URL              {url}\n  Saved files      {}",
+                    "Web UI opened\n  URL              {url}\n  Saved files      {}\n  Menu bar         C · Open Web UI / Stop Web Console",
                     output_dir.display()
                 );
-                webui::keep_alive_in_menu_bar();
+                webui::keep_alive_in_menu_bar(&url);
                 false
             }
             SlashCommand::Diff => {
@@ -7029,17 +7067,21 @@ impl ApiClient for AnthropicRuntimeClient {
                             if let Some(progress_reporter) = &self.progress_reporter {
                                 progress_reporter.mark_tool_phase(&name, &input);
                             }
-                            // Display tool call now that input is fully accumulated
+                            // Compact tool timeline line (holds spinner, raw-mode safe).
+                            hold_spinner();
                             prepare_cooked_stdout();
-                            write_term_blank(out)
-                                .and_then(|()| {
-                                    write_term_line(
-                                        out,
-                                        &format!("  {}", format_tool_call_start(&name, &input)),
-                                    )
-                                })
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            {
+                                let _guard = lock_stdout();
+                                clear_current_line(out)
+                                    .and_then(|()| {
+                                        write_term_line(
+                                            out,
+                                            &format!("  {}", format_tool_call_start(&name, &input)),
+                                        )
+                                    })
+                                    .and_then(|()| out.flush())
+                                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            }
                             events.push(AssistantEvent::ToolUse { id, name, input });
                         }
                     }
@@ -7130,12 +7172,13 @@ fn write_structured_reply(
     // cursor down (same column), which produced the staircase indent the user saw.
     hold_spinner();
     prepare_cooked_stdout();
+    let _guard = lock_stdout();
 
     // Clear any leftover spinner glyphs on the current line, then hard-break.
-    write!(out, "\r\x1b[2K")?;
-    write_term_blank(out)?;
+    clear_current_line(out)?;
 
     if !*reply_header_written {
+        write_term_blank(out)?;
         write_term_line(out, &format!("  {}", renderer.reply_header_line()))?;
         write_term_blank(out)?;
         *reply_header_written = true;
@@ -7568,23 +7611,17 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
 
-    let (icon, label, detail) = match name {
-        "bash" | "Bash" => ("\x1b[1;36m⚙\x1b[0m", "bash", format_bash_call(&parsed)),
-        "read_file" | "Read" => {
-            let path = extract_tool_path(&parsed);
-            ("\x1b[1;34m📄\x1b[0m", "read", format!("reading {path}"))
-        }
+    // Compact timeline: one scannable line, no emoji noise.
+    let (label, detail) = match name {
+        "bash" | "Bash" => ("bash", format_bash_call(&parsed)),
+        "read_file" | "Read" => ("read", extract_tool_path(&parsed)),
         "write_file" | "Write" => {
             let path = extract_tool_path(&parsed);
             let lines = parsed
                 .get("content")
                 .and_then(|value| value.as_str())
                 .map_or(0, |content| content.lines().count());
-            (
-                "\x1b[1;32m✏\x1b[0m",
-                "write",
-                format!("{path} • {lines} lines"),
-            )
+            ("write", format!("{path} · {lines} lines"))
         }
         "edit_file" | "Edit" => {
             let path = extract_tool_path(&parsed);
@@ -7602,34 +7639,22 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
                 .unwrap_or_default()
                 .replace('\n', " ");
             (
-                "\x1b[1;33m📝\x1b[0m",
                 "edit",
                 if preview.is_empty() {
                     path
                 } else {
-                    format!("{path} • {preview}")
+                    format!("{path} · {preview}")
                 },
             )
         }
-        "glob_search" | "Glob" => (
-            "\x1b[1;35m🔎\x1b[0m",
-            "glob",
-            describe_tool_progress(name, input),
-        ),
-        "grep_search" | "Grep" => (
-            "\x1b[1;35m🔎\x1b[0m",
-            "grep",
-            describe_tool_progress(name, input),
-        ),
-        "web_search" | "WebSearch" => (
-            "\x1b[1;34m🌐\x1b[0m",
-            "web",
-            describe_tool_progress(name, input),
-        ),
-        _ => ("\x1b[1;37m•\x1b[0m", name, summarize_tool_payload(input)),
+        "glob_search" | "Glob" => ("glob", describe_tool_progress(name, input)),
+        "grep_search" | "Grep" => ("grep", describe_tool_progress(name, input)),
+        "web_search" | "WebSearch" => ("web", describe_tool_progress(name, input)),
+        _ => (name, summarize_tool_payload(input)),
     };
 
-    format!("\x1b[38;5;245m{icon}\x1b[0m \x1b[1m{label}\x1b[0m \x1b[2m{detail}\x1b[0m")
+    // format_tool_timeline_line already includes leading spaces.
+    format_tool_timeline_line(label, &detail).trim_start().to_string()
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {

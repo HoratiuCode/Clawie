@@ -1,7 +1,8 @@
 use std::fmt::Write as FmtWrite;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::time::Instant;
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use crossterm::cursor::MoveToColumn;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor, Stylize};
@@ -16,6 +17,10 @@ use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
 static ACTIVE_TERMINAL_THEME: AtomicU8 = AtomicU8::new(TerminalTheme::Emoji as u8);
 /// When true, the live spinner stops redrawing so reply text can own the line.
 static SPINNER_HELD: AtomicBool = AtomicBool::new(false);
+/// Serialize all terminal writes so spinner / tools / replies never interleave.
+static STDOUT_LOCK: Mutex<()> = Mutex::new(());
+/// Don't flash a spinner for turns that finish almost immediately.
+pub const SPINNER_DELAY: Duration = Duration::from_millis(300);
 
 /// Pause the thinking spinner so streamed / structured replies are not overwritten.
 pub fn hold_spinner() {
@@ -25,6 +30,18 @@ pub fn hold_spinner() {
 /// Allow the thinking spinner to redraw again (call at the start of each turn).
 pub fn release_spinner() {
     SPINNER_HELD.store(false, Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn spinner_is_held() -> bool {
+    SPINNER_HELD.load(Ordering::Relaxed)
+}
+
+/// Lock stdout for exclusive writing (spinner, tools, replies).
+pub fn lock_stdout() -> MutexGuard<'static, ()> {
+    STDOUT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Ensure the terminal is not in raw mode and every line starts at column 0.
@@ -51,6 +68,76 @@ pub fn write_term_line(out: &mut (impl Write + ?Sized), line: &str) -> io::Resul
 pub fn write_term_blank(out: &mut (impl Write + ?Sized)) -> io::Result<()> {
     out.write_all(b"\r\n")?;
     Ok(())
+}
+
+/// Clear the current line and move to column 0 (for taking over the spinner line).
+pub fn clear_current_line(out: &mut (impl Write + ?Sized)) -> io::Result<()> {
+    out.write_all(b"\r\x1b[2K")?;
+    Ok(())
+}
+
+/// Quiet turn footer: `✓ ready · 1.2s · 1.4k↓ 320↑`
+#[must_use]
+pub fn format_turn_footer(
+    elapsed: Duration,
+    input_tokens: u32,
+    output_tokens: u32,
+    failed: bool,
+) -> String {
+    let secs = elapsed.as_secs_f64();
+    let time = if secs < 10.0 {
+        format!("{secs:.1}s")
+    } else {
+        format!("{:.0}s", secs.round())
+    };
+    let status = if failed {
+        "\x1b[31m✗ failed\x1b[0m"
+    } else {
+        "\x1b[32m✓ ready\x1b[0m"
+    };
+    let mut parts = vec![status.to_string(), format!("\x1b[2m{time}\x1b[0m")];
+    if input_tokens > 0 || output_tokens > 0 {
+        parts.push(format!(
+            "\x1b[2m{}↓ {}↑\x1b[0m",
+            format_token_count(input_tokens),
+            format_token_count(output_tokens)
+        ));
+    }
+    format!("  {}", parts.join(" · "))
+}
+
+#[must_use]
+pub fn format_token_count(n: u32) -> String {
+    if n >= 10_000 {
+        format!("{:.1}k", f64::from(n) / 1000.0)
+    } else if n >= 1000 {
+        format!("{:.1}k", f64::from(n) / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Compact tool timeline line: `▸ read  path/to/file`
+#[must_use]
+pub fn format_tool_timeline_line(label: &str, detail: &str) -> String {
+    let detail = detail.trim();
+    if detail.is_empty() {
+        format!("  \x1b[2m▸\x1b[0m \x1b[1m{label}\x1b[0m")
+    } else {
+        format!("  \x1b[2m▸\x1b[0m \x1b[1m{label}\x1b[0m  \x1b[2m{detail}\x1b[0m")
+    }
+}
+
+/// User turn header for calm chat chrome.
+#[must_use]
+pub fn format_user_turn_header() -> String {
+    "  \x1b[2myou\x1b[0m".to_string()
+}
+
+/// Dim separator between turns.
+#[must_use]
+pub fn format_turn_separator_line() -> String {
+    format!("  \x1b[2m{}\x1b[0m", "·".repeat(28))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +288,12 @@ impl Spinner {
         Self::default()
     }
 
+    /// True once the spinner has been visible long enough to paint (or was forced).
+    #[must_use]
+    pub fn should_paint(&self) -> bool {
+        self.started_at.elapsed() >= SPINNER_DELAY
+    }
+
     pub fn tick(
         &mut self,
         label: &str,
@@ -209,6 +302,10 @@ impl Spinner {
     ) -> io::Result<()> {
         // Reply text owns the terminal — do not fight it for the current line.
         if SPINNER_HELD.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // Avoid a flash for sub-300ms turns.
+        if !self.should_paint() {
             return Ok(());
         }
         let frame = Self::FRAMES[self.frame_index % Self::FRAMES.len()];
@@ -225,6 +322,7 @@ impl Spinner {
             animated_label
         };
         self.frame_index += 1;
+        let _guard = lock_stdout();
         // Always redraw from column 0. End with \r so the cursor sits at the
         // start of this line for the next tick / reply takeover.
         queue!(
@@ -246,7 +344,21 @@ impl Spinner {
         out: &mut impl Write,
     ) -> io::Result<()> {
         self.frame_index = 0;
+        // If we never painted, stay silent (fast turn).
+        if !self.should_paint() && !SPINNER_HELD.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         prepare_cooked_stdout();
+        let _guard = lock_stdout();
+        // When reply already printed, skip the extra "ready" line — footer handles it.
+        if SPINNER_HELD.load(Ordering::Relaxed) {
+            execute!(
+                out,
+                MoveToColumn(0),
+                Clear(ClearType::CurrentLine)
+            )?;
+            return out.flush();
+        }
         execute!(
             out,
             MoveToColumn(0),
@@ -258,6 +370,15 @@ impl Spinner {
         out.flush()
     }
 
+    /// Clear spinner line without a status message (footer will follow).
+    pub fn clear_line(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.frame_index = 0;
+        prepare_cooked_stdout();
+        let _guard = lock_stdout();
+        execute!(out, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+        out.flush()
+    }
+
     pub fn fail(
         &mut self,
         label: &str,
@@ -266,6 +387,7 @@ impl Spinner {
     ) -> io::Result<()> {
         self.frame_index = 0;
         prepare_cooked_stdout();
+        let _guard = lock_stdout();
         execute!(
             out,
             MoveToColumn(0),
@@ -1436,8 +1558,12 @@ fn strip_ansi(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_ansi, MarkdownStreamState, Spinner, TerminalRenderer, TerminalTheme};
+    use super::{
+        format_tool_timeline_line, format_turn_footer, release_spinner, strip_ansi,
+        MarkdownStreamState, Spinner, TerminalRenderer, TerminalTheme, SPINNER_DELAY,
+    };
     use crossterm::style::Color;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn renders_markdown_with_styling_and_lists() {
@@ -1630,8 +1756,11 @@ mod tests {
 
     #[test]
     fn spinner_advances_frames() {
+        release_spinner();
         let terminal_renderer = TerminalRenderer::new();
         let mut spinner = Spinner::new();
+        // Bypass delay by aging the spinner.
+        spinner.started_at = Instant::now() - Duration::from_millis(400);
         let mut out = Vec::new();
         spinner
             .tick("Working", terminal_renderer.color_theme(), &mut out)
@@ -1641,7 +1770,46 @@ mod tests {
             .expect("tick succeeds");
 
         let output = String::from_utf8_lossy(&out);
-        assert!(output.contains("Working"));
+        assert!(
+            output.contains("Working"),
+            "expected spinner output, got {output:?}"
+        );
+    }
+
+    #[test]
+    fn spinner_stays_silent_before_delay() {
+        release_spinner();
+        let terminal_renderer = TerminalRenderer::new();
+        let mut spinner = Spinner::new();
+        let mut out = Vec::new();
+        spinner
+            .tick("Working", terminal_renderer.color_theme(), &mut out)
+            .expect("tick succeeds");
+        assert!(
+            out.is_empty(),
+            "spinner should not paint before SPINNER_DELAY"
+        );
+        let _ = SPINNER_DELAY; // referenced for docs/stability
+    }
+
+    #[test]
+    fn turn_footer_includes_time_and_tokens() {
+        let footer = format_turn_footer(Duration::from_millis(1500), 1400, 320, false);
+        let plain = strip_ansi(&footer);
+        assert!(plain.contains("ready"));
+        assert!(plain.contains("1.5s"));
+        assert!(plain.contains("1.4k"));
+        assert!(plain.contains("320"));
+    }
+
+    #[test]
+    fn tool_timeline_is_compact() {
+        let line = format_tool_timeline_line("read", "src/main.rs");
+        let plain = strip_ansi(&line);
+        assert!(plain.contains("▸"));
+        assert!(plain.contains("read"));
+        assert!(plain.contains("src/main.rs"));
+        assert!(plain.starts_with("  "));
     }
 
     #[test]
