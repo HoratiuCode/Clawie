@@ -49,7 +49,7 @@ pub fn lock_stdout() -> MutexGuard<'static, ()> {
 /// In raw mode, bare `\n` only moves the cursor down (same column) — that is what
 /// produced the staircase:
 /// ```text
-///   ✦ clawie
+///   ▢ clawie
 ///             • Hello!
 ///                       • How can I help?
 /// ```
@@ -138,6 +138,80 @@ pub fn format_user_turn_header() -> String {
 #[must_use]
 pub fn format_turn_separator_line() -> String {
     format!("  \x1b[2m{}\x1b[0m", "·".repeat(28))
+}
+
+/// Little phantom-square shades (ghost density blocks) for decorative separators.
+const PHANTOM_SHADES: &[char] = &['░', '▒', '▓', '█', '▓', '▒'];
+
+/// Theme-aware accent for phantom squares: red by default, grey in chrome mode.
+#[must_use]
+fn phantom_accent_ansi() -> &'static str {
+    match active_terminal_theme() {
+        TerminalTheme::Chrome => "\x1b[90m",
+        _ => "\x1b[31m",
+    }
+}
+
+/// One animated frame of little red phantom squares (spaced, low visual weight).
+#[must_use]
+pub fn phantom_square_separator_frame(cell_count: usize, frame: usize) -> String {
+    let cells = cell_count.max(4);
+    let mut body = String::with_capacity(cells * 4);
+    for i in 0..cells {
+        if i > 0 {
+            body.push(' ');
+        }
+        let shade = PHANTOM_SHADES[(i + frame) % PHANTOM_SHADES.len()];
+        body.push(shade);
+    }
+    format!("  {}{}\x1b[0m", phantom_accent_ansi(), body)
+}
+
+/// Settled (resting) little phantom-square line — mostly faint blocks, sparse mid tones.
+#[must_use]
+pub fn phantom_square_separator() -> String {
+    let cells = 22;
+    let mut body = String::with_capacity(cells * 4);
+    for i in 0..cells {
+        if i > 0 {
+            body.push(' ');
+        }
+        // Soft “phantom” pattern: mostly ░ with a light ▒ pulse every few cells.
+        body.push(if i % 5 == 0 { '▒' } else { '░' });
+    }
+    format!("  {}{}\x1b[0m", phantom_accent_ansi(), body)
+}
+
+/// Little red phantom-square bar used beside titles (replaces long dash runs).
+#[must_use]
+pub fn phantom_square_bar(cells: usize) -> String {
+    let n = cells.max(3);
+    let mut body = String::with_capacity(n * 3);
+    for i in 0..n {
+        body.push(if i % 3 == 1 { '▒' } else { '░' });
+    }
+    format!("{}{}\x1b[0m", phantom_accent_ansi(), body)
+}
+
+/// Animate a little red phantom-square wave, then leave the settled line.
+pub fn animate_phantom_square_separator(
+    out: &mut (impl Write + ?Sized),
+    cell_count: usize,
+    frames: usize,
+    delay: Duration,
+) -> io::Result<()> {
+    let cells = cell_count.max(4);
+    for frame in 0..frames {
+        let line = phantom_square_separator_frame(cells, frame);
+        write!(out, "\r\x1b[2K{line}")?;
+        out.flush()?;
+        std::thread::sleep(delay);
+    }
+    let settled = phantom_square_separator();
+    write!(out, "\r\x1b[2K{settled}")?;
+    out.write_all(b"\r\n")?;
+    out.flush()?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -599,17 +673,16 @@ impl TerminalRenderer {
     }
 
     /// Soft chat-style header for assistant replies.
+    ///
+    /// Uses a little red phantom square (▢) beside the `clawie` label instead of a dot/star.
     #[must_use]
     pub fn reply_header_line(&self) -> String {
         let accent = match self.terminal_theme {
             TerminalTheme::Chrome => "\x1b[37m",
             _ => "\x1b[31m",
         };
-        if self.terminal_theme.emojis_enabled() {
-            format!("{accent}✦\x1b[0m \x1b[1mclawie\x1b[0m")
-        } else {
-            format!("{accent}·\x1b[0m \x1b[1mclawie\x1b[0m")
-        }
+        // ▢ = hollow “phantom” square; stays tiny next to the brand text.
+        format!("{accent}▢\x1b[0m \x1b[1mclawie\x1b[0m")
     }
 
     /// Dim horizontal rule used as a quiet turn separator.
@@ -1559,7 +1632,8 @@ fn strip_ansi(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_tool_timeline_line, format_turn_footer, release_spinner, strip_ansi,
+        format_tool_timeline_line, format_turn_footer, phantom_square_bar,
+        phantom_square_separator, phantom_square_separator_frame, release_spinner, strip_ansi,
         MarkdownStreamState, Spinner, TerminalRenderer, TerminalTheme, SPINNER_DELAY,
     };
     use crossterm::style::Color;
@@ -1815,6 +1889,32 @@ mod tests {
     #[test]
     fn chrome_banner_color_is_grey() {
         assert_eq!(TerminalTheme::Chrome.banner_color(), Color::Grey);
+    }
+
+    #[test]
+    fn phantom_square_separator_uses_little_blocks() {
+        let settled = strip_ansi(&phantom_square_separator());
+        assert!(settled.contains('░'), "expected light phantom squares");
+        assert!(settled.contains('▒'), "expected mid phantom squares");
+        assert!(!settled.contains('·'), "dots should be replaced by phantom squares");
+
+        let frame = strip_ansi(&phantom_square_separator_frame(8, 3));
+        assert!(frame.contains('█') || frame.contains('▓') || frame.contains('▒'));
+        assert_eq!(frame.trim().split_whitespace().count(), 8);
+
+        let bar = strip_ansi(&phantom_square_bar(6));
+        assert_eq!(bar.chars().count(), 6);
+        assert!(bar.chars().all(|ch| matches!(ch, '░' | '▒')));
+    }
+
+    #[test]
+    fn reply_header_uses_phantom_square_mark() {
+        let renderer = TerminalRenderer::new();
+        let header = strip_ansi(&renderer.reply_header_line());
+        assert!(header.contains('▢'));
+        assert!(header.contains("clawie"));
+        assert!(!header.contains('·'));
+        assert!(!header.contains('✦'));
     }
 
     #[test]

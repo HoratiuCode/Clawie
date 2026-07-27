@@ -46,10 +46,11 @@ use crossterm::style::Stylize;
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{
-    active_terminal_theme, clear_current_line, format_tool_timeline_line, format_turn_footer,
-    format_turn_separator_line, format_user_turn_header, hold_spinner, lock_stdout,
-    prepare_cooked_stdout, release_spinner, set_active_terminal_theme, spinner_is_held,
-    write_term_blank, write_term_line, Spinner, TerminalRenderer, TerminalTheme,
+    active_terminal_theme, animate_phantom_square_separator, clear_current_line,
+    format_tool_timeline_line, format_turn_footer, format_turn_separator_line,
+    format_user_turn_header, hold_spinner, lock_stdout, phantom_square_bar,
+    phantom_square_separator, prepare_cooked_stdout, release_spinner, set_active_terminal_theme,
+    spinner_is_held, write_term_blank, write_term_line, Spinner, TerminalRenderer, TerminalTheme,
 };
 use runtime::{
     active_lean_mode, build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
@@ -2503,13 +2504,23 @@ fn run_repl(
         print!("\r\x1b[2K");
         let _ = io::stdout().flush();
 
-        let banner = cli.startup_banner();
-        for line in banner.lines() {
+        // Reveal logo + metadata, then animate the little red phantom-square line.
+        let (body, help) = cli.startup_banner_parts();
+        for line in body.lines() {
             println!("{line}");
             let _ = io::stdout().flush();
             // Slightly snappier reveal — still feels intentional, less laggy.
             thread::sleep(Duration::from_millis(12));
         }
+        let mut stdout = io::stdout();
+        let _ = animate_phantom_square_separator(
+            &mut stdout,
+            22,
+            18,
+            Duration::from_millis(28),
+        );
+        println!("{help}");
+        let _ = io::stdout().flush();
     } else {
         println!("{}", cli.startup_banner());
     }
@@ -3497,42 +3508,39 @@ impl LiveCli {
             .filter(|value| !value.is_empty())
     }
 
+    /// Full startup banner (static phantom-square line — used for non-TTY / tests).
     fn startup_banner(&self) -> String {
-        let cwd = env::current_dir().map_or_else(
-            |_| "<unknown>".to_string(),
-            |path| path.display().to_string(),
-        );
+        let (body, help) = self.startup_banner_parts();
+        format!("{body}\n{}\n{help}", phantom_square_separator())
+    }
+
+    /// Banner body + help footer split so the TTY path can animate the phantom line.
+    fn startup_banner_parts(&self) -> (String, String) {
         let status = status_context(None).ok();
-        let git_branch = status
-            .as_ref()
-            .and_then(|context| context.git_branch.as_deref())
-            .unwrap_or("unknown");
         let workspace = status.as_ref().map_or_else(
             || "unknown".to_string(),
             |context| context.git_summary.headline(),
         );
         let theme = active_terminal_theme();
 
+        // CLAWIE wordmark only — left claw glyph removed.
         let logo_lines = [
-            r"       ▄████████▄     ██████╗██╗      █████╗ ██╗    ██╗██╗███████╗",
-            r"      ███▀▀  ▀▀███    ██╔════╝██║     ██╔══██╗██║    ██║██║██╔════╝",
-            r"     ███   ▄▄   ███   ██║     ██║     ███████║██║ █╗ ██║██║█████╗  ",
-            r"     ███  ████  ███   ██║     ██║     ██╔══██║██║███╗██║██║██╔══╝  ",
-            r"      ███▄    ▄███    ╚██████╗███████╗██║  ██║╚███╔███╔╝██║███████╗",
-            r"       ▀████████▀      ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝╚══════╝",
+            r"  ██████╗██╗      █████╗ ██╗    ██╗██╗███████╗",
+            r"  ██╔════╝██║     ██╔══██╗██║    ██║██║██╔════╝",
+            r"  ██║     ██║     ███████║██║ █╗ ██║██║█████╗  ",
+            r"  ██║     ██║     ██╔══██║██║███╗██║██║██╔══╝  ",
+            r"  ╚██████╗███████╗██║  ██║╚███╔███╔╝██║███████╗",
+            r"   ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝╚══════╝",
         ];
 
-        let status_line = format!(
-            "  {}{}{}",
-            "─────────────────────────────".dim(),
-            " CLAWIE v0.2.0i ".bold(),
-            "─────────────────────────────".dim()
-        );
+        // Little red phantom squares instead of long dash runs beside the title.
+        let bar = phantom_square_bar(14);
+        let status_line = format!("  {bar}{}{bar}", " CLAWIE v0.2.0i ".bold());
 
         let model_val = self.model.clone();
         let perm_val = self.permission_mode.as_str().to_string();
         let theme_val = theme.as_str().to_string();
-        let ws_val = workspace.clone();
+        let ws_val = workspace;
 
         let raw_lines = [
             format!("  Model        {}", model_val),
@@ -3601,30 +3609,27 @@ impl LiveCli {
             metadata_lines.push(styled_line);
         }
 
-        let mut combined = String::new();
-        combined.push_str("\n");
+        let mut body = String::new();
+        body.push_str("\n");
         for line in logo_lines {
-            combined.push_str(&format!(
+            body.push_str(&format!(
                 "{}\n",
                 line.to_string().with(theme.banner_color())
             ));
         }
-        combined.push_str("\n");
-        combined.push_str(&format!("{}\n\n", status_line));
+        body.push_str("\n");
+        body.push_str(&format!("{status_line}\n\n"));
 
         for line in metadata_lines {
-            combined.push_str(&format!("{}\n", line));
+            body.push_str(&format!("{line}\n"));
         }
+        // Trailing blank line before the animated phantom separator.
+        body.push('\n');
 
-        combined.push_str(&format!(
-            "\n  {}\n",
-            "· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·".dim()
-        ));
-        combined.push_str(
-            "  \x1b[2mtype\x1b[0m \x1b[1m/help\x1b[0m \x1b[2mfor commands ·\x1b[0m \x1b[1m/status\x1b[0m \x1b[2mfor context ·\x1b[0m \x1b[1mtab\x1b[0m \x1b[2mmenu ·\x1b[0m \x1b[1mshift+enter\x1b[0m \x1b[2mnewline\x1b[0m",
-        );
+        let help = "  \x1b[2mtype\x1b[0m \x1b[1m/help\x1b[0m \x1b[2mfor commands ·\x1b[0m \x1b[1m/status\x1b[0m \x1b[2mfor context ·\x1b[0m \x1b[1mtab\x1b[0m \x1b[2mmenu ·\x1b[0m \x1b[1mshift+enter\x1b[0m \x1b[2mnewline\x1b[0m"
+            .to_string();
 
-        combined
+        (body, help)
     }
 
     fn repl_completion_candidates(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
