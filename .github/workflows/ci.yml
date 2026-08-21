@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-clawie/rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Runtime tests
+        run: cargo test -p runtime --lib
+      - name: Tool bash tests
+        run: cargo test -p tools --lib bash
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Python parity tests
+        run: python3 -m unittest python-clawie/tests/test_rust_python_sync.py
+      - name: Sync auditor
+        run: python3 scripts/check_rust_python_sync.py

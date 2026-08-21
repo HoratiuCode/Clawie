@@ -12,11 +12,37 @@ if [[ "${1:-}" == "--ide" ]]; then
 	exec "$repo_root/clawie_ide/scripts/code.sh" "$repo_root" --open-devtools "$@"
 fi
 
-# Default: build latest CLI then run it (avoids stale binaries).
 manifest="$repo_root/rust-clawie/rust/Cargo.toml"
-if ! cargo build --manifest-path "$manifest" -p rusty-claude-cli --bin claw; then
-  echo "error: failed to build claw" >&2
-  exit 1
+profile="${CLAWIE_PROFILE:-debug}"
+if [[ "$profile" == "release" ]]; then
+	bin="$repo_root/rust-clawie/rust/target/release/claw"
+	cargo_profile_args=(--release)
+else
+	bin="$repo_root/rust-clawie/rust/target/debug/claw"
+	cargo_profile_args=()
 fi
-bin="$repo_root/rust-clawie/rust/target/debug/claw"
+
+needs_build() {
+	[[ "${CLAWIE_FORCE_BUILD:-}" == "1" ]] && return 0
+	[[ -x "$bin" ]] || return 0
+	[[ "${CLAWIE_SKIP_BUILD:-}" == "1" ]] && return 1
+
+	# Skip cargo when no crate source is newer than the current binary.
+	local newer
+	newer="$(
+		find "$repo_root/rust-clawie/rust/crates" "$manifest" \
+			"$repo_root/rust-clawie/rust/Cargo.lock" \
+			-type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) \
+			-newer "$bin" -print -quit 2>/dev/null || true
+	)"
+	[[ -n "$newer" ]]
+}
+
+if needs_build; then
+	if ! cargo build --manifest-path "$manifest" -p rusty-claude-cli --bin claw "${cargo_profile_args[@]}"; then
+		echo "error: failed to build claw" >&2
+		exit 1
+	fi
+fi
+
 exec "$bin" "$@"

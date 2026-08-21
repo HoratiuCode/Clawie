@@ -166,10 +166,7 @@ const GIT_READ_ONLY_SUBCOMMANDS: &[&str] = &[
     "diff",
     "show",
     "branch",
-    "tag",
-    "stash",
     "remote",
-    "fetch",
     "ls-files",
     "ls-tree",
     "cat-file",
@@ -177,9 +174,7 @@ const GIT_READ_ONLY_SUBCOMMANDS: &[&str] = &[
     "describe",
     "shortlog",
     "blame",
-    "bisect",
     "reflog",
-    "config",
 ];
 
 fn validate_git_read_only(command: &str) -> ValidationResult {
@@ -202,18 +197,13 @@ fn validate_git_read_only(command: &str) -> ValidationResult {
 // destructiveCommandWarning
 // ---------------------------------------------------------------------------
 
-/// Patterns that indicate potentially destructive commands.
-const DESTRUCTIVE_PATTERNS: &[(&str, &str)] = &[
+/// Patterns that must never be executed, even in full-access mode.
+const CATASTROPHIC_PATTERNS: &[(&str, &str)] = &[
     (
         "rm -rf /",
         "Recursive forced deletion at root — this will destroy the system",
     ),
     ("rm -rf ~", "Recursive forced deletion of home directory"),
-    (
-        "rm -rf *",
-        "Recursive forced deletion of all files in current directory",
-    ),
-    ("rm -rf .", "Recursive forced deletion of current directory"),
     (
         "mkfs",
         "Filesystem creation will destroy existing data on the device",
@@ -223,12 +213,21 @@ const DESTRUCTIVE_PATTERNS: &[(&str, &str)] = &[
         "Direct disk write — can overwrite partitions or devices",
     ),
     ("> /dev/sd", "Writing to raw disk device"),
+    (":(){ :|:& };:", "Fork bomb — will crash the system"),
+];
+
+/// Patterns that indicate potentially destructive commands.
+const DESTRUCTIVE_PATTERNS: &[(&str, &str)] = &[
+    (
+        "rm -rf *",
+        "Recursive forced deletion of all files in current directory",
+    ),
+    ("rm -rf .", "Recursive forced deletion of current directory"),
     (
         "chmod -R 777",
         "Recursively setting world-writable permissions",
     ),
     ("chmod -R 000", "Recursively removing all permissions"),
-    (":(){ :|:& };:", "Fork bomb — will crash the system"),
 ];
 
 /// Commands that are always destructive regardless of arguments.
@@ -237,8 +236,17 @@ const ALWAYS_DESTRUCTIVE_COMMANDS: &[&str] = &["shred", "wipefs"];
 /// Warn if a command looks destructive.
 ///
 /// Corresponds to upstream `tools/BashTool/destructiveCommandWarning.ts`.
+/// Catastrophic commands are blocked outright; other destructive patterns warn.
 #[must_use]
 pub fn check_destructive(command: &str) -> ValidationResult {
+    for &(pattern, warning) in CATASTROPHIC_PATTERNS {
+        if command.contains(pattern) {
+            return ValidationResult::Block {
+                reason: format!("Destructive command blocked: {warning}"),
+            };
+        }
+    }
+
     // Check known destructive patterns.
     for &(pattern, warning) in DESTRUCTIVE_PATTERNS {
         if command.contains(pattern) {
@@ -252,8 +260,8 @@ pub fn check_destructive(command: &str) -> ValidationResult {
     let first = extract_first_command(command);
     for &cmd in ALWAYS_DESTRUCTIVE_COMMANDS {
         if first == cmd {
-            return ValidationResult::Warn {
-                message: format!(
+            return ValidationResult::Block {
+                reason: format!(
                     "Command '{cmd}' is inherently destructive and may cause data loss"
                 ),
             };
@@ -790,34 +798,42 @@ mod tests {
     // --- destructiveCommandWarning ---
 
     #[test]
-    fn warns_rm_rf_root() {
+    fn blocks_rm_rf_root() {
         assert!(matches!(
             check_destructive("rm -rf /"),
-            ValidationResult::Warn { message } if message.contains("root")
+            ValidationResult::Block { reason } if reason.contains("root")
         ));
     }
 
     #[test]
-    fn warns_rm_rf_home() {
+    fn blocks_rm_rf_home() {
         assert!(matches!(
             check_destructive("rm -rf ~"),
-            ValidationResult::Warn { message } if message.contains("home")
+            ValidationResult::Block { reason } if reason.contains("home")
         ));
     }
 
     #[test]
-    fn warns_shred() {
+    fn blocks_shred() {
         assert!(matches!(
             check_destructive("shred /dev/sda"),
-            ValidationResult::Warn { message } if message.contains("destructive")
+            ValidationResult::Block { reason } if reason.contains("destructive")
         ));
     }
 
     #[test]
-    fn warns_fork_bomb() {
+    fn blocks_fork_bomb() {
         assert!(matches!(
             check_destructive(":(){ :|:& };:"),
-            ValidationResult::Warn { message } if message.contains("Fork bomb")
+            ValidationResult::Block { reason } if reason.contains("Fork bomb")
+        ));
+    }
+
+    #[test]
+    fn blocks_git_config_in_read_only() {
+        assert!(matches!(
+            validate_read_only("git config user.email a@b.c", PermissionMode::ReadOnly),
+            ValidationResult::Block { reason } if reason.contains("config")
         ));
     }
 
@@ -972,11 +988,11 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_warns_destructive_in_write_mode() {
+    fn pipeline_blocks_catastrophic_in_write_mode() {
         let workspace = PathBuf::from("/workspace");
         assert!(matches!(
             validate_command("rm -rf /", PermissionMode::WorkspaceWrite, &workspace),
-            ValidationResult::Warn { .. }
+            ValidationResult::Block { .. }
         ));
     }
 

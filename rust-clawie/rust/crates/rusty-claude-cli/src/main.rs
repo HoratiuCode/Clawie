@@ -53,17 +53,18 @@ use render::{
     spinner_is_held, write_term_blank, write_term_line, Spinner, TerminalRenderer, TerminalTheme,
 };
 use runtime::{
-    active_lean_mode, build_repo_map, clear_oauth_credentials, format_lean_mode_report, format_usd,
+    active_lean_mode, agentic_enabled, build_repo_map, clear_oauth_credentials, clear_plan,
+    format_agentic_report, format_lean_mode_report, format_plan_report, format_usd,
     generate_pkce_pair, generate_state, git_commit, git_undo_last_commit, lean_command_prompt,
-    lean_gain_report, lean_help_report, load_system_prompt, parse_model_ref,
-    parse_oauth_callback_request_target, persist_lean_mode, pricing_for_model, read_file,
-    resolve_sandbox_status, save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent,
-    CompactionConfig, ConfigLoader, ConfigSource, ContentBlock, ConversationMessage,
+    lean_gain_report, lean_help_report, load_plan, load_system_prompt, parse_model_ref,
+    parse_oauth_callback_request_target, persist_agentic, persist_lean_mode, pricing_for_model,
+    read_file, resolve_sandbox_status, save_oauth_credentials, save_plan, ApiClient, ApiRequest,
+    AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock, ConversationMessage,
     ConversationRuntime, GitCommitInput, GitUndoInput, LeanMode, McpServerManager, McpTool,
     MessageRole, ModelConnectionDefinition, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    RepoMapOptions, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
-    ToolExecutor, UsageTracker,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Plan, ProjectContext,
+    PromptCacheEvent, RepoMapOptions, ResolvedPermissionMode, RuntimeError, Session, TokenUsage,
+    ToolError, ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -761,7 +762,13 @@ fn default_permission_mode() -> PermissionMode {
         .and_then(normalize_permission_mode)
         .map(permission_mode_from_label)
         .or_else(config_permission_mode_for_current_dir)
-        .unwrap_or(PermissionMode::WorkspaceWrite)
+        .unwrap_or_else(|| {
+            if agentic_enabled() {
+                PermissionMode::DangerFullAccess
+            } else {
+                PermissionMode::WorkspaceWrite
+            }
+        })
 }
 
 fn default_model_for_current_dir() -> String {
@@ -2453,7 +2460,8 @@ fn run_resume_command(
         | SlashCommand::Fast
         | SlashCommand::Exit
         | SlashCommand::Summary
-        | SlashCommand::Desktop
+        | SlashCommand::Desktop { .. }
+        | SlashCommand::Agentic { .. }
         | SlashCommand::Brief
         | SlashCommand::Advisor
         | SlashCommand::Stickers
@@ -3966,6 +3974,15 @@ impl LiveCli {
             SlashCommand::Model { model } => self.set_model(model)?,
             SlashCommand::Permissions { mode } => self.set_permissions(mode)?,
             SlashCommand::Experimental { mode } => self.set_experimental(mode)?,
+            SlashCommand::Agentic { mode } => self.set_agentic(mode)?,
+            SlashCommand::Plan { mode } => {
+                self.run_plan(mode.as_deref())?;
+                false
+            }
+            SlashCommand::Desktop { args } => {
+                Self::run_desktop(args.as_deref())?;
+                false
+            }
             SlashCommand::Clear { confirm } => self.clear_session(confirm)?,
             SlashCommand::Artifacts => {
                 let store = RustArtifactStore::new(&self.session.id)?;
@@ -4169,7 +4186,6 @@ impl LiveCli {
             | SlashCommand::Fast
             | SlashCommand::Exit
             | SlashCommand::Summary
-            | SlashCommand::Desktop
             | SlashCommand::Brief
             | SlashCommand::Advisor
             | SlashCommand::Stickers
@@ -4179,7 +4195,6 @@ impl LiveCli {
             | SlashCommand::SecurityReview
             | SlashCommand::Keybindings
             | SlashCommand::PrivacySettings
-            | SlashCommand::Plan { .. }
             | SlashCommand::Review { .. }
             | SlashCommand::Tasks { .. }
             | SlashCommand::Voice { .. }
@@ -4467,6 +4482,124 @@ impl LiveCli {
             }
             Some(_) => Ok(false),
         }
+    }
+
+    fn set_agentic(&mut self, mode: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
+        let enabled = match mode.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            None | Some("status") => agentic_enabled(),
+            Some("on") => {
+                persist_agentic(true)?;
+                true
+            }
+            Some("off") => {
+                persist_agentic(false)?;
+                false
+            }
+            Some(other) => {
+                return Err(format!(
+                    "unsupported /agentic mode '{other}'. Use status, on, or off."
+                )
+                .into())
+            }
+        };
+
+        if matches!(mode.as_deref(), Some("on")) {
+            self.permission_mode = PermissionMode::DangerFullAccess;
+        } else if matches!(mode.as_deref(), Some("off"))
+            && self.permission_mode == PermissionMode::DangerFullAccess
+            && !experimental_uninterrupted_enabled()
+        {
+            self.permission_mode = PermissionMode::WorkspaceWrite;
+        }
+
+        if matches!(mode.as_deref(), Some("on") | Some("off")) {
+            self.system_prompt = build_system_prompt()?;
+            let runtime = build_runtime(
+                self.runtime.session().clone(),
+                &self.session.id,
+                self.model.clone(),
+                self.system_prompt.clone(),
+                true,
+                true,
+                self.allowed_tools.clone(),
+                self.permission_mode,
+                None,
+            )?;
+            self.replace_runtime(runtime)?;
+        }
+
+        println!(
+            "{}",
+            format_agentic_report(enabled, self.permission_mode.as_str())
+        );
+        Ok(matches!(mode.as_deref(), Some("on") | Some("off")))
+    }
+
+    fn run_plan(&self, args: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        match args.map(str::trim).filter(|value| !value.is_empty()) {
+            None | Some("show") | Some("status") => {
+                println!("{}", format_plan_report(load_plan()?.as_ref()));
+            }
+            Some("clear") | Some("off") => {
+                clear_plan()?;
+                println!("{}", format_plan_report(None));
+            }
+            Some("on") => {
+                let plan = match load_plan()? {
+                    Some(plan) => plan,
+                    None => save_plan(Plan::new(
+                        "complete the current request",
+                        vec![
+                            "Inspect the current workspace and relevant files".to_string(),
+                            "Make the required change".to_string(),
+                            "Verify the result".to_string(),
+                        ],
+                    ))?,
+                };
+                println!("{}", format_plan_report(Some(&plan)));
+            }
+            Some(goal) => {
+                let plan = save_plan(Plan::new(
+                    goal,
+                    vec![
+                        "Inspect the current workspace and relevant files".to_string(),
+                        "Make the required change".to_string(),
+                        "Verify the result".to_string(),
+                    ],
+                ))?;
+                println!("{}", format_plan_report(Some(&plan)));
+            }
+        }
+        Ok(())
+    }
+
+    fn run_desktop(args: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let payload = match args.map(str::trim).filter(|value| !value.is_empty()) {
+            None | Some("status") | Some("info") => json!({ "action": "status" }),
+            Some("apps") => json!({ "action": "apps" }),
+            Some(raw) if raw.starts_with("open ") => json!({
+                "action": "open",
+                "target": raw[5..].trim()
+            }),
+            Some(raw) if raw.starts_with("reveal ") => json!({
+                "action": "reveal",
+                "target": raw[7..].trim()
+            }),
+            Some(raw) if raw.starts_with("notify ") => json!({
+                "action": "notify",
+                "text": raw[7..].trim()
+            }),
+            Some(other) => {
+                return Err(format!(
+                    "unsupported /desktop args '{other}'. Use status, open <target>, reveal <path>, notify <text>, or apps."
+                )
+                .into())
+            }
+        };
+        let output = tools::execute_tool("computer", &payload)
+            .map_err(|error| std::io::Error::other(error))?;
+        println!("{output}");
+        Ok(())
     }
 
     fn clear_session(&mut self, confirm: bool) -> Result<bool, Box<dyn std::error::Error>> {
@@ -4785,7 +4918,19 @@ impl LiveCli {
     }
 
     fn run_ultraplan(&self, task: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let goal = task.unwrap_or("the current repo work");
+        let plan = save_plan(Plan::new(
+            goal,
+            vec![
+                "Clarify goal, constraints, and success checks".to_string(),
+                "Inspect the current code and list files to change".to_string(),
+                "Sequence the edits with risks and rollback".to_string(),
+                "Execute the first safe step and verify".to_string(),
+            ],
+        ))?;
         println!("{}", format_ultraplan_report(task));
+        println!();
+        println!("{}", format_plan_report(Some(&plan)));
         Ok(())
     }
 
@@ -8763,13 +8908,29 @@ mod tests {
     #[test]
     fn defaults_to_repl_when_no_args() {
         let _guard = env_lock();
+        let config_home = temp_dir().join("agentic-default");
+        std::fs::create_dir_all(&config_home).expect("temp config");
+        let original_config_home = std::env::var_os("CLAW_CONFIG_HOME");
+        let original_agentic = std::env::var_os("CLAWIE_AGENTIC");
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
         std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+        std::env::remove_var("CLAWIE_AGENTIC");
+        let parsed = parse_args(&[]).expect("args should parse");
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        match original_agentic {
+            Some(value) => std::env::set_var("CLAWIE_AGENTIC", value),
+            None => std::env::remove_var("CLAWIE_AGENTIC"),
+        }
+        let _ = std::fs::remove_dir_all(config_home);
         assert_eq!(
-            parse_args(&[]).expect("args should parse"),
+            parsed,
             CliAction::Repl {
                 model: DEFAULT_MODEL.to_string(),
                 allowed_tools: None,
-                permission_mode: PermissionMode::WorkspaceWrite,
+                permission_mode: PermissionMode::DangerFullAccess,
             }
         );
     }

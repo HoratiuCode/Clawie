@@ -45,6 +45,7 @@ pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDA
 pub const FRONTIER_MODEL_NAME: &str = "Claude Opus 4.6";
 const MAX_INSTRUCTION_FILE_CHARS: usize = 4_000;
 const MAX_TOTAL_INSTRUCTION_CHARS: usize = 12_000;
+const DEFAULT_WEB_DESIGN_SYSTEM: &str = include_str!("default_web_design.md");
 
 /// Contents of an instruction file included in prompt construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +162,12 @@ impl SystemPromptBuilder {
         sections.push(get_simple_doing_tasks_section());
         if let Some(lean_section) = lean_system_section(active_lean_mode()) {
             sections.push(lean_section);
+        }
+        if let Some(agentic_section) = crate::plan::agentic_prompt_section() {
+            sections.push(agentic_section);
+        }
+        if let Some(plan_section) = crate::plan::plan_prompt_section() {
+            sections.push(plan_section);
         }
         sections.push(get_design_intelligence_section());
         sections.push(get_actions_section());
@@ -309,7 +316,7 @@ fn render_project_context(project_context: &ProjectContext) -> String {
     ];
     if !project_context.instruction_files.is_empty() {
         bullets.push(format!(
-            "Claude instruction files discovered: {}.",
+            "Workspace instruction and design files discovered: {}.",
             project_context.instruction_files.len()
         ));
     }
@@ -338,7 +345,7 @@ fn render_project_context(project_context: &ProjectContext) -> String {
 }
 
 fn render_instruction_files(files: &[ContextFile]) -> String {
-    let mut sections = vec!["# Claude instructions".to_string()];
+    let mut sections = vec!["# Workspace instructions and design".to_string()];
     let mut remaining_chars = MAX_TOTAL_INSTRUCTION_CHARS;
     for file in files {
         if remaining_chars == 0 {
@@ -516,6 +523,8 @@ fn get_simple_doing_tasks_section() -> String {
         "Do not add speculative abstractions, compatibility shims, or unrelated cleanup.".to_string(),
         "Do not create files unless they are required to complete the task.".to_string(),
         "If an approach fails, diagnose the failure before switching tactics.".to_string(),
+        "For multi-step work, keep a live Plan: write the goal and steps first, then execute the next incomplete step and mark it done.".to_string(),
+        "Use the computer tool when the user wants OS-level changes: open apps, files, URLs, reveal a path, or send a desktop notification. Do not use it for shell commands — use bash for those.".to_string(),
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
         "When showing code edits, use vertical structure: one file or one change per line.".to_string(),
@@ -533,6 +542,7 @@ fn get_simple_doing_tasks_section() -> String {
 
 fn get_design_intelligence_section() -> String {
     let items = prepend_bullets(vec![
+        "Use the built-in Clawie web design system below as the default visual source of truth for website, landing-page, product, dashboard, and visual UI work. It is an original, practical synthesis of the Awesome DESIGN.md collection, not a request to imitate a named brand. A project-local DESIGN.md always overrides this baseline.".to_string(),
         "For website, landing page, product, dashboard, and visual UI work, behave as if a concise design brief exists even when the user is vague: infer audience, product category, trust posture, information density, and primary conversion/action before choosing layout.".to_string(),
         "Start from a clear design direction, not generic decoration. Pick one coherent visual thesis such as precise developer tool, premium consumer product, data-dense enterprise app, editorial media, playful creative tool, or cinematic product launch; let typography, spacing, color, imagery, and motion follow that thesis.".to_string(),
         "Define a small design system while building: 1-2 type families or system fallbacks, 3-5 semantic colors, spacing steps, radius scale, component states, and reusable sections. Apply it consistently instead of styling each block independently.".to_string(),
@@ -544,11 +554,14 @@ fn get_design_intelligence_section() -> String {
         "For SaaS, AI, developer tools, infrastructure, CRM, dashboards, and admin products, favor a quiet work surface: dense but organized data, clear navigation, visible product UI, restrained cards, useful tables, filters, tabs, and command/action affordances.".to_string(),
         "For consumer, portfolio, object, venue, retail, automotive, music, gaming, or launch pages, use stronger art direction: real or generated imagery, full-bleed moments, editorial rhythm, tactile product details, and sections that reveal the object clearly.".to_string(),
         "When implementing frontend, verify responsive layout, text fit, contrast, keyboard/focus states, and no overlapping elements. Prefer stable dimensions, aspect ratios, and predictable grids so the design does not shift as content changes.".to_string(),
-        "If a project provides DESIGN.md, treat it as the visual source of truth. Use its tokens and rules over these defaults, but still adapt them pragmatically to the existing codebase and user request.".to_string(),
+        "If a project provides DESIGN.md, treat it as the visual source of truth. Use its tokens and rules over the Clawie baseline, but still adapt them pragmatically to the existing codebase and user request.".to_string(),
     ]);
 
     std::iter::once("# Design intelligence".to_string())
         .chain(items)
+        .chain(std::iter::once(
+            DEFAULT_WEB_DESIGN_SYSTEM.trim().to_string(),
+        ))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -618,8 +631,11 @@ mod tests {
             "nested instructions",
         )
         .expect("write nested instructions");
-        fs::write(nested.join(".claw").join("DESIGN.md"), "nested design language")
-            .expect("write nested design language");
+        fs::write(
+            nested.join(".claw").join("DESIGN.md"),
+            "nested design language",
+        )
+        .expect("write nested design language");
 
         let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
         let contents = context
@@ -824,12 +840,17 @@ mod tests {
         assert!(prompt.contains("# System"));
         assert!(prompt.contains("# Design intelligence"));
         assert!(prompt.contains("# Project context"));
-        assert!(prompt.contains("# Claude instructions"));
+        assert!(prompt.contains("# Workspace instructions and design"));
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));
         assert!(prompt.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
         assert!(prompt.contains("one choice per line"));
         assert!(prompt.contains("If a project provides DESIGN.md"));
+        assert!(prompt.contains("# Clawie default web design system"));
+        assert!(prompt.contains("Dashboard default"));
+        assert!(prompt.contains("# Clawie marketing taste protocol"));
+        assert!(prompt.contains("Design Read"));
+        assert!(prompt.contains("DESIGN_VARIANCE"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -871,7 +892,7 @@ mod tests {
             path: PathBuf::from("/tmp/project/CLAUDE.md"),
             content: "Project rules".to_string(),
         }]);
-        assert!(rendered.contains("# Claude instructions"));
+        assert!(rendered.contains("# Workspace instructions and design"));
         assert!(rendered.contains("scope: /tmp/project"));
         assert!(rendered.contains("Project rules"));
     }

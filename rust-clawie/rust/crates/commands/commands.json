@@ -58,6 +58,16 @@
     "category": "Session & visibility"
   },
   {
+    "name": "agentic",
+    "aliases": [
+      "auto"
+    ],
+    "summary": "Plan-then-execute mode that can automate this computer (on by default)",
+    "argument_hint": "[status|on|off]",
+    "resume_supported": true,
+    "category": "Session & visibility"
+  },
+  {
     "name": "clear",
     "aliases": [],
     "summary": "Start a fresh local session",
@@ -265,8 +275,8 @@
   {
     "name": "plan",
     "aliases": [],
-    "summary": "Toggle or inspect planning mode",
-    "argument_hint": "[on|off]",
+    "summary": "Show, create, or clear the persistent multi-step plan",
+    "argument_hint": "[show|clear|<goal>]",
     "resume_supported": true,
     "category": "Communication & control"
   },
@@ -449,8 +459,8 @@
   {
     "name": "desktop",
     "aliases": [],
-    "summary": "Open or manage the desktop app integration",
-    "argument_hint": null,
+    "summary": "Automate this computer: open apps/files/URLs, notify, or list apps",
+    "argument_hint": "[status|open <target>|notify <text>|apps]",
     "resume_supported": false,
     "category": "Discovery & debugging"
   },

@@ -85,6 +85,9 @@ pub enum SlashCommand {
     Experimental {
         mode: Option<String>,
     },
+    Agentic {
+        mode: Option<String>,
+    },
     Clear {
         confirm: bool,
     },
@@ -162,7 +165,9 @@ pub enum SlashCommand {
     Fast,
     Exit,
     Summary,
-    Desktop,
+    Desktop {
+        args: Option<String>,
+    },
     Brief,
     Advisor,
     Stickers,
@@ -325,6 +330,9 @@ pub fn validate_slash_command_input(
         "experimental" | "experiment" => SlashCommand::Experimental {
             mode: parse_experimental_mode(&args)?,
         },
+        "agentic" | "auto" => SlashCommand::Agentic {
+            mode: parse_agentic_mode(&args)?,
+        },
         "clear" => SlashCommand::Clear {
             confirm: parse_clear_args(&args)?,
         },
@@ -467,10 +475,7 @@ pub fn validate_slash_command_input(
             validate_no_args(command, &args)?;
             SlashCommand::Summary
         }
-        "desktop" => {
-            validate_no_args(command, &args)?;
-            SlashCommand::Desktop
-        }
+        "desktop" => SlashCommand::Desktop { args: remainder },
         "brief" => {
             validate_no_args(command, &args)?;
             SlashCommand::Brief
@@ -597,6 +602,21 @@ fn parse_experimental_mode(args: &[&str]) -> Result<Option<String>, SlashCommand
             &format!("Unsupported /experimental mode '{mode}'. Use status, on, or off."),
             "experimental",
             "/experimental [status|on|off]",
+        ));
+    }
+    Ok(None)
+}
+
+fn parse_agentic_mode(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
+    let mode = optional_single_arg("agentic", args, "[status|on|off]")?;
+    if let Some(mode) = mode {
+        if matches!(mode.as_str(), "status" | "on" | "off") {
+            return Ok(Some(mode));
+        }
+        return Err(command_error(
+            &format!("Unsupported /agentic mode '{mode}'. Use status, on, or off."),
+            "agentic",
+            "/agentic [status|on|off]",
         ));
     }
     Ok(None)
@@ -2512,6 +2532,7 @@ pub fn handle_slash_command(
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
         | SlashCommand::Experimental { .. }
+        | SlashCommand::Agentic { .. }
         | SlashCommand::Clear { .. }
         | SlashCommand::Cost
         | SlashCommand::Resume { .. }
@@ -2551,7 +2572,7 @@ pub fn handle_slash_command(
         | SlashCommand::Fast
         | SlashCommand::Exit
         | SlashCommand::Summary
-        | SlashCommand::Desktop
+        | SlashCommand::Desktop { .. }
         | SlashCommand::Brief
         | SlashCommand::Advisor
         | SlashCommand::Stickers
@@ -2782,6 +2803,18 @@ mod tests {
             SlashCommand::parse("/experimental on"),
             Ok(Some(SlashCommand::Experimental {
                 mode: Some("on".to_string()),
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/agentic on"),
+            Ok(Some(SlashCommand::Agentic {
+                mode: Some("on".to_string()),
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/desktop open https://example.com"),
+            Ok(Some(SlashCommand::Desktop {
+                args: Some("open https://example.com".to_string()),
             }))
         );
         assert_eq!(

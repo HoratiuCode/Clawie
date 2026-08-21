@@ -11,8 +11,10 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    apply_edit_workflow, build_repo_map, check_freshness, edit_file, execute_bash, git_commit,
-    git_diff, git_status, git_undo_last_commit, glob_search, grep_search, load_system_prompt,
+    apply_edit_workflow,
+    bash_validation::{validate_command, ValidationResult as BashValidationResult},
+    build_repo_map, check_freshness, edit_file, execute_bash, git_commit, git_diff, git_status,
+    git_undo_last_commit, glob_search, grep_search, load_system_prompt,
     lsp_client::LspRegistry,
     mcp_tool_bridge::McpToolRegistry,
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
@@ -31,6 +33,8 @@ use runtime::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+mod computer;
 
 /// Global task registry shared across tool invocations within a session.
 fn global_lsp_registry() -> &'static LspRegistry {
@@ -690,6 +694,51 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "Plan",
+            description: "Create or update a persistent multi-step plan. Use this before multi-step work, then mark steps done as you execute them.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["show", "create", "update", "set_step", "clear"]
+                    },
+                    "goal": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "id": { "type": "string" },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "done", "blocked"]
+                    },
+                    "notes": { "type": "string" }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "computer",
+            description: "Automate this computer: open apps/files/URLs, reveal a path in the file manager, send a desktop notification, or list running apps. Requires danger-full-access.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["status", "open", "reveal", "notify", "apps"]
+                    },
+                    "target": { "type": "string" },
+                    "text": { "type": "string" }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
         },
         ToolSpec {
             name: "TodoWrite",
@@ -1401,7 +1450,10 @@ fn execute_tool_with_enforcer(
     match name {
         "bash" => {
             maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<BashCommandInput>(input).and_then(run_bash)
+            let mode = enforcer
+                .map(PermissionEnforcer::active_mode)
+                .unwrap_or(PermissionMode::WorkspaceWrite);
+            from_value::<BashCommandInput>(input).and_then(|command| run_bash(command, mode))
         }
         "read_file" => {
             maybe_enforce_permission_check(enforcer, name, input)?;
@@ -1462,6 +1514,11 @@ fn execute_tool_with_enforcer(
         "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
+        "Plan" => from_value::<PlanToolInput>(input).and_then(run_plan_tool),
+        "computer" | "Computer" | "Desktop" => {
+            maybe_enforce_permission_check(enforcer, "computer", input)?;
+            from_value::<computer::ComputerInput>(input).and_then(computer::run_computer)
+        }
         "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
         "Agent" => from_value::<AgentInput>(input).and_then(run_agent),
         "Subagent" => from_value::<SubagentInput>(input).and_then(run_subagent),
@@ -2022,7 +2079,14 @@ fn from_value<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> 
     serde_json::from_value(input.clone()).map_err(|error| error.to_string())
 }
 
-fn run_bash(input: BashCommandInput) -> Result<String, String> {
+fn run_bash(input: BashCommandInput, mode: PermissionMode) -> Result<String, String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match validate_command(&input.command, mode, &cwd) {
+        BashValidationResult::Block { reason } => {
+            return Err(reason);
+        }
+        BashValidationResult::Warn { .. } | BashValidationResult::Allow => {}
+    }
     if let Some(output) = workspace_test_branch_preflight(&input.command) {
         return serde_json::to_string_pretty(&output).map_err(|error| error.to_string());
     }
@@ -2330,6 +2394,10 @@ fn run_todo_write(input: TodoWriteInput) -> Result<String, String> {
     to_pretty_json(execute_todo_write(input)?)
 }
 
+fn run_plan_tool(input: PlanToolInput) -> Result<String, String> {
+    to_pretty_json(execute_plan_tool(input)?)
+}
+
 fn run_skill(input: SkillInput) -> Result<String, String> {
     to_pretty_json(execute_skill(input)?)
 }
@@ -2477,6 +2545,16 @@ struct WebSearchInput {
 #[derive(Debug, Deserialize)]
 struct TodoWriteInput {
     todos: Vec<TodoItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlanToolInput {
+    action: String,
+    goal: Option<String>,
+    steps: Option<Vec<String>>,
+    id: Option<String>,
+    status: Option<String>,
+    notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -3351,6 +3429,67 @@ fn dedupe_hits(hits: &mut Vec<SearchHit>) {
     hits.retain(|hit| seen.insert(hit.url.clone()));
 }
 
+fn execute_plan_tool(input: PlanToolInput) -> Result<Value, String> {
+    let action = input.action.trim().to_ascii_lowercase();
+    match action.as_str() {
+        "show" | "status" => {
+            let plan = runtime::load_plan().map_err(|error| error.to_string())?;
+            Ok(json!({
+                "ok": true,
+                "report": runtime::format_plan_report(plan.as_ref()),
+                "plan": plan
+            }))
+        }
+        "create" | "update" => {
+            let goal = input
+                .goal
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("create/update requires a goal"))?;
+            let steps = input.steps.unwrap_or_default();
+            let plan = runtime::save_plan(runtime::Plan::new(goal, steps))
+                .map_err(|error| error.to_string())?;
+            Ok(json!({
+                "ok": true,
+                "report": runtime::format_plan_report(Some(&plan)),
+                "plan": plan
+            }))
+        }
+        "set_step" => {
+            let id = input
+                .id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("set_step requires id"))?;
+            let status = input
+                .status
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| String::from("set_step requires status"))?;
+            let plan = runtime::set_step_status(id, status, input.notes.as_deref())
+                .map_err(|error| error.to_string())?;
+            Ok(json!({
+                "ok": true,
+                "report": runtime::format_plan_report(Some(&plan)),
+                "plan": plan
+            }))
+        }
+        "clear" => {
+            runtime::clear_plan().map_err(|error| error.to_string())?;
+            Ok(json!({
+                "ok": true,
+                "report": runtime::format_plan_report(None)
+            }))
+        }
+        other => Err(format!(
+            "unsupported Plan action '{other}'. Use show, create, update, set_step, or clear."
+        )),
+    }
+}
+
 fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> {
     validate_todos(&input.todos)?;
     let store_path = todo_store_path()?;
@@ -3547,9 +3686,9 @@ subagent_type: Plan
 model: gpt-4.1
 tools: read_file, glob_search, grep_search
 ---
-You are a planning subagent. Analyze the task and produce a concrete implementation plan. Do not modify files.
+You are a planning subagent. Analyze the task and write a concrete implementation plan with the Plan tool (action=create). Do not modify product files.
 
-List files to inspect or change, expected edits, tests to run, and risks.
+Each step should be small enough to execute in one tool loop. Include files to inspect or change, tests to run, and risks. After creating the plan, return the next step only.
 "#,
     ),
     (
@@ -5935,6 +6074,8 @@ mod tests {
         assert!(names.contains(&"WebFetch"));
         assert!(names.contains(&"WebSearch"));
         assert!(names.contains(&"TodoWrite"));
+        assert!(names.contains(&"Plan"));
+        assert!(names.contains(&"computer"));
         assert!(names.contains(&"Skill"));
         assert!(names.contains(&"Agent"));
         assert!(names.contains(&"ToolSearch"));
@@ -6457,6 +6598,49 @@ mod tests {
                 "{\"pattern\":\"TODO\"}".to_string(),
             ))
         );
+    }
+
+    #[test]
+    fn plan_tool_creates_and_advances_steps() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "clawie-plan-tool-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::env::set_var("CLAWIE_PLAN_STORE", &path);
+        let created = execute_tool(
+            "Plan",
+            &json!({
+                "action": "create",
+                "goal": "add agentic mode",
+                "steps": ["write planner", "wire computer"]
+            }),
+        )
+        .expect("plan create");
+        assert!(created.contains("add agentic mode"));
+        let updated = execute_tool(
+            "Plan",
+            &json!({
+                "action": "set_step",
+                "id": "s1",
+                "status": "done"
+            }),
+        )
+        .expect("plan set_step");
+        assert!(updated.contains("s2"));
+        execute_tool("Plan", &json!({ "action": "clear" })).expect("plan clear");
+        std::env::remove_var("CLAWIE_PLAN_STORE");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn computer_status_reports_supported_actions() {
+        let output = execute_tool("computer", &json!({ "action": "status" })).expect("status");
+        assert!(output.contains("open"));
+        assert!(output.contains("notify"));
     }
 
     #[test]
@@ -7397,6 +7581,16 @@ mod tests {
         let background_output: serde_json::Value = serde_json::from_str(&background).expect("json");
         assert!(background_output["backgroundTaskId"].as_str().is_some());
         assert_eq!(background_output["noOutputExpected"], true);
+    }
+
+    #[test]
+    fn bash_tool_blocks_catastrophic_commands() {
+        let error = execute_tool("bash", &json!({ "command": "rm -rf /" }))
+            .expect_err("root deletion should be blocked");
+        assert!(
+            error.contains("blocked") || error.contains("destroy"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

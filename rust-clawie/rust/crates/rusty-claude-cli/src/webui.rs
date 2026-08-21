@@ -299,14 +299,20 @@ fn documents_output_dir() -> io::Result<PathBuf> {
 fn serve(listener: TcpListener, output_dir: PathBuf) {
     for connection in listener.incoming() {
         match connection {
-            Ok(mut stream) => {
-                if let Err(error) = handle_connection(&mut stream, &output_dir) {
-                    let _ = write_json_response(
-                        &mut stream,
-                        "500 Internal Server Error",
-                        &json!({"ok": false, "error": error.to_string()}).to_string(),
-                    );
-                }
+            Ok(stream) => {
+                let dir = output_dir.clone();
+                let _ = thread::Builder::new()
+                    .name("clawie-webui-conn".to_string())
+                    .spawn(move || {
+                        let mut stream = stream;
+                        if let Err(error) = handle_connection(&mut stream, &dir) {
+                            let _ = write_json_response(
+                                &mut stream,
+                                "500 Internal Server Error",
+                                &json!({"ok": false, "error": error.to_string()}).to_string(),
+                            );
+                        }
+                    });
             }
             Err(error) => eprintln!("webui: connection failed: {error}"),
         }
@@ -322,6 +328,13 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid HTTP request"))?;
     let headers = String::from_utf8_lossy(&request[..header_end]);
     let request_line = headers.lines().next().unwrap_or_default();
+    if !host_is_loopback(&headers) {
+        return write_json_response(
+            stream,
+            "403 Forbidden",
+            r#"{"ok":false,"error":"host not allowed"}"#,
+        );
+    }
 
     match request_line {
         line if line.starts_with("GET / ") => write_html_response(stream, WEB_UI_HTML),
@@ -557,12 +570,13 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
             } else {
                 "{}".to_string()
             };
+            let settings = serde_json::from_str::<serde_json::Value>(&content).unwrap_or(json!({}));
             write_json_response(
                 stream,
                 "200 OK",
                 &json!({
                     "ok": true,
-                    "settings": serde_json::from_str::<serde_json::Value>(&content).unwrap_or(json!({}))
+                    "settings": redact_settings_secrets(settings)
                 }).to_string(),
             )
         }
@@ -588,6 +602,7 @@ fn handle_connection(stream: &mut TcpStream, output_dir: &Path) -> io::Result<()
                 &settings_path,
                 serde_json::to_string_pretty(&serde_json::Value::Object(current))?,
             )?;
+            restrict_settings_file_permissions(&config_home, &settings_path);
             write_json_response(stream, "200 OK", r#"{"ok":true}"#)
         }
         line if line.starts_with("POST /test-connection ") => {
@@ -915,7 +930,25 @@ fn query_value(request_line: &str, key: &str) -> Option<String> {
     })
 }
 
+fn require_known_clawie_instance(pid: u32) -> io::Result<()> {
+    let instances = running_clawie_instances()?;
+    let is_known_instance = instances.iter().any(|instance| {
+        instance.get("pid").and_then(serde_json::Value::as_u64) == Some(u64::from(pid))
+    });
+    if is_known_instance {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("pid {pid} is not a running Clawie CLI instance"),
+        ))
+    }
+}
+
 fn instance_log(pid: u32) -> io::Result<serde_json::Value> {
+    if pid != std::process::id() {
+        require_known_clawie_instance(pid)?;
+    }
     let output = Command::new("ps")
         .args([
             "-p",
@@ -976,16 +1009,7 @@ fn run_instance_action(payload: &InstanceActionRequest) -> io::Result<()> {
             format!("unsupported instance action: {}", payload.action),
         ));
     }
-    let instances = running_clawie_instances()?;
-    let is_known_instance = instances.iter().any(|instance| {
-        instance.get("pid").and_then(serde_json::Value::as_u64) == Some(payload.pid as u64)
-    });
-    if !is_known_instance {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("pid {} is not a running Clawie CLI instance", payload.pid),
-        ));
-    }
+    require_known_clawie_instance(payload.pid)?;
 
     let output = Command::new("kill")
         .args(["-TERM", &payload.pid.to_string()])
@@ -1057,31 +1081,80 @@ fn resolve_output_directory(default_output_dir: &Path, requested: &str) -> io::R
     Ok(expanded)
 }
 
+const SKIP_LIST_DIR_NAMES: &[&str] = &[
+    "target",
+    "node_modules",
+    "__pycache__",
+    ".git",
+    "dist",
+    "build",
+    ".venv",
+    "venv",
+];
+const MAX_LISTED_FILES: usize = 400;
+
 fn list_code_files(output_dir: &Path) -> io::Result<Vec<String>> {
     if !output_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut files = fs::read_dir(output_dir)?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_file())
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| !name.ends_with(".improvements.md"))
-        .collect::<Vec<_>>();
+    let mut files = Vec::new();
+    collect_code_files(output_dir, output_dir, &mut files)?;
     files.sort_by_key(|name| name.to_ascii_lowercase());
     Ok(files)
+}
+
+fn collect_code_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> io::Result<()> {
+    if files.len() >= MAX_LISTED_FILES {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(dir)?.filter_map(Result::ok).collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if files.len() >= MAX_LISTED_FILES {
+            break;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            if SKIP_LIST_DIR_NAMES.contains(&name) {
+                continue;
+            }
+            collect_code_files(root, &path, files)?;
+            continue;
+        }
+        if !path.is_file() || name.ends_with(".improvements.md") {
+            continue;
+        }
+        let rel = path.strip_prefix(root).unwrap_or(&path);
+        if let Some(rel) = rel.to_str() {
+            files.push(rel.replace('\\', "/"));
+        }
+    }
+    Ok(())
 }
 
 fn load_workspace_files(
     output_dir: &Path,
     requested_filename: &str,
 ) -> io::Result<(String, String)> {
-    let filename = safe_filename(requested_filename)?;
+    let filename = safe_relative_path(requested_filename)?;
     let code_path = output_dir.join(&filename);
-    let stem = Path::new(&filename)
+    let stem = filename
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("code");
-    let improvements_path = output_dir.join(format!("{stem}.improvements.md"));
+    let improvements_path = match filename.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            output_dir.join(parent).join(format!("{stem}.improvements.md"))
+        }
+        _ => output_dir.join(format!("{stem}.improvements.md")),
+    };
     let code = fs::read_to_string(code_path)?;
     let improvements = fs::read_to_string(improvements_path)
         .unwrap_or_default()
@@ -1136,20 +1209,28 @@ fn save_workspace_files(
     output_dir: &Path,
     payload: &SaveRequest,
 ) -> io::Result<(PathBuf, PathBuf)> {
-    let filename = safe_filename(&payload.filename)?;
-    fs::create_dir_all(output_dir)?;
+    let filename = safe_relative_path(&payload.filename)?;
     let code_path = output_dir.join(&filename);
-    let stem = Path::new(&filename)
+    if let Some(parent) = code_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let stem = filename
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("code");
-    let improvements_path = output_dir.join(format!("{stem}.improvements.md"));
+    let improvements_path = match filename.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            output_dir.join(parent).join(format!("{stem}.improvements.md"))
+        }
+        _ => output_dir.join(format!("{stem}.improvements.md")),
+    };
 
     fs::write(&code_path, &payload.code)?;
     fs::write(
         &improvements_path,
         format!(
-            "# Improvements for `{filename}`\n\n{}\n",
+            "# Improvements for `{}`\n\n{}\n",
+            filename.display(),
             payload.improvements.trim()
         ),
     )?;
@@ -2119,6 +2200,60 @@ fn is_placeholder_api_key(key: &str) -> bool {
     lower == "dummy" || lower.contains("dummy") || lower.starts_with("test-")
 }
 
+fn host_is_loopback(headers: &str) -> bool {
+    let Some(host) = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("host")
+            .then(|| value.trim().to_ascii_lowercase())
+    }) else {
+        return false;
+    };
+    host == "localhost"
+        || host.starts_with("localhost:")
+        || host == "127.0.0.1"
+        || host.starts_with("127.0.0.1:")
+        || host == "[::1]"
+        || host.starts_with("[::1]:")
+        || host == "::1"
+}
+
+fn is_secret_setting_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    upper.contains("API_KEY")
+        || upper.contains("SECRET")
+        || upper.contains("PASSWORD")
+        || upper.ends_with("_TOKEN")
+}
+
+fn redact_settings_secrets(settings: serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Object(mut map) = settings else {
+        return settings;
+    };
+    let secret_keys: Vec<String> = map
+        .keys()
+        .filter(|key| is_secret_setting_key(key))
+        .cloned()
+        .collect();
+    for key in secret_keys {
+        let configured = map
+            .get(&key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+        map.remove(&key);
+        map.insert(format!("{key}_configured"), json!(configured));
+    }
+    serde_json::Value::Object(map)
+}
+
+fn restrict_settings_file_permissions(config_home: &Path, settings_path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(config_home, fs::Permissions::from_mode(0o700));
+        let _ = fs::set_permissions(settings_path, fs::Permissions::from_mode(0o600));
+    }
+}
+
 fn write_html_response(stream: &mut TcpStream, body: &str) -> io::Result<()> {
     write_response(stream, "200 OK", "text/html; charset=utf-8", body)
 }
@@ -2135,7 +2270,7 @@ fn write_response(
 ) -> io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\ncache-control: no-store\r\ncontent-security-policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'\r\nconnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\ncache-control: no-store\r\nx-content-type-options: nosniff\r\nx-frame-options: DENY\r\ncontent-security-policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'\r\nconnection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -2162,7 +2297,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
   <meta name="theme-color" content="#09090b">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Clawie">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Fira+Code:wght@400;500;600&family=Source+Code+Pro:wght@400;500;600&display=swap" rel="stylesheet">
+
   <style>
     :root {
       color-scheme: dark;
@@ -5073,7 +5208,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
               </div>
               <div class="composer-hint">
                 <span>Open file is used as context when relevant</span>
-                <span>⌘/Ctrl+Enter send · Shift+Enter newline</span>
+                <span>⌘/Ctrl+Enter send · Esc stop · ⌘/Ctrl+S save</span>
               </div>
             </div>
           </div>
@@ -6495,19 +6630,31 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
       return message;
     }
 
+    let chatAbort = null;
+    function setChatBusy(busy) {
+      chatSend.dataset.busy = busy ? '1' : '';
+      chatSend.title = busy ? 'Stop generation' : 'Send message';
+      chatSend.setAttribute('aria-label', busy ? 'Stop generation' : 'Send message');
+    }
     async function sendChatMessage() {
+      if (chatAbort) {
+        chatAbort.abort();
+        return;
+      }
       const text = chatInput.value.trim();
       if (!text) return;
       appendChatMessage('user', text);
       chatInput.value = '';
       chatInput.style.height = 'auto';
-      chatSend.disabled = true;
+      chatAbort = new AbortController();
+      setChatBusy(true);
       setStatus('Clawie is thinking...', 'thinking');
       const pending = appendChatMessage('clawie', 'Thinking...');
       try {
         const response = await fetch('/chat', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
+          signal: chatAbort.signal,
           body: JSON.stringify({
             message: text,
             model: selectedModel,
@@ -6561,6 +6708,12 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         pending.append(label);
         const content = document.createElement('div');
         content.className = 'message-body';
+        if (error && error.name === 'AbortError') {
+          content.textContent = 'Generation stopped.';
+          pending.append(content);
+          setStatus('Stopped', 'idle');
+          return;
+        }
         const isFetchFailure = error instanceof TypeError && /fetch/i.test(error.message);
         const displayError = isFetchFailure
           ? 'Could not reach the local Clawie server. Reload this Web UI from the latest URL printed in the terminal.'
@@ -6573,7 +6726,8 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
         pending.append(content);
         setStatus(displayError, 'error');
       } finally {
-        chatSend.disabled = false;
+        chatAbort = null;
+        setChatBusy(false);
         chatInput.focus();
         chatMessages.scrollTop = chatMessages.scrollHeight;
       }
@@ -6707,7 +6861,7 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
           item.title = name;
           if (activeFileName === name) item.classList.add('active');
           const ext = (name.split('.').pop() || '').slice(0, 6);
-          item.innerHTML = getFileIcon(name) + `<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${name}</span><span class="file-ext">${ext}</span>`;
+          item.innerHTML = getFileIcon(name) + `<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeText(name)}</span><span class="file-ext">${escapeText(ext)}</span>`;
           item.addEventListener('click', () => loadFile(name, item));
           fileList.append(item);
         });
@@ -6933,6 +7087,18 @@ const WEB_UI_HTML: &str = r##"<!doctype html>
 
     chatSend.addEventListener('click', sendChatMessage);
     document.querySelector('#editor-save-btn').addEventListener('click', saveCurrentFile);
+    document.addEventListener('keydown', event => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        const tag = (event.target && event.target.tagName) || '';
+        if (tag === 'TEXTAREA' || tag === 'INPUT' || activeFileName) {
+          event.preventDefault();
+          if (activeFileName) saveCurrentFile();
+        }
+      }
+      if (event.key === 'Escape' && chatAbort) {
+        chatAbort.abort();
+      }
+    });
     locationPreset.addEventListener('change', () => { if (locationPreset.value) locationPath.value = locationPreset.value; });
     locationPreset.addEventListener('dblclick', () => { if (locationPreset.value) { locationPath.value = locationPreset.value; refreshFiles(); } });
     locationPath.addEventListener('change', refreshFiles);
@@ -9439,9 +9605,9 @@ self.addEventListener('activate', event => {
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_api_key, list_automations, list_code_files, load_workspace_files,
-        resolve_output_directory, safe_automation_id, safe_filename, safe_relative_path,
-        save_automation, save_workspace_files, SaveRequest,
+        clean_api_key, host_is_loopback, list_automations, list_code_files, load_workspace_files,
+        redact_settings_secrets, resolve_output_directory, safe_automation_id, safe_filename,
+        safe_relative_path, save_automation, save_workspace_files, SaveRequest,
     };
     use std::fs;
     use std::path::Path;
@@ -9580,5 +9746,52 @@ mod tests {
             custom
         );
         assert!(resolve_output_directory(&default, "relative/folder").is_err());
+    }
+
+    #[test]
+    fn loopback_host_header_is_required() {
+        assert!(host_is_loopback("GET / HTTP/1.1\r\nHost: 127.0.0.1:4242"));
+        assert!(host_is_loopback("Host: localhost"));
+        assert!(host_is_loopback("Host: [::1]:4242"));
+        assert!(!host_is_loopback("Host: example.com"));
+        assert!(!host_is_loopback("GET / HTTP/1.1"));
+    }
+
+    #[test]
+    fn settings_payload_redacts_api_keys() {
+        let redacted = redact_settings_secrets(serde_json::json!({
+            "provider": "xai",
+            "OPENAI_API_KEY": "sk-secret",
+            "XAI_API_KEY": "",
+            "model": "grok-3"
+        }));
+        assert_eq!(redacted["provider"], "xai");
+        assert_eq!(redacted["model"], "grok-3");
+        assert!(redacted.get("OPENAI_API_KEY").is_none());
+        assert_eq!(redacted["OPENAI_API_KEY_configured"], true);
+        assert_eq!(redacted["XAI_API_KEY_configured"], false);
+    }
+
+    #[test]
+    fn lists_and_reopens_nested_code_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("clawie-webui-nested-{nonce}"));
+        let payload = SaveRequest {
+            directory: root.display().to_string(),
+            filename: "src/app.rs".to_string(),
+            code: "fn main() {}\n".to_string(),
+            improvements: "Add clap.".to_string(),
+        };
+        save_workspace_files(&root, &payload).expect("save nested file");
+        let listed = list_code_files(&root).expect("list files");
+        assert!(listed.contains(&"src/app.rs".to_string()));
+        let (code, improvements) =
+            load_workspace_files(&root, "src/app.rs").expect("load nested file");
+        assert_eq!(code, payload.code);
+        assert_eq!(improvements, payload.improvements);
+        let _ = fs::remove_dir_all(root);
     }
 }

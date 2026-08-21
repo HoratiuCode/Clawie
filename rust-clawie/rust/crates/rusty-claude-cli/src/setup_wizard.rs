@@ -350,7 +350,17 @@ fn save_settings(
         &settings_path,
         serde_json::to_string_pretty(&Value::Object(root))?,
     )?;
+    restrict_secret_file_permissions(&config_home, &settings_path);
     Ok(settings_path)
+}
+
+fn restrict_secret_file_permissions(config_home: &std::path::Path, settings_path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(config_home, fs::Permissions::from_mode(0o700));
+        let _ = fs::set_permissions(settings_path, fs::Permissions::from_mode(0o600));
+    }
 }
 
 fn upsert_model_list_entry(

@@ -89,7 +89,7 @@ def main():
     if cmd_err:
         print(f"⚠️ Error: {cmd_err}")
     else:
-        print(f"- Total active Rust commands: {len(cmd_rust_missing) + len(cmd_py_missing)}")
+        print(f"- Command name drift: {len(cmd_rust_missing) + len(cmd_py_missing)}")
         print(f"- Commands missing in Python mirror: **{len(cmd_py_missing)}**")
         if cmd_py_missing:
             print("  *(Newer Rust commands not yet mirrored)*")

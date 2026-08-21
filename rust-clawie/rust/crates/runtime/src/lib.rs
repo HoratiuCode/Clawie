@@ -32,6 +32,7 @@ pub mod mcp_tool_bridge;
 mod oauth;
 pub mod permission_enforcer;
 mod permissions;
+pub mod plan;
 pub mod plugin_lifecycle;
 mod policy_engine;
 mod prompt;
@@ -109,6 +110,11 @@ pub use lane_events::{
 pub use lean::{
     active_lean_mode, format_lean_mode_report, lean_command_prompt, lean_gain_report,
     lean_help_report, lean_system_section, persist_lean_mode, LeanMode,
+};
+pub use plan::{
+    agentic_enabled, agentic_prompt_section, clear_plan, format_agentic_report, format_plan_report,
+    load_plan, persist_agentic, plan_prompt_section, save_plan, set_step_status, Plan, PlanStatus,
+    PlanStep, PlanStepStatus,
 };
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,

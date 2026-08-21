@@ -224,6 +224,7 @@ fn prepare_tokio_command(
         prepared.args(launcher.args);
         prepared.current_dir(cwd);
         prepared.envs(launcher.env);
+        prepared.kill_on_drop(true);
         return prepared;
     }
 
@@ -233,6 +234,7 @@ fn prepare_tokio_command(
         prepared.env("HOME", cwd.join(".sandbox-home"));
         prepared.env("TMPDIR", cwd.join(".sandbox-tmp"));
     }
+    prepared.kill_on_drop(true);
     prepared
 }
 
@@ -282,6 +284,33 @@ mod tests {
         .expect("bash command should execute");
 
         assert!(!output.sandbox_status.expect("sandbox status").enabled);
+    }
+
+    #[test]
+    fn timeout_returns_quickly_and_marks_interrupted() {
+        let started = std::time::Instant::now();
+        let output = execute_bash(BashCommandInput {
+            command: String::from("sleep 30"),
+            timeout: Some(200),
+            description: None,
+            run_in_background: Some(false),
+            dangerously_disable_sandbox: Some(true),
+            namespace_restrictions: None,
+            isolate_network: None,
+            filesystem_mode: None,
+            allowed_mounts: None,
+        })
+        .expect("timed-out bash command should return");
+
+        assert!(output.interrupted);
+        assert_eq!(
+            output.return_code_interpretation.as_deref(),
+            Some("timeout")
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "timeout should kill the child instead of waiting for sleep 30"
+        );
     }
 }
 

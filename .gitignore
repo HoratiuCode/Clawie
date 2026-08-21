@@ -1,0 +1,25 @@
+# Build artifacts
+**/target/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Local / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+*.iml
+
+# Runtime state
+.port_sessions/
+*.log
+
+# Secrets
+.env
+.env.*
+!.env.example
